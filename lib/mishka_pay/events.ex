@@ -16,7 +16,6 @@ defmodule MishkaPay.Events do
   | `mishka_pay:event:process` | the host, or a payment resource | works one event the Ash inbox stored |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
 
-  The payment event arrives with the stage that fires it.
   """
 
   @doc "Every provider listens here and adds itself to the `providers` list the event carries."
@@ -50,4 +49,12 @@ defmodule MishkaPay.Events do
   """
   @spec event_process() :: String.t()
   def event_process, do: "mishka_pay:event:process"
+
+  @doc """
+  Fired after a payment resource (`MishkaPay.Ash.Payment`) synced a payment from its provider,
+  with `%{payment: %MishkaPay.Payment{}, record: record}`. A host listens here to act on a paid or
+  refunded payment, or to push the change to the screens that show it.
+  """
+  @spec payment_changed() :: String.t()
+  def payment_changed, do: "mishka_pay:payment:changed"
 end

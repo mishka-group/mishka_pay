@@ -34,7 +34,7 @@ if Code.ensure_loaded?(AshOban) do
 
     ## What it holds
 
-    The event's provider, tenant, id, type, object, mode and time (see `MishkaPay.Event`), its
+    The event's provider, tenant, id, type, object, payment, mode and time (see `MishkaPay.Event`), its
     `:status` (`:pending`, `:processed`, `:failed`), the `:last_error` and when it was processed. An
     identity on provider and event id keeps each event once, however often the provider sends it.
 
@@ -61,6 +61,7 @@ if Code.ensure_loaded?(AshOban) do
       attribute :type, :string, allow_nil?: false, public?: true
       attribute :object_id, :string, public?: true
       attribute :object_type, :string, public?: true
+      attribute :payment_id, :string, public?: true
       attribute :livemode, :boolean, allow_nil?: false, default: false, public?: true
       attribute :account, :string, public?: true
       attribute :provider_created_at, :utc_datetime_usec, public?: true
@@ -92,6 +93,7 @@ if Code.ensure_loaded?(AshOban) do
           :type,
           :object_id,
           :object_type,
+          :payment_id,
           :livemode,
           :account,
           :provider_created_at
