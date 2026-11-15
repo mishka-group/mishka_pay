@@ -33,3 +33,8 @@ MnesiaCore.*
 
 # macOS Finder metadata
 .DS_Store
+
+# The test database's schema is made by `mix ash.codegen` from the test resources: a build artifact,
+# never written by hand. CI makes it with `mix ash.codegen ci`.
+/priv/repo/migrations/
+/priv/resource_snapshots/

@@ -13,6 +13,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:credentials` | the host | gives the keys of a provider for one site |
   | `mishka_pay:checkout:before` | the host | changes or refuses a checkout before the provider sees it |
   | `mishka_pay:webhook:received` | the Ash inbox, or the host | a provider event whose signature was checked |
+  | `mishka_pay:event:process` | the host, or a payment resource | works one event the Ash inbox stored |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
 
   The payment event arrives with the stage that fires it.
@@ -41,4 +42,12 @@ defmodule MishkaPay.Events do
   """
   @spec webhook_received() :: String.t()
   def webhook_received, do: "mishka_pay:webhook:received"
+
+  @doc """
+  The inbox (`MishkaPay.Ash.Inbox`) fires this to work one stored event, once per try. Listeners
+  get `%{event: %MishkaPay.Event{}, failed: nil}` and answer it with `:failed` set to a reason when
+  the work did not finish, so the inbox tries again later.
+  """
+  @spec event_process() :: String.t()
+  def event_process, do: "mishka_pay:event:process"
 end
