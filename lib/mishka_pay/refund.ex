@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPayTest do
-  use ExUnit.Case
-  doctest MishkaPay
+defmodule MishkaPay.Refund do
+  @moduledoc """
+  Money given back on a payment, in full or in part. A guarded_struct.
 
-  test "greets the world" do
-    assert MishkaPay.hello() == :world
-  end
+  Stage 2 adds the struct.
+  """
 end

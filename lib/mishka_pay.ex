@@ -4,19 +4,15 @@
 
 defmodule MishkaPay do
   @moduledoc """
-  Documentation for `MishkaPay`.
+  The calls a project makes to take money: start a checkout, read a payment, refund one.
+
+  Each call names a provider by its id (`"stripe"`), finds it among the installed providers
+  (`MishkaPay.Providers`), takes the keys for the site from `MishkaPay.Credentials`, and hands the
+  provider a guarded_struct input. The answer is always a guarded_struct or a `MishkaPay.Error`, the
+  same for every provider.
+
+  This module never names a provider: a project chooses which ones run by supervising their plugins.
+
+  Stage 1 adds the calls.
   """
-
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> MishkaPay.hello()
-      :world
-
-  """
-  def hello do
-    :world
-  end
 end
