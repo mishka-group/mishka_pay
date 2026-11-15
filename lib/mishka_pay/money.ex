@@ -48,6 +48,31 @@ defmodule MishkaPay.Money do
   end
 
   @doc """
+  A guarded_struct field validator for money: `validator: {MishkaPay.Money, :field}`. It takes a
+  `Money` struct or a map with `amount` and `currency` (atom or string keys, as JSON gives them),
+  checks it with `new/2` and keeps the checked `Money`.
+  """
+  @spec field(atom(), term()) :: {:ok, atom(), Money.t()} | {:error, atom(), String.t()}
+  def field(name, %Money{amount: amount, currency: currency}), do: checked(name, amount, currency)
+
+  def field(name, %{} = map) do
+    keys = Map.new(map, fn {key, value} -> {to_string(key), value} end)
+    checked(name, keys["amount"], keys["currency"])
+  end
+
+  def field(name, nil), do: {:ok, name, nil}
+
+  def field(name, _other),
+    do: {:error, name, "The #{name} field must be money: an amount and a currency"}
+
+  defp checked(name, amount, currency) do
+    case new(amount, currency) do
+      {:ok, money} -> {:ok, name, money}
+      {:error, %{errors: [%{message: message} | _]}} -> {:error, name, message}
+    end
+  end
+
+  @doc """
   Money from an amount in the currency's smallest unit, as a provider gives it:
   `from_minor(1999, "USD")` is 19.99 dollars.
   """
