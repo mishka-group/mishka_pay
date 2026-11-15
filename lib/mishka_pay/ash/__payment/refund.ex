@@ -34,16 +34,45 @@ if Code.ensure_loaded?(Ash) do
         reference: Ash.Changeset.get_argument(changeset, :reference)
       }
 
-      with {:ok, refund} <- MishkaPay.refund(request),
-           {:ok, fresh} <-
-             MishkaPay.fetch_payment(payment.provider, payment.provider_id, payment.tenant) do
-        changeset
-        |> Ash.Changeset.force_change_attributes(Sync.attributes(fresh, payment.tenant))
-        |> Ash.Changeset.put_context(:mishka_pay_refund, refund)
-        |> Ash.Changeset.put_context(:mishka_pay_payment, fresh)
-      else
-        {:error, error} -> Ash.Changeset.add_error(changeset, MishkaPay.Ash.to_ash_error(error))
+      case MishkaPay.refund(request) do
+        {:ok, refund} ->
+          changeset
+          |> Ash.Changeset.put_context(:mishka_pay_refund, refund)
+          |> refreshed(payment, refund)
+
+        {:error, error} ->
+          Ash.Changeset.add_error(changeset, MishkaPay.Ash.to_ash_error(error))
       end
+    end
+
+    # The money already moved, so the action succeeds either way: with the provider's payment when
+    # it answers, or with the refund counted here until the next sync.
+    defp refreshed(changeset, payment, refund) do
+      case MishkaPay.fetch_payment(payment.provider, payment.provider_id, payment.tenant) do
+        {:ok, fresh} ->
+          changeset
+          |> Ash.Changeset.force_change_attributes(Sync.attributes(fresh, payment.tenant))
+          |> Ash.Changeset.put_context(:mishka_pay_payment, fresh)
+
+        {:error, _cannot_read} ->
+          Ash.Changeset.force_change_attributes(changeset, counted(payment, refund))
+      end
+    end
+
+    defp counted(payment, refund) do
+      refunded =
+        case refund.amount do
+          %Money{amount: amount} -> Decimal.add(payment.amount_refunded, amount)
+          nil -> payment.amount
+        end
+
+      status =
+        case Decimal.compare(refunded, payment.amount) do
+          :lt -> :partially_refunded
+          _all -> :refunded
+        end
+
+      %{amount_refunded: refunded, status: status}
     end
   end
 end

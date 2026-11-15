@@ -21,8 +21,7 @@ if Code.ensure_loaded?(Ash) do
       )
     end
 
-    defp message(%{__exception__: true} = error), do: Exception.message(error)
     defp message(nil), do: "unknown"
-    defp message(other), do: inspect(other)
+    defp message(error), do: MishkaPay.Ash.message(error)
   end
 end

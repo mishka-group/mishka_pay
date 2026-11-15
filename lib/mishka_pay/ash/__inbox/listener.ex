@@ -52,7 +52,7 @@ if Code.ensure_loaded?(Ash) do
 
       case Ash.create(resource, attrs, action: :receive, authorize?: false) do
         {:ok, _stored} -> state
-        {:error, error} -> %{state | failed: Exception.message(error)}
+        {:error, error} -> %{state | failed: MishkaPay.Ash.message(error)}
       end
     end
   end

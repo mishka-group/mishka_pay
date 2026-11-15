@@ -31,16 +31,27 @@ if Code.ensure_loaded?(Ash) do
     @spec to_ash_error(Exception.t()) :: [Exception.t()]
     def to_ash_error(error) do
       case Errors.to_class(error) do
-        %Errors.Invalid{errors: errors} -> Enum.map(errors, &invalid/1)
-        other -> [Ash.Error.Unknown.UnknownError.exception(error: Exception.message(other))]
+        %Errors.Invalid{errors: errors} ->
+          Enum.map(errors, &invalid/1)
+
+        %{errors: errors} ->
+          Enum.map(errors, &Ash.Error.Unknown.UnknownError.exception(error: message(&1)))
       end
     end
 
-    defp invalid(error),
-      do:
-        Ash.Error.Changes.InvalidArgument.exception(
-          field: Map.get(error, :field),
-          message: Exception.message(error)
-        )
+    @doc """
+    The plain words of an error, for a person or a log: the error's own message, without the
+    breadcrumbs and stack traces a Splode class adds; a class gives its errors' words, joined.
+    """
+    @spec message(term()) :: String.t()
+    def message(%{errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+    def message(%{__exception__: true, __struct__: module} = error), do: module.message(error)
+    def message(text) when is_binary(text), do: text
+    def message(other), do: inspect(other)
+
+    defp invalid(%{field: field} = error) when not is_nil(field),
+      do: Ash.Error.Changes.InvalidArgument.exception(field: field, message: message(error))
+
+    defp invalid(error), do: Ash.Error.Changes.InvalidChanges.exception(message: message(error))
   end
 end

@@ -33,7 +33,12 @@ if Code.ensure_loaded?(Ash) do
             )
 
           answer ->
-            Ash.Changeset.add_error(changeset, "the event was not processed: #{reason(answer)}")
+            Ash.Changeset.add_error(
+              changeset,
+              Ash.Error.Changes.InvalidChanges.exception(
+                message: "the event was not processed: #{reason(answer)}"
+              )
+            )
         end
       end)
     end

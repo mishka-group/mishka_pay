@@ -9,8 +9,6 @@ defmodule MishkaPay.Ash.InboxTest do
   import Plug.Conn
   import Plug.Test
 
-  require Ash.Query
-
   alias MishkaPay.{Event, Webhook}
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.Support.{EventWorker, Inbox, WebhookEvent}

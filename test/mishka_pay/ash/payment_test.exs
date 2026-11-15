@@ -136,7 +136,8 @@ defmodule MishkaPay.Ash.PaymentTest do
                payment
                |> Ash.Changeset.for_update(:refund, %{
                  amount: %{amount: "5", currency: "USD"},
-                 reason: :requested_by_customer
+                 reason: :requested_by_customer,
+                 reference: "refund-1"
                })
                |> Ash.update(authorize?: false)
 
@@ -153,9 +154,73 @@ defmodule MishkaPay.Ash.PaymentTest do
         assert {:error,
                 %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidArgument{field: :amount}]}} =
                  payment
-                 |> Ash.Changeset.for_update(:refund, %{amount: amount})
+                 |> Ash.Changeset.for_update(:refund, %{amount: amount, reference: "refund-2"})
                  |> Ash.update(authorize?: false)
       end
+    end
+  end
+
+  describe "safety" do
+    test "a refund needs its own reference, so sending it again can never refund twice" do
+      {:ok, payment} = sync()
+
+      assert {:error,
+              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.Required{field: :reference}]}} =
+               payment |> Ash.Changeset.for_update(:refund, %{}) |> Ash.update(authorize?: false)
+    end
+
+    test "a refund that went through still succeeds when the payment cannot be read again" do
+      {:ok, payment} = sync()
+
+      # Stripe answers the read before the refund and the refund itself, then goes down.
+      MishkaPay.Test.stub_http(fn conn ->
+        case Process.get(:refunded) do
+          true ->
+            conn
+            |> Plug.Conn.put_status(500)
+            |> Req.Test.json(%{"error" => %{"message" => "down"}})
+
+          nil ->
+            if conn.method == "POST", do: Process.put(:refunded, true)
+            StripeMock.forward(conn)
+        end
+      end)
+
+      assert {:ok, refunded} =
+               payment
+               |> Ash.Changeset.for_update(:refund, %{
+                 amount: %{amount: "5", currency: "USD"},
+                 reference: "refund-3"
+               })
+               |> Ash.update(authorize?: false)
+
+      assert %MishkaPay.Refund{status: :succeeded} = refunded.__metadata__.refund
+      assert refunded.status == :partially_refunded
+      assert Decimal.equal?(refunded.amount_refunded, "5")
+    end
+
+    test "a later sync never moves a payment to another tenant" do
+      {:ok, first} = sync(%{tenant: "site-a"})
+      {:ok, again} = sync(%{tenant: "site-b"})
+
+      assert again.id == first.id
+      assert again.tenant == "site-a"
+    end
+
+    test "errors reach Ash as plain words, with no stack trace" do
+      declined = MishkaPay.Errors.Declined.exception(provider: "stripe", reason: "card_declined")
+
+      assert [
+               %Ash.Error.Unknown.UnknownError{
+                 error: "stripe declined the payment: card_declined"
+               }
+             ] =
+               MishkaPay.Ash.to_ash_error(declined)
+
+      refused = MishkaPay.Errors.Refused.exception(operation: :checkout, reason: "closed")
+
+      assert [%Ash.Error.Changes.InvalidChanges{message: "the checkout was refused: closed"}] =
+               MishkaPay.Ash.to_ash_error(refused)
     end
   end
 end

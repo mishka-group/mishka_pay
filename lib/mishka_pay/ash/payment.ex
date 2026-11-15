@@ -39,7 +39,8 @@ if Code.ensure_loaded?(Ash) do
 
     `:sync` takes `:provider`, `:payment_id` and `:tenant`, reads the payment from the provider
     (`MishkaPay.fetch_payment/3`) before its transaction starts, and writes what the provider said,
-    creating the row the first time. The provider is the source of truth, so events may come twice
+    creating the row the first time; the tenant is kept from that first time, so a later sync can
+    never move a payment to another tenant. The provider is the source of truth, so events may come twice
     or in any order: every sync writes the payment as it is now. After a sync,
     `mishka_pay:payment:changed` (`MishkaPay.Events.payment_changed/0`) is fired with the payment and
     the row, and the host's Ash notifiers (such as `Ash.Notifier.PubSub`) see the action as usual, so
@@ -52,8 +53,12 @@ if Code.ensure_loaded?(Ash) do
     The payment row comes later, from the webhook of the payment the buyer makes.
 
     `:refund` refunds a stored payment through its provider (`MishkaPay.refund/1`), in full or by
-    `:amount`, with an optional `:reason` and `:reference`, then syncs the row from the provider and
-    keeps the `MishkaPay.Refund` in the record's `:refund` metadata.
+    `:amount`, with an optional `:reason`, then syncs the row from the provider and keeps the
+    `MishkaPay.Refund` in the record's `:refund` metadata. Its `:reference` is required: the
+    caller's own id for this refund, which makes the idempotency key, so a refund sent again after a
+    lost answer is the same refund, never a second one. When the refund went through but the payment
+    cannot be read again, the action still succeeds: the row counts the refund itself, and the next
+    sync or webhook brings the provider's word.
 
     Errors come back as Ash errors (`MishkaPay.Ash.to_ash_error/1`).
 
@@ -111,7 +116,6 @@ if Code.ensure_loaded?(Ash) do
         upsert_identity :provider_payment
 
         upsert_fields [
-          :tenant,
           :status,
           :amount,
           :amount_refunded,
@@ -138,7 +142,7 @@ if Code.ensure_loaded?(Ash) do
         argument :reason, :atom,
           constraints: [one_of: [:requested_by_customer, :duplicate, :fraudulent]]
 
-        argument :reference, :string
+        argument :reference, :string, allow_nil?: false
         change MishkaPay.Ash.Payment.Refund
       end
     end
