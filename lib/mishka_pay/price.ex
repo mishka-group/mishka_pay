@@ -10,6 +10,9 @@ defmodule MishkaPay.Price do
     * `:amount`: the price of one, a `Money` checked by `MishkaPay.Money` (`%{amount: "19.99",
       currency: "USD"}` works too).
     * `:quantity`: 1 by default.
+    * `:tax_code`: the provider's tax category of what is sold, such as Stripe's `"txcd_10302000"`
+      for a downloaded e-book. A provider that is the merchant of record (Stripe Managed
+      Payments) needs it to work out the tax.
     * `:id`: the provider's own id of a price it already knows (`price_...` at Stripe). With it,
       the provider's price is used and `:name` and `:amount` may be left out.
   """
@@ -20,6 +23,9 @@ defmodule MishkaPay.Price do
     field :id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
     field :name, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=250)"
     field :amount, Money.t(), validator: {MishkaPay.Money, :field}
+
+    field :tax_code, String.t(),
+      derives: "sanitize(trim) validate(string, not_empty, max_len=100)"
 
     field :quantity, pos_integer(),
       default: 1,

@@ -39,6 +39,36 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(@checkout)
     end
 
+    test "a tax code and the merchant-of-record choice are sent as Stripe expects" do
+      ebook = [
+        %{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}, tax_code: "txcd_10302000"}
+      ]
+
+      assert {:ok, %Checkout{status: :open}} =
+               MishkaPay.checkout(Map.merge(@checkout, %{items: ebook, merchant_of_record: true}))
+
+      params =
+        Stripe.Mapper.checkout_params(%MishkaPay.Checkout{
+          provider: "stripe",
+          success_url: "https://shop.test/thanks",
+          cancel_url: "https://shop.test/cart",
+          items: [
+            %MishkaPay.Price{
+              name: "Ebook",
+              amount: Money.new(:USD, "1"),
+              quantity: 1,
+              tax_code: "txcd_10302000"
+            }
+          ],
+          merchant_of_record: false
+        })
+
+      assert params["managed_payments"] == %{"enabled" => false}
+
+      assert get_in(params, ["line_items", Access.at(0), "price_data", "product_data", "tax_code"]) ==
+               "txcd_10302000"
+    end
+
     test "a known price and an existing customer are accepted the same way" do
       assert {:ok, %Checkout{}} =
                MishkaPay.checkout(%{

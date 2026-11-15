@@ -65,10 +65,27 @@ defmodule MishkaPay.Providers.StripeLiveTest do
             }} =
              MishkaPay.checkout(%{
                provider: "stripe",
-               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               items: [
+                 %{
+                   name: "Ebook",
+                   amount: %{amount: "19.99", currency: "USD"},
+                   tax_code: "txcd_10302000"
+                 }
+               ],
                success_url: "https://shop.test/thanks",
                cancel_url: "https://shop.test/cart",
                reference: "live-#{System.unique_integer([:positive])}"
+             })
+  end
+
+  test "a checkout can turn Stripe Managed Payments off for itself" do
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false
              })
   end
 

@@ -17,6 +17,9 @@ defmodule MishkaPay.Checkout do
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
       it comes back on the payment, and it makes the request's idempotency key, so the same
       reference never opens two checkouts.
+    * `:merchant_of_record`: `true` asks the provider to sell as the merchant of record (it
+      collects and files the tax, as Stripe Managed Payments does), `false` asks it not to; left
+      out, the provider's account default applies. Each price then needs its `:tax_code`.
     * `:metadata`: extra pairs kept with the checkout, string keys to string values; each provider
       has its own limits on how many and how long.
 
@@ -58,6 +61,8 @@ defmodule MishkaPay.Checkout do
 
     field :reference, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
+
+    field :merchant_of_record, boolean(), derives: "validate(boolean)"
 
     dynamic_field :metadata, validator: {__MODULE__, :metadata}
 

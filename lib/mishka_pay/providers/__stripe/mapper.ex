@@ -37,17 +37,23 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "payment_intent_data" => %{"metadata" => reference}
     }
     |> Map.merge(customer(checkout.customer))
+    |> Map.merge(managed_payments(checkout.merchant_of_record))
   end
+
+  # Stripe Managed Payments is Stripe selling as the merchant of record; nil leaves the account's
+  # own default.
+  defp managed_payments(nil), do: %{}
+  defp managed_payments(enabled), do: %{"managed_payments" => %{"enabled" => enabled}}
 
   defp line_item(%Price{id: id, quantity: quantity}) when is_binary(id),
     do: %{"price" => id, "quantity" => quantity}
 
-  defp line_item(%Price{name: name, amount: amount, quantity: quantity}) do
+  defp line_item(%Price{name: name, amount: amount, quantity: quantity, tax_code: tax_code}) do
     %{
       "price_data" => %{
         "currency" => amount.currency |> to_string() |> String.downcase(),
         "unit_amount" => Money.to_minor(amount),
-        "product_data" => %{"name" => name}
+        "product_data" => %{"name" => name, "tax_code" => tax_code}
       },
       "quantity" => quantity
     }
