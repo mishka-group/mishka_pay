@@ -1,0 +1,49 @@
+name: Stripe live
+
+# The :stripe_live tests against the Stripe sandbox whose test key is the STRIPE_SECRET_KEY secret.
+# They use Stripe's test cards, so no real money moves. A pull request from a fork has no secrets,
+# so the job is skipped there.
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: stripe-live-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stripe-live:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same OTP and Elixir as ci.yml: the ones in .tool-versions.
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: stripe-live-${{ runner.os }}-${{ hashFiles('.tool-versions', 'mix.lock') }}
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+
+      - env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: mix test --only stripe_live

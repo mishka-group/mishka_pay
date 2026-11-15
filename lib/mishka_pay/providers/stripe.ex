@@ -17,7 +17,10 @@ defmodule MishkaPay.Providers.Stripe do
   module reads. No third party Stripe library is used. Stripe's field names live only in
   `MishkaPay.Providers.Stripe.Mapper`.
 
-    * `checkout/2` opens a Checkout Session in `payment` mode and answers its page. The caller's
+    * `checkout/2` opens a Checkout Session in `payment` mode and answers its page. A price's
+      `:tax_code` is its product tax code, and `:merchant_of_record` turns Stripe Managed Payments
+      on or off for the session; an account with Managed Payments on by default needs a tax code
+      on every price. The caller's
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.

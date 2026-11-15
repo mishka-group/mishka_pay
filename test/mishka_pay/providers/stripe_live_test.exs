@@ -22,7 +22,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   setup do
     key = System.fetch_env!("STRIPE_SECRET_KEY")
-    "sk_test_" <> _ = key
+
+    # A sandbox or test key only, full (sk_test_) or restricted (rk_test_): never a live key.
+    assert String.starts_with?(key, ["sk_test_", "rk_test_"]),
+           "STRIPE_SECRET_KEY must be a Stripe test key"
+
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.put_keys("stripe", %{secret_key: key})
     MishkaPay.Test.stub_http(&StripeMock.forward(&1, "https://api.stripe.com"))
@@ -61,10 +65,27 @@ defmodule MishkaPay.Providers.StripeLiveTest do
             }} =
              MishkaPay.checkout(%{
                provider: "stripe",
-               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               items: [
+                 %{
+                   name: "Ebook",
+                   amount: %{amount: "19.99", currency: "USD"},
+                   tax_code: "txcd_10302000"
+                 }
+               ],
                success_url: "https://shop.test/thanks",
                cancel_url: "https://shop.test/cart",
                reference: "live-#{System.unique_integer([:positive])}"
+             })
+  end
+
+  test "a checkout can turn Stripe Managed Payments off for itself" do
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false
              })
   end
 
