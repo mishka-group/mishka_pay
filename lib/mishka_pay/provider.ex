@@ -126,7 +126,7 @@ defmodule MishkaPay.Provider do
   def offered, do: offered_of(all())
 
   @doc "The offered provider whose id is `id`."
-  @spec fetch(String.t()) :: {:ok, module()} | {:error, Errors.UnknownProvider.t()}
+  @spec fetch(String.t()) :: {:ok, module()} | {:error, Splode.Error.t()}
   def fetch(id) when is_binary(id) do
     case installed() do
       {:ok, providers} -> providers |> offered_of() |> Enum.find(&(&1.id() == id)) |> found(id)
