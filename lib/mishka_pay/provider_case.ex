@@ -11,7 +11,7 @@ defmodule MishkaPay.ProviderCase do
       end
 
   It checks that the module implements every required callback of `MishkaPay.Provider`, that its
-  id, label and capabilities are valid, and that once its plugin starts, `MishkaPay.Provider`
+  id, label and capabilities are valid, that each capability has its operations, and that once its plugin starts, `MishkaPay.Provider`
   finds it by its id (or lists it, when `offered?/0` keeps it out of the offered ones). Each stage
   of Mishka Pay adds the contract of its operations here, so a provider written today is checked
   against what tomorrow's calls expect.
@@ -82,6 +82,15 @@ defmodule MishkaPay.ProviderCase do
 
     assert unknown == [],
            "#{inspect(provider)} declares unknown capabilities: #{inspect(unknown)}"
+
+    missing =
+      for capability <- provider.capabilities(),
+          {name, arity} <- Provider.operations(capability),
+          not function_exported?(provider, name, arity),
+          do: "#{name}/#{arity} (for #{inspect(capability)})"
+
+    assert missing == [],
+           "#{inspect(provider)} declares capabilities without #{Enum.join(missing, ", ")}"
   end
 
   @doc false

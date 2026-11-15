@@ -36,8 +36,19 @@ defmodule MishkaPay.Provider do
   provider can be told installed: `fetch/1` then answers a `MishkaPay.Errors.UnknownProvider` error
   with the reason `:cannot_run`.
 
-  The same pattern as `MishkaCmsCore.ProviderRegistry` and `MishkaCmsCore.Captcha.Provider`. The
-  payment operations join the callbacks in stage 2.
+  The same pattern as `MishkaCmsCore.ProviderRegistry` and `MishkaCmsCore.Captcha.Provider`.
+
+  ## Operations
+
+  Each capability brings the callbacks it needs, and a provider that declares a capability without
+  them does not compile:
+
+    * `:checkout`: `checkout/2` and `fetch_payment/2`;
+    * `:refund`: `refund/2`.
+
+  Every operation takes a guarded_struct and the tenant's `MishkaPay.Credentials`, and answers a
+  guarded_struct or a `MishkaPay.Errors` error. A project calls them through `MishkaPay`, which
+  checks the capability, asks for the keys and emits telemetry first.
   """
 
   require Logger
@@ -71,7 +82,24 @@ defmodule MishkaPay.Provider do
   @doc "Optional. `false` keeps an installed provider out of `offered/0`, for example while it has no keys anywhere."
   @callback offered?() :: boolean()
 
-  @optional_callbacks offered?: 0
+  @doc """
+  With `:checkout`. Opens a checkout at the provider with the tenant's keys and answers it with
+  the provider's `:id`, `:url` and `:status` filled in.
+  """
+  @callback checkout(MishkaPay.Checkout.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Checkout.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:checkout`. Reads one payment again from the provider, its source of truth."
+  @callback fetch_payment(payment_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:refund`. Gives money back on a payment and answers the refund as the provider made it."
+  @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
+
+  @optional_callbacks offered?: 0, checkout: 2, fetch_payment: 2, refund: 2
+
+  @operations %{checkout: [checkout: 2, fetch_payment: 2], refund: [refund: 2]}
 
   @options [:id, :label, :capabilities, :priority]
 
@@ -94,6 +122,8 @@ defmodule MishkaPay.Provider do
         initial: %{priority: unquote(priority)}
 
       @behaviour MishkaPay.Provider
+      @before_compile MishkaPay.Provider
+      @mishka_pay_capabilities unquote(capabilities)
 
       @impl true
       def call(%{providers: providers} = state) when is_list(providers),
@@ -111,6 +141,35 @@ defmodule MishkaPay.Provider do
       def capabilities, do: unquote(capabilities)
     end
   end
+
+  # A capability is a promise: a provider that declares one and lacks its functions does not
+  # compile, so it can never be offered and then fail at the first payment.
+  @doc false
+  defmacro __before_compile__(env) do
+    missing =
+      for capability <- Module.get_attribute(env.module, :mishka_pay_capabilities),
+          {name, arity} <- Map.get(@operations, capability, []),
+          not Module.defines?(env.module, {name, arity}, :def),
+          do: "#{name}/#{arity} (for #{inspect(capability)})"
+
+    case missing do
+      [] ->
+        :ok
+
+      _missing ->
+        raise CompileError,
+          file: env.file,
+          line: env.line,
+          description:
+            "#{inspect(env.module)} declares capabilities without " <> Enum.join(missing, ", ")
+    end
+
+    nil
+  end
+
+  @doc "Lists what a capability asks a provider to define, such as `[checkout: 2, fetch_payment: 2]`."
+  @spec operations(capability()) :: keyword(pos_integer())
+  def operations(capability), do: Map.get(@operations, capability, [])
 
   @doc "Every installed provider, the first of each id. None when the event cannot run."
   @spec all() :: [module()]

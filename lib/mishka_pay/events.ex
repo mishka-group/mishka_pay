@@ -15,7 +15,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:webhook:received` | the Ash inbox, or the host | a provider event whose signature was checked |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
 
-  The first two are fired from stage 1; the others arrive with the stage that fires them.
+  The webhook and payment events arrive with the stage that fires them.
   """
 
   @doc "Every provider listens here and adds itself to the `providers` list the event carries."
@@ -25,4 +25,12 @@ defmodule MishkaPay.Events do
   @doc "The host listens here and answers a provider's keys for one site."
   @spec credentials() :: String.t()
   def credentials, do: "mishka_pay:credentials"
+
+  @doc """
+  Hosts listen here to change or refuse a checkout before the provider sees it. A plugin gets
+  `%{checkout: %MishkaPay.Checkout{}, refused: nil}` and answers it with a changed `:checkout`, or
+  with `:refused` set to a reason. See `MishkaPay.checkout/1`.
+  """
+  @spec checkout_before() :: String.t()
+  def checkout_before, do: "mishka_pay:checkout:before"
 end
