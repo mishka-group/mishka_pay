@@ -34,7 +34,7 @@ defmodule MishkaPay.Test do
   every test sees, so a test that uses it is `async: false`.
 
   Every wait here is on a message: a plugin is ready when mishka_installer says it started and its
-  event is rebuilt. Nothing sleeps.
+  event is rebuilt. Nothing sleeps; a plugin that never starts fails the test after 30 seconds.
   """
 
   import ExUnit.Callbacks, only: [on_exit: 1, start_supervised!: 1]
@@ -55,8 +55,8 @@ defmodule MishkaPay.Test do
   end
 
   @doc """
-  Starts `plugin` (a provider or a keys plugin) under the test supervisor and returns once its
-  event runs it. It is unregistered when the test ends.
+  Starts `plugin` (a project's provider or keys plugin) under the test supervisor and returns once
+  its event runs it. It is unregistered when the test ends, even when it never started.
   """
   @spec start_plugin!(module()) :: :ok
   def start_plugin!(plugin) do
@@ -64,13 +64,13 @@ defmodule MishkaPay.Test do
 
     try do
       start_supervised!(plugin)
+      on_exit(fn -> Event.unregister(:name, plugin, false) end)
       wait(plugin)
     after
       MishkaInstaller.unsubscribe("event")
     end
 
     drain()
-    on_exit(fn -> Event.unregister(:name, plugin, false) end)
   end
 
   @doc """
@@ -136,7 +136,8 @@ defmodule MishkaPay.Test do
   end
 
   # `Event.start/3` queues the event's rebuild before it broadcasts, so once nothing is queued or
-  # running the rebuilt event includes the plugin.
+  # running the rebuilt event includes the plugin. Each round is a sync call to the installer's
+  # event handler, which answers between rebuilds: the barrier mishka_cms_core's tests use too.
   defp drain do
     state = EventHandler.get()
 

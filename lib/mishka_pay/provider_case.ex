@@ -53,28 +53,44 @@ defmodule MishkaPay.ProviderCase do
   def assert_callbacks(provider) do
     assert Code.ensure_loaded?(provider), "#{inspect(provider)} is not a loaded module"
 
-    for {name, arity} <-
-          Provider.behaviour_info(:callbacks) -- Provider.behaviour_info(:optional_callbacks) do
-      assert function_exported?(provider, name, arity),
-             "#{inspect(provider)} does not implement #{name}/#{arity}"
-    end
+    missing =
+      for {name, arity} <-
+            Provider.behaviour_info(:callbacks) -- Provider.behaviour_info(:optional_callbacks),
+          not function_exported?(provider, name, arity),
+          do: "#{name}/#{arity}"
+
+    assert missing == [],
+           "#{inspect(provider)} does not implement #{Enum.join(missing, ", ")} of MishkaPay.Provider"
   end
 
   @doc false
   def assert_declaration(provider) do
-    assert is_binary(provider.id()) and provider.id() =~ ~r/\A[a-z][a-z0-9_]*\z/
-    assert is_binary(provider.label()) and provider.label() != ""
+    assert_callbacks(provider)
+    id = provider.id()
 
-    assert Enum.all?(
-             provider.capabilities(),
-             &(&1 in [:checkout, :refund, :subscription, :webhook, :return_verify])
-           )
+    assert is_binary(id) and id =~ ~r/\A[a-z][a-z0-9_]*\z/,
+           "#{inspect(provider)}.id() must be lowercase letters, digits and _, got: #{inspect(id)}"
+
+    assert is_binary(provider.label()) and provider.label() != "",
+           "#{inspect(provider)}.label() must be a non-empty string, got: #{inspect(provider.label())}"
+
+    unknown =
+      Enum.reject(
+        provider.capabilities(),
+        &(&1 in [:checkout, :refund, :subscription, :webhook, :return_verify])
+      )
+
+    assert unknown == [],
+           "#{inspect(provider)} declares unknown capabilities: #{inspect(unknown)}"
   end
 
   @doc false
   def assert_installed(provider) do
+    assert function_exported?(provider, :child_spec, 1),
+           "#{inspect(provider)} is not a plugin: `use MishkaPay.Provider` makes it one"
+
     MishkaPay.Test.start_plugin!(provider)
-    assert provider in Provider.all()
+    assert provider in Provider.all(), "#{inspect(provider)} started but is not installed"
 
     case provider in Provider.offered() do
       true -> assert {:ok, ^provider} = Provider.fetch(provider.id())

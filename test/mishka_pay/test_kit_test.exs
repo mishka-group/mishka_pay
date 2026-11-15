@@ -24,8 +24,8 @@ defmodule MishkaPay.TestKitTest do
              fn -> Credentials.fetch("acme") end |> Task.async() |> Task.await()
 
     test = self()
-    stranger = spawn(fn -> send(test, {:stranger, Credentials.fetch("acme")}) end)
-    ref = Process.monitor(stranger)
+    # Monitored as it starts, so its exit is always reported as :normal.
+    {stranger, ref} = spawn_monitor(fn -> send(test, {:stranger, Credentials.fetch("acme")}) end)
 
     assert_receive {:stranger, {:error, %Errors.MissingCredentials{}}}
     assert_receive {:DOWN, ^ref, :process, ^stranger, :normal}
@@ -53,8 +53,11 @@ defmodule MishkaPay.TestKitTest do
              })
   end
 
-  test "the contract fails for a module that is not a provider, naming what is missing" do
-    error = assert_raise ExUnit.AssertionError, fn -> ProviderCase.assert_callbacks(Enum) end
-    assert error.message =~ "does not implement"
+  test "the contract fails for a module that is not a provider, naming everything missing" do
+    error = assert_raise ExUnit.AssertionError, fn -> ProviderCase.assert_declaration(Enum) end
+    for callback <- ["id/0", "label/0", "capabilities/0"], do: assert(error.message =~ callback)
+
+    error = assert_raise ExUnit.AssertionError, fn -> ProviderCase.assert_installed(Enum) end
+    assert error.message =~ "is not a plugin"
   end
 end
