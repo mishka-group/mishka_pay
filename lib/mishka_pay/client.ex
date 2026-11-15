@@ -21,8 +21,9 @@ defmodule MishkaPay.Client do
   What every provider gets from it:
 
     * **Retries.** A network error and the answers 408, 429, 500, 502, 503 and 504 are tried again,
-      `max_retries` times (2 by default), waiting what a `Retry-After` header says or a growing
-      delay. A write (`post`, `put`, `patch`, `delete`) is tried again only when the provider takes
+      `max_retries` times (2 by default). The wait is what a whole-second `Retry-After` header says,
+      or `retry_delay` milliseconds (500 by default) doubled on each try, and never more than
+      `max_wait` milliseconds (ten seconds by default). A write (`post`, `put`, `patch`, `delete`) is tried again only when the provider takes
       an idempotency key, so a payment is never made twice.
     * **One idempotency key per call.** When `idempotency_header` is set, a write carries the key in
       that header: `idempotency_key` when the caller gives one (derived from its own operation, so a
@@ -35,7 +36,12 @@ defmodule MishkaPay.Client do
   `MishkaPay.Errors.Unreachable` error, and a description that is not valid an `:invalid` one.
   `inspect/1` leaves out `:auth`.
 
-  `:options` takes any other Req option, such as `plug: {Req.Test, MyTest}` in a test.
+  `base_url` is an `http` or `https` address and `path` starts with a single `/`, with no query
+  (`params` carries it), so a path can never send the request, and its auth, to another host.
+  `form` and `json` are one or the other. Header names are compared without case.
+
+  `:options` takes any other Req option, such as `plug: {Req.Test, MyTest}` in a test. It cannot
+  change what this module decides: the method, address, headers, auth, body, retries and timeout.
   """
 
   use GuardedStruct
@@ -48,7 +54,7 @@ defmodule MishkaPay.Client do
   @writes [:post, :put, :patch, :delete]
   @retry_statuses [408, 429, 500, 502, 503, 504]
 
-  guardedstruct authorized_fields: true do
+  guardedstruct authorized_fields: true, main_validator: {__MODULE__, :one_body} do
     field :provider, String.t(),
       enforce: true,
       derives: "validate(string, not_empty)",
@@ -62,21 +68,30 @@ defmodule MishkaPay.Client do
     field :base_url, String.t(),
       enforce: true,
       derives: "sanitize(trim) validate(string, not_empty)",
-      validator: {Required, :call}
+      validator: {__MODULE__, :base_url}
 
     field :path, String.t(),
       enforce: true,
       derives: "validate(string, not_empty)",
-      validator: {Required, :call}
+      validator: {__MODULE__, :path}
 
     field :auth, term()
     field :headers, map(), default: %{}, derives: "validate(map)"
-    field :params, term(), derives: "validate(either=[map, list])"
+
+    field :params, term(),
+      derives: "validate(either=[map, list])",
+      validator: {__MODULE__, :params}
+
     field :form, term(), derives: "validate(either=[map, list])"
     field :json, term()
-    field :idempotency_header, String.t(), derives: "sanitize(trim, downcase) validate(string)"
+
+    field :idempotency_header, String.t(),
+      derives: "sanitize(trim, downcase) validate(string, not_empty)"
+
     field :idempotency_key, String.t(), derives: "validate(string, not_empty)"
     field :max_retries, non_neg_integer(), default: 2, derives: "validate(integer, min_len=0)"
+    field :retry_delay, non_neg_integer(), default: 500, derives: "validate(integer, min_len=0)"
+    field :max_wait, non_neg_integer(), default: 10_000, derives: "validate(integer, min_len=0)"
 
     field :receive_timeout, pos_integer(),
       default: 30_000,
@@ -115,29 +130,40 @@ defmodule MishkaPay.Client do
     end)
   end
 
+  # The caller's Req options first, then everything this module decides on top, so an option can
+  # never turn a retry back on or swap the idempotency key.
   defp req(spec) do
-    [
-      method: spec.method,
-      base_url: spec.base_url,
-      url: spec.path,
-      headers: key_header(spec),
-      retry: retry(spec),
-      max_retries: spec.max_retries,
-      retry_log_level: false,
-      receive_timeout: spec.receive_timeout
-    ]
-    |> put_present(:auth, spec.auth)
-    |> put_present(:params, spec.params)
-    |> put_present(:form, spec.form)
-    |> put_present(:json, spec.json)
+    ours =
+      [
+        method: spec.method,
+        base_url: spec.base_url,
+        url: spec.path,
+        headers: headers(spec),
+        retry: retry(spec),
+        max_retries: spec.max_retries,
+        retry_log_level: false,
+        receive_timeout: spec.receive_timeout
+      ]
+      |> put_present(:auth, spec.auth)
+      |> put_present(:params, spec.params)
+      |> put_present(:form, spec.form)
+      |> put_present(:json, spec.json)
+
+    spec.options
+    |> Keyword.drop([:auth, :params, :form, :json, :body, :headers, :retry_delay])
     |> Req.new()
-    |> Req.merge(spec.options)
+    |> Req.merge(ours)
   end
 
-  defp key_header(%{idempotency_key: nil, headers: headers}), do: headers
+  defp headers(%{headers: headers} = spec) do
+    lowered =
+      Map.new(headers, fn {name, value} -> {name |> to_string() |> String.downcase(), value} end)
 
-  defp key_header(%{idempotency_key: key, idempotency_header: header, headers: headers}),
-    do: Map.put(headers, header, key)
+    case spec.idempotency_key do
+      nil -> lowered
+      key -> Map.put(lowered, spec.idempotency_header, key)
+    end
+  end
 
   defp put_present(opts, _key, nil), do: opts
   defp put_present(opts, key, value), do: Keyword.put(opts, key, value)
@@ -146,11 +172,71 @@ defmodule MishkaPay.Client do
   defp retry(%{method: method, idempotency_key: nil}) when method in @writes,
     do: false
 
-  defp retry(_spec), do: &retry?/2
+  defp retry(%{retry_delay: base, max_wait: most}), do: &retry?(&1, &2, {base, most})
 
-  defp retry?(_request, %Req.Response{status: status}), do: status in @retry_statuses
-  defp retry?(_request, %Req.TransportError{}), do: true
-  defp retry?(_request, _other), do: false
+  defp retry?(request, %Req.Response{status: status} = response, waits)
+       when status in @retry_statuses,
+       do: {:delay, response |> retry_after() |> wait(request, waits)}
+
+  defp retry?(request, %Req.TransportError{}, waits), do: {:delay, wait(nil, request, waits)}
+  defp retry?(_request, _answer, _waits), do: false
+
+  defp retry_after(response) do
+    with [value | _] <- Req.Response.get_header(response, "retry-after"),
+         {seconds, ""} when seconds >= 0 <- Integer.parse(String.trim(value)) do
+      seconds * 1000
+    else
+      _no_whole_seconds -> nil
+    end
+  end
+
+  defp wait(nil, request, {base, most}),
+    do: min(base * Integer.pow(2, Req.Request.get_private(request, :req_retry_count, 0)), most)
+
+  defp wait(asked, _request, {_base, most}), do: min(asked, most)
+
+  @doc false
+  def base_url(:base_url, url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and host not in [nil, ""] ->
+        {:ok, :base_url, url}
+
+      _other ->
+        {:error, :base_url, "The base_url field must be an http or https address"}
+    end
+  end
+
+  def base_url(:base_url, url), do: Required.call(:base_url, url)
+
+  @doc false
+  def path(:path, "/" <> rest = path) when is_binary(rest) do
+    case String.starts_with?(rest, "/") or String.contains?(path, ["?", "#", "\\"]) do
+      true -> {:error, :path, "The path field must be one path from the root, with no query"}
+      false -> {:ok, :path, path}
+    end
+  end
+
+  def path(:path, path) when is_binary(path),
+    do: {:error, :path, "The path field must start with /"}
+
+  def path(:path, path), do: Required.call(:path, path)
+
+  @doc false
+  def params(:params, params) when is_map(params) or is_list(params) do
+    URI.encode_query(params)
+    {:ok, :params, params}
+  rescue
+    ArgumentError -> {:error, :params, "The params field must hold plain values only"}
+  end
+
+  def params(:params, params), do: {:ok, :params, params}
+
+  @doc false
+  def one_body(%{form: form, json: json}) when not is_nil(form) and not is_nil(json),
+    do: {:error, %{field: :json, action: :one_body, message: "Send form or json, not both"}}
+
+  def one_body(attrs), do: {:ok, attrs}
 
   defp answer({:ok, %Req.Response{} = response}, _spec), do: {:ok, response}
 

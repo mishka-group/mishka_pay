@@ -14,7 +14,8 @@ defmodule MishkaPay.ClientTest do
       provider: "acme",
       base_url: "https://api.acme.test",
       path: "/v1/things",
-      options: [plug: {Req.Test, __MODULE__}, retry_delay: 0]
+      retry_delay: 0,
+      options: [plug: {Req.Test, __MODULE__}]
     }
     |> Map.merge(attrs)
     |> Client.request()
@@ -138,6 +139,93 @@ defmodule MishkaPay.ClientTest do
                base_url: "https://x",
                path: "/x"
              })
+  end
+
+  test "a Retry-After header is waited for when it is whole seconds, and ignored when it is not" do
+    test = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test, :attempt)
+
+      case Process.get(:answered) do
+        nil ->
+          Process.put(:answered, true)
+
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "garbage")
+          |> Plug.Conn.send_resp(429, "")
+
+        true ->
+          Req.Test.json(conn, %{})
+      end
+    end)
+
+    assert {:ok, %Req.Response{status: 200}} = request(%{})
+    assert_received :attempt
+    assert_received :attempt
+  end
+
+  test "a long Retry-After is never waited longer than max_wait" do
+    started = System.monotonic_time(:millisecond)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      case Process.get(:answered) do
+        nil ->
+          Process.put(:answered, true)
+
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "86400")
+          |> Plug.Conn.send_resp(503, "")
+
+        true ->
+          Req.Test.json(conn, %{})
+      end
+    end)
+
+    assert {:ok, %Req.Response{status: 200}} = request(%{max_wait: 50})
+    assert System.monotonic_time(:millisecond) - started < 5_000
+  end
+
+  test "options cannot turn retries back on for a write without an idempotency key" do
+    answer([503, 200])
+
+    assert {:ok, %Req.Response{status: 503}} =
+             request(%{method: :post, options: [plug: {Req.Test, __MODULE__}, retry: :transient]})
+
+    assert_received {:attempt, "POST", _, _, _, _}
+    refute_received {:attempt, _, _, _, _, _}
+  end
+
+  test "a header named like the idempotency header in another case is replaced, not doubled" do
+    answer([200])
+
+    request(%{
+      method: :post,
+      headers: %{"Idempotency-Key" => "other"},
+      idempotency_header: "idempotency-key",
+      idempotency_key: "order-42"
+    })
+
+    assert_received {:attempt, "POST", _, _, _, %{"idempotency-key" => "order-42"}}
+  end
+
+  test "an address, path, query or body that could misroute the request is refused" do
+    base = %{provider: "acme", base_url: "https://api.acme.test", path: "/v1/x"}
+
+    for {field, attrs} <- [
+          base_url: %{base_url: "nothing"},
+          base_url: %{base_url: "ftp://api.acme.test"},
+          path: %{path: "https://evil.test/x"},
+          path: %{path: "//evil.test/x"},
+          path: %{path: "no-slash"},
+          path: %{path: "/v1/x?key=secret"},
+          params: %{params: [a: [1, 2]]},
+          idempotency_header: %{idempotency_header: ""},
+          json: %{form: [a: 1], json: %{a: 1}}
+        ] do
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: ^field}]}} =
+               Client.request(Map.merge(base, attrs))
+    end
   end
 
   test "inspect leaves out the auth" do
