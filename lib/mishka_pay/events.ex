@@ -4,8 +4,8 @@
 
 defmodule MishkaPay.Events do
   @moduledoc """
-  Every mishka_installer event Mishka Pay fires, in one place. Code and `use` macros call
-  these functions and never write an event name by hand.
+  Every mishka_installer event Mishka Pay fires, in one place. Code and `use` macros call these
+  functions and never write an event name by hand.
 
   | Event | Who listens | What it is for |
   |---|---|---|
@@ -15,6 +15,14 @@ defmodule MishkaPay.Events do
   | `mishka_pay:webhook:received` | the Ash inbox, or the host | a provider event whose signature was checked |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
 
-  Stage 1 adds the functions.
+  The first two are fired from stage 1; the others arrive with the stage that fires them.
   """
+
+  @doc "Every provider listens here and adds itself to the `providers` list the event carries."
+  @spec providers() :: String.t()
+  def providers, do: "mishka_pay:providers"
+
+  @doc "The host listens here and answers a provider's keys for one site."
+  @spec credentials() :: String.t()
+  def credentials, do: "mishka_pay:credentials"
 end

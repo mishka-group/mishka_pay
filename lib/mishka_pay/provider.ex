@@ -7,25 +7,225 @@ defmodule MishkaPay.Provider do
   Every payment provider, Stripe included, implements these callbacks. A provider is one module:
 
       defmodule MyApp.Pay.Acme do
-        use MishkaPay.Provider, id: "acme", label: "Acme Pay"
-        # the callbacks below
+        use MishkaPay.Provider,
+          id: "acme",
+          label: "Acme Pay",
+          capabilities: [:checkout, :refund, :webhook]
       end
 
-  `use` makes the module a mishka_installer plugin on `mishka_pay:providers`, so supervising it
-  installs the provider and stopping its plugin takes it out. A project adds its own payment method
-  the same way, without changing Mishka Pay.
+  Supervise the module in the application that ships it, like any other mishka_installer plugin.
+  `use` makes it a plugin on the `mishka_pay:providers` event (`MishkaPay.Events.providers/0`): it
+  adds itself to the `providers` list the event carries. Supervising it installs the provider, and
+  stopping its plugin in the installer takes it out. A project adds its own payment method the same
+  way, without changing Mishka Pay.
 
-  Callbacks (stage 1 writes them):
+  ## Options of `use`
 
-    * `id/0`, `label/0`: who the provider is.
-    * `capabilities/0`: what it can do (checkout, refund, subscriptions, webhooks or a return URL with
-      a verify call). A call the provider cannot do answers a `MishkaPay.Errors.Unsupported` error.
-    * `checkout/2`, `fetch_payment/2`, `refund/2`: the operations, each taking a guarded_struct and the
-      site's credentials.
-    * `verify_webhook/3`: checks a provider's signed message and turns it into a `MishkaPay.Event`.
+    * `:id` (required): a short lowercase name, such as `"stripe"`. Every call names the provider by it.
+    * `:label` (required): the name a person reads.
+    * `:capabilities`: what the provider can do, from `t:capability/0`. A call to something not
+      listed answers a `MishkaPay.Errors.Unsupported` error without reaching the provider.
+    * `:priority`: the plugin's priority on the event, 50 by default. When two installed providers
+      share an id, the one that comes first wins.
 
-  Which providers are installed: `all/0`, `offered/0` and `fetch/1` ask the `mishka_pay:providers`
-  event every time, so the installer's own registry is the only list. The same pattern as
-  `MishkaCmsCore.ProviderRegistry` and `MishkaCmsCore.Captcha.Provider`.
+  ## Which providers are installed
+
+  `all/0`, `offered/0` and `fetch/1` ask the event every time, so mishka_installer's own registry is
+  the only list and nothing is cached. A module counts only when it implements every required
+  callback. When a plugin of the event is registered but not loaded, the event cannot run and no
+  provider can be told installed: `fetch/1` then answers a `MishkaPay.Errors.UnknownProvider` error
+  with the reason `:cannot_run`.
+
+  The same pattern as `MishkaCmsCore.ProviderRegistry` and `MishkaCmsCore.Captcha.Provider`. The
+  payment operations join the callbacks in stage 2.
   """
+
+  require Logger
+
+  alias MishkaInstaller.Event.Hook
+  alias MishkaPay.{Errors, Events}
+
+  @capabilities [:checkout, :refund, :subscription, :webhook, :return_verify]
+
+  @typedoc """
+  What a provider can do:
+
+    * `:checkout`: sends the buyer to pay, or embeds a payment form.
+    * `:refund`: gives money back on a payment.
+    * `:subscription`: charges again on a schedule.
+    * `:webhook`: sends signed messages when something changes.
+    * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
+      checked with a call to the provider.
+  """
+  @type capability :: :checkout | :refund | :subscription | :webhook | :return_verify
+
+  @doc "The provider's id, such as `\"stripe\"`. Set by `use`."
+  @callback id() :: String.t()
+
+  @doc "The name a person reads. Set by `use`."
+  @callback label() :: String.t()
+
+  @doc "What the provider can do. Set by `use`."
+  @callback capabilities() :: [capability()]
+
+  @doc "Optional. `false` keeps an installed provider out of `offered/0`, for example while it has no keys anywhere."
+  @callback offered?() :: boolean()
+
+  @optional_callbacks offered?: 0
+
+  @options [:id, :label, :capabilities, :priority]
+
+  @doc false
+  defmacro __using__(opts) do
+    check_options!(opts)
+    id = Keyword.fetch!(opts, :id)
+    label = Keyword.fetch!(opts, :label)
+    capabilities = Keyword.get(opts, :capabilities, [])
+    priority = Keyword.get(opts, :priority, 50)
+
+    check_id!(id)
+    check_label!(label)
+    check_capabilities!(capabilities)
+    check_priority!(priority)
+
+    quote do
+      use MishkaInstaller.Event.Hook,
+        event: unquote(Events.providers()),
+        initial: %{priority: unquote(priority)}
+
+      @behaviour MishkaPay.Provider
+
+      @impl true
+      def call(%{providers: providers} = state) when is_list(providers),
+        do: {:reply, %{state | providers: providers ++ [__MODULE__]}}
+
+      def call(state), do: {:reply, state}
+
+      @impl MishkaPay.Provider
+      def id, do: unquote(id)
+
+      @impl MishkaPay.Provider
+      def label, do: unquote(label)
+
+      @impl MishkaPay.Provider
+      def capabilities, do: unquote(capabilities)
+    end
+  end
+
+  @doc "Every installed provider, the first of each id. None when the event cannot run."
+  @spec all() :: [module()]
+  def all do
+    case installed() do
+      {:ok, providers} -> providers
+      {:error, :cannot_run} -> []
+    end
+  end
+
+  @doc "The installed providers this installation offers: every one, unless its `offered?/0` says not."
+  @spec offered() :: [module()]
+  def offered, do: offered_of(all())
+
+  @doc "The offered provider whose id is `id`."
+  @spec fetch(String.t()) :: {:ok, module()} | {:error, Splode.Error.t()}
+  def fetch(id) when is_binary(id) do
+    case installed() do
+      {:ok, providers} -> providers |> offered_of() |> Enum.find(&(&1.id() == id)) |> found(id)
+      {:error, :cannot_run} -> unknown(id, :cannot_run)
+    end
+  end
+
+  defp found(nil, id), do: unknown(id, :not_installed)
+  defp found(provider, _id), do: {:ok, provider}
+
+  defp unknown(id, reason),
+    do: {:error, Errors.UnknownProvider.exception(provider: id, reason: reason)}
+
+  defp installed do
+    case Hook.call(Events.providers(), %{providers: []}, cannot_run: :cannot_run) do
+      %{providers: providers} when is_list(providers) ->
+        {:ok, providers |> Enum.filter(&provider?/1) |> Enum.uniq_by(& &1.id())}
+
+      :cannot_run ->
+        {:error, :cannot_run}
+
+      _not_an_answer ->
+        {:ok, []}
+    end
+  end
+
+  # Every required callback, not one picked as a sample: a module missing one would be offered and
+  # then fail when that one is called.
+  defp provider?(module) when is_atom(module) do
+    Code.ensure_loaded?(module) and __MODULE__ in behaviours(module) and
+      Enum.all?(
+        __MODULE__.behaviour_info(:callbacks) -- __MODULE__.behaviour_info(:optional_callbacks),
+        fn {name, arity} -> function_exported?(module, name, arity) end
+      )
+  end
+
+  defp provider?(_other), do: false
+
+  defp offered_of(providers), do: Enum.filter(providers, &offered?/1)
+
+  # One provider whose `offered?/0` raises is left out, and the others are still offered.
+  defp offered?(provider) do
+    not function_exported?(provider, :offered?, 0) or provider.offered?() == true
+  rescue
+    exception ->
+      Logger.warning(
+        "mishka_pay: #{inspect(provider)}.offered?/0 raised and is not offered: " <>
+          Exception.message(exception)
+      )
+
+      false
+  end
+
+  defp behaviours(module),
+    do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
+
+  defp check_options!(opts) do
+    case Keyword.keys(opts) -- @options do
+      [] -> :ok
+      unknown -> raise ArgumentError, "unknown MishkaPay.Provider options: #{inspect(unknown)}"
+    end
+  end
+
+  defp check_id!(id) when is_binary(id) do
+    case Regex.match?(~r/\A[a-z][a-z0-9_]*\z/, id) do
+      true ->
+        :ok
+
+      false ->
+        raise ArgumentError,
+              "a provider id is lowercase letters, digits and _, got: #{inspect(id)}"
+    end
+  end
+
+  defp check_id!(_id),
+    do: raise(ArgumentError, "a provider id is a literal string, such as \"acme\"")
+
+  defp check_label!(label) when is_binary(label) and label != "", do: :ok
+  defp check_label!(_label), do: raise(ArgumentError, "a provider label is a literal string")
+
+  defp check_capabilities!(capabilities) when is_list(capabilities) do
+    case {Enum.reject(capabilities, &(&1 in @capabilities)),
+          capabilities -- Enum.uniq(capabilities)} do
+      {[], []} ->
+        :ok
+
+      {[], twice} ->
+        raise ArgumentError, "provider capabilities listed twice: #{inspect(twice)}"
+
+      {unknown, _twice} ->
+        raise ArgumentError, "unknown provider capabilities: #{inspect(unknown)}"
+    end
+  end
+
+  defp check_capabilities!(_other),
+    do: raise(ArgumentError, "provider capabilities is a literal list of atoms")
+
+  defp check_priority!(priority) when is_integer(priority) and priority >= 0, do: :ok
+
+  defp check_priority!(_other),
+    do: raise(ArgumentError, "a provider priority is a whole number, 0 or more")
 end
