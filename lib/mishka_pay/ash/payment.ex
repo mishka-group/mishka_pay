@@ -45,6 +45,18 @@ if Code.ensure_loaded?(Ash) do
     the row, and the host's Ash notifiers (such as `Ash.Notifier.PubSub`) see the action as usual, so
     an open screen can show the change live.
 
+    ## Checkout and refund
+
+    `:start_checkout` is a generic action that opens a checkout (`MishkaPay.checkout/1`) from its
+    `:checkout` argument and answers the `MishkaPay.Checkout` with the page to send the buyer to.
+    The payment row comes later, from the webhook of the payment the buyer makes.
+
+    `:refund` refunds a stored payment through its provider (`MishkaPay.refund/1`), in full or by
+    `:amount`, with an optional `:reason` and `:reference`, then syncs the row from the provider and
+    keeps the `MishkaPay.Refund` in the record's `:refund` metadata.
+
+    Errors come back as Ash errors (`MishkaPay.Ash.to_ash_error/1`).
+
     A host that keeps tenants apart can add `multitenancy` on the `:tenant` attribute.
     """
 
@@ -111,6 +123,23 @@ if Code.ensure_loaded?(Ash) do
         ]
 
         change MishkaPay.Ash.Payment.Sync
+      end
+
+      action :start_checkout, :struct do
+        constraints instance_of: MishkaPay.Checkout
+        argument :checkout, :map, allow_nil?: false
+        run MishkaPay.Ash.Payment.StartCheckout
+      end
+
+      update :refund do
+        require_atomic? false
+        argument :amount, :term
+
+        argument :reason, :atom,
+          constraints: [one_of: [:requested_by_customer, :duplicate, :fraudulent]]
+
+        argument :reference, :string
+        change MishkaPay.Ash.Payment.Refund
       end
     end
   end

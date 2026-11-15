@@ -2,22 +2,45 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Ash do
-  @moduledoc """
-  The Ash layer, for projects that use Ash. Without Ash none of it compiles and the rest of Mishka
-  Pay works on plain structs.
+if Code.ensure_loaded?(Ash) do
+  defmodule MishkaPay.Ash do
+    @moduledoc """
+    The Ash layer, for projects that use Ash: resource fragments a host adds to resources of its
+    own domain and data layer, and the listeners that keep them current. Without Ash none of it
+    compiles, and the rest of Mishka Pay works on plain structs.
 
-  `MishkaPay.Ash` is a Spark extension (`pay do ... end`). It turns a resource of the host's own
-  domain into a customer, price, payment or subscription, with actions such as `start_checkout`,
-  `refund` and `sync_from_provider`, built on the core calls:
+      * `MishkaPay.Ash.Inbox` stores each checked webhook event once and works it with AshOban;
+        `MishkaPay.Ash.Inbox.Listener` fills it from `MishkaPay.Webhook`.
+      * `MishkaPay.Ash.Payment` keeps each provider payment, synced from the provider, with
+        `:start_checkout` and `:refund` actions; `MishkaPay.Ash.Payment.Listener` syncs the
+        payment each inbox event concerns.
 
-      use Ash.Resource, extensions: [MishkaPay.Ash]
+    A host owns the tables, the domain, the policies and the notifiers: a fragment brings only the
+    attributes, identities, calculations and actions.
 
-  The webhook inbox is its own extension, `MishkaPay.Ash.Inbox`.
+    ## Errors
 
-  `MishkaPay.Errors` errors become Ash errors by class here: `:invalid` an `Ash.Error.Invalid`,
-  everything else an `Ash.Error.Unknown`.
+    `to_ash_error/1` turns a `MishkaPay.Errors` error into Ash's own classes, so a form shows it on
+    its field: an `:invalid` error becomes `Ash.Error.Changes.InvalidArgument`s at their fields,
+    anything else an `Ash.Error.Unknown.UnknownError`. The actions here return them.
+    """
 
-  Stage 4 adds it.
-  """
+    alias MishkaPay.Errors
+
+    @doc "A `MishkaPay.Errors` error (or any Splode error) as Ash errors, one per inner error."
+    @spec to_ash_error(Exception.t()) :: [Exception.t()]
+    def to_ash_error(error) do
+      case Errors.to_class(error) do
+        %Errors.Invalid{errors: errors} -> Enum.map(errors, &invalid/1)
+        other -> [Ash.Error.Unknown.UnknownError.exception(error: Exception.message(other))]
+      end
+    end
+
+    defp invalid(error),
+      do:
+        Ash.Error.Changes.InvalidArgument.exception(
+          field: Map.get(error, :field),
+          message: Exception.message(error)
+        )
+  end
 end

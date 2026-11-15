@@ -34,11 +34,12 @@ if Code.ensure_loaded?(Ash) do
           |> Ash.Changeset.put_context(:mishka_pay_payment, payment)
 
         {:error, error} ->
-          Ash.Changeset.add_error(changeset, Exception.message(error))
+          Ash.Changeset.add_error(changeset, MishkaPay.Ash.to_ash_error(error))
       end
     end
 
-    defp attributes(payment, tenant) do
+    @doc false
+    def attributes(payment, tenant) do
       %{
         provider: payment.provider,
         provider_id: payment.id,
@@ -56,7 +57,8 @@ if Code.ensure_loaded?(Ash) do
     end
 
     # The answer of the listeners does not change the sync: it already happened.
-    defp announce(changeset, {:ok, record} = result) do
+    @doc false
+    def announce(changeset, {:ok, record} = result) do
       payment = changeset.context[:mishka_pay_payment]
       timeout = Application.get_env(:mishka_pay, :payment_changed_timeout, 5_000)
 
@@ -66,6 +68,6 @@ if Code.ensure_loaded?(Ash) do
       result
     end
 
-    defp announce(_changeset, error), do: error
+    def announce(_changeset, error), do: error
   end
 end

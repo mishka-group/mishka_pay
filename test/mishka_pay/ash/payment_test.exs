@@ -103,4 +103,59 @@ defmodule MishkaPay.Ash.PaymentTest do
 
     assert [%{provider_id: "pi_123", status: :failed}] = Ash.read!(@payment, authorize?: false)
   end
+
+  describe "actions" do
+    test ":start_checkout answers the provider's page, and a bad checkout an Ash error on its field" do
+      checkout = %{
+        provider: "stripe",
+        items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+        success_url: "https://shop.test/thanks",
+        cancel_url: "https://shop.test/cart"
+      }
+
+      assert {:ok, %MishkaPay.Checkout{url: "https://checkout.stripe.com/" <> _}} =
+               @payment
+               |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout})
+               |> Ash.run_action(authorize?: false)
+
+      assert {:error,
+              %Ash.Error.Invalid{
+                errors: [%Ash.Error.Changes.InvalidArgument{field: :success_url}]
+              }} =
+               @payment
+               |> Ash.ActionInput.for_action(:start_checkout, %{
+                 checkout: %{checkout | success_url: "http://x.test"}
+               })
+               |> Ash.run_action(authorize?: false)
+    end
+
+    test ":refund refunds through Stripe, syncs the row and keeps the refund" do
+      {:ok, payment} = sync()
+
+      assert {:ok, refunded} =
+               payment
+               |> Ash.Changeset.for_update(:refund, %{
+                 amount: %{amount: "5", currency: "USD"},
+                 reason: :requested_by_customer
+               })
+               |> Ash.update(authorize?: false)
+
+      assert %MishkaPay.Refund{status: :succeeded, payment_id: "pi_123"} =
+               refunded.__metadata__.refund
+
+      assert DateTime.compare(refunded.synced_at, payment.synced_at) in [:gt, :eq]
+    end
+
+    test ":refund in another currency or over what is left is an Ash error on the amount" do
+      {:ok, payment} = sync()
+
+      for amount <- [%{amount: "5", currency: "EUR"}, %{amount: "11", currency: "USD"}] do
+        assert {:error,
+                %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidArgument{field: :amount}]}} =
+                 payment
+                 |> Ash.Changeset.for_update(:refund, %{amount: amount})
+                 |> Ash.update(authorize?: false)
+      end
+    end
+  end
 end
