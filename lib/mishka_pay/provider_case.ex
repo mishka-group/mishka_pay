@@ -86,7 +86,7 @@ defmodule MishkaPay.ProviderCase do
 
   @doc false
   def assert_installed(provider) do
-    assert function_exported?(provider, :child_spec, 1),
+    assert Code.ensure_loaded?(provider) and function_exported?(provider, :child_spec, 1),
            "#{inspect(provider)} is not a plugin: `use MishkaPay.Provider` makes it one"
 
     MishkaPay.Test.start_plugin!(provider)
