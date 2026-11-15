@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Test.SiteKeys do
+defmodule MishkaPay.Support.SiteKeys do
   @moduledoc "A host's keys plugin with one key set per site, as a multi-site project writes it."
 
   use MishkaPay.Credentials, priority: 10

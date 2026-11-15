@@ -11,3 +11,6 @@ config :mishka_installer, MishkaInstaller.MnesiaRepo,
 
 # Keep the run quiet: the installer logs every registry step at debug and info.
 config :logger, level: :warning
+
+# Every provider call of a test is answered by `MishkaPay.Test.stub_http/1`.
+config :mishka_pay, req_options: [plug: {Req.Test, MishkaPay.Client}]

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Test.Acme do
+defmodule MishkaPay.Support.Acme do
   @moduledoc "A provider written by a project, as the docs of `MishkaPay.Provider` show it."
 
   use MishkaPay.Provider,

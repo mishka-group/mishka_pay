@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Test.Broken do
+defmodule MishkaPay.Support.Broken do
   @moduledoc "A provider whose `offered?/0` raises."
 
   use MishkaPay.Provider, id: "broken", label: "Broken Pay"

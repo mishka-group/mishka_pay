@@ -8,10 +8,10 @@ defmodule MishkaPay.ProviderTest do
 
   alias MishkaInstaller.Event.Event
   alias MishkaPay.{Errors, Provider}
-  alias MishkaPay.Test.{Acme, AcmeTwin, Hidden, Installer}
+  alias MishkaPay.Support.{Acme, AcmeTwin, Hidden}
 
   test "an installed provider is found by its id, with what `use` declared" do
-    Installer.start!(Acme)
+    MishkaPay.Test.start_plugin!(Acme)
 
     assert {:ok, Acme} = Provider.fetch("acme")
     assert Acme in Provider.all()
@@ -27,15 +27,15 @@ defmodule MishkaPay.ProviderTest do
   end
 
   test "when two providers share an id, the one first on the event wins" do
-    Installer.start!(AcmeTwin)
-    Installer.start!(Acme)
+    MishkaPay.Test.start_plugin!(AcmeTwin)
+    MishkaPay.Test.start_plugin!(Acme)
 
     assert {:ok, Acme} = Provider.fetch("acme")
     refute AcmeTwin in Provider.all()
   end
 
   test "a provider whose offered?/0 says no is installed but not offered" do
-    Installer.start!(Hidden)
+    MishkaPay.Test.start_plugin!(Hidden)
 
     assert Hidden in Provider.all()
     refute Hidden in Provider.offered()
@@ -44,15 +44,15 @@ defmodule MishkaPay.ProviderTest do
 
   @tag :capture_log
   test "a provider whose offered?/0 raises is left out, and the others still work" do
-    Installer.start!(MishkaPay.Test.Broken)
-    Installer.start!(Acme)
+    MishkaPay.Test.start_plugin!(MishkaPay.Support.Broken)
+    MishkaPay.Test.start_plugin!(Acme)
 
-    refute MishkaPay.Test.Broken in Provider.offered()
+    refute MishkaPay.Support.Broken in Provider.offered()
     assert {:ok, Acme} = Provider.fetch("acme")
   end
 
   test "stopping a provider's plugin takes it out" do
-    Installer.start!(Acme)
+    MishkaPay.Test.start_plugin!(Acme)
     {:ok, _stopped} = Event.stop(:name, Acme, false)
 
     refute Acme in Provider.all()
@@ -76,7 +76,7 @@ defmodule MishkaPay.ProviderTest do
       assert_raise ArgumentError, message, fn ->
         Code.compile_quoted(
           quote do
-            defmodule MishkaPay.Test.Refused do
+            defmodule MishkaPay.Support.Refused do
               use MishkaPay.Provider, unquote(opts)
             end
           end

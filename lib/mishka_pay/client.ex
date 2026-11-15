@@ -41,7 +41,8 @@ defmodule MishkaPay.Client do
   slash. So a path can never send the request, and its auth, to another host or place.
   `form` and `json` are one or the other. Header names are compared without case.
 
-  `:options` takes any other Req option, such as `plug: {Req.Test, MyTest}` in a test. It cannot
+  `:options` takes any other Req option, such as `plug: {Req.Test, MyTest}` in a test, on top of
+  `config :mishka_pay, req_options: [...]` (see `MishkaPay.Test.stub_http/1`). It cannot
   change what this module decides: the method, address, headers, auth, body, retries and timeout.
   """
 
@@ -150,7 +151,9 @@ defmodule MishkaPay.Client do
       |> put_present(:form, spec.form)
       |> put_present(:json, spec.json)
 
-    spec.options
+    :mishka_pay
+    |> Application.get_env(:req_options, [])
+    |> Keyword.merge(spec.options)
     |> Keyword.drop([:auth, :params, :form, :json, :body, :headers, :retry_delay])
     |> Req.new()
     |> Req.merge(ours)

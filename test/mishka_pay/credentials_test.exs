@@ -8,7 +8,7 @@ defmodule MishkaPay.CredentialsTest do
 
   alias GuardedStruct.Errors.Validation
   alias MishkaPay.{Credentials, Errors}
-  alias MishkaPay.Test.{FallbackKeys, Installer, SiteKeys}
+  alias MishkaPay.Support.{FallbackKeys, SiteKeys}
 
   test "with no plugin answering, the keys are missing" do
     assert {:error, %Errors.MissingCredentials{provider: "acme", tenant: "site-a"} = error} =
@@ -18,7 +18,7 @@ defmodule MishkaPay.CredentialsTest do
   end
 
   test "a host plugin answers one tenant's keys, checked as the struct" do
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
 
     assert {:ok, %Credentials{} = keys} = Credentials.fetch("acme", "site-a")
     assert keys.provider == "acme"
@@ -32,7 +32,7 @@ defmodule MishkaPay.CredentialsTest do
   end
 
   test "inspect never shows a key" do
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
     {:ok, keys} = Credentials.fetch("acme", "site-a")
 
     refute inspect(keys) =~ "sk_test"
@@ -41,15 +41,15 @@ defmodule MishkaPay.CredentialsTest do
   end
 
   test "the first plugin that answers wins" do
-    Installer.start!(FallbackKeys)
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(FallbackKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
 
     assert {:ok, %{secret_key: "sk_test_site_a"}} = Credentials.fetch("acme", "site-a")
     assert {:ok, %{secret_key: "sk_test_fallback"}} = Credentials.fetch("acme", "site-z")
   end
 
   test "an answer that is not valid keys is refused on its field" do
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
 
     assert {:error, %Errors.Invalid{errors: [%Validation{field: :mode}]}} =
              Credentials.fetch("acme", "site-unknown-mode")
@@ -59,14 +59,14 @@ defmodule MishkaPay.CredentialsTest do
   end
 
   test "an answer that is not a map is refused, never a crash" do
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
 
     assert {:error, %Errors.Invalid{errors: [%Validation{field: :credentials}]}} =
              Credentials.fetch("acme", "site-not-a-map")
   end
 
   test "an answer read from JSON works, and cannot change the provider it is for" do
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
 
     assert {:ok, keys} = Credentials.fetch("acme", "site-from-json")
     assert keys.provider == "acme"
@@ -77,7 +77,7 @@ defmodule MishkaPay.CredentialsTest do
 
   @tag :capture_log
   test "a plugin that raises leaves the keys missing, never half read" do
-    Installer.start!(SiteKeys)
+    MishkaPay.Test.start_plugin!(SiteKeys)
 
     assert {:error, %Errors.MissingCredentials{reason: :raised}} =
              Credentials.fetch("acme", "site-boom")

@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Test.FallbackKeys do
-  @moduledoc "A host's keys plugin after `MishkaPay.Test.SiteKeys` that answers every Acme tenant."
+defmodule MishkaPay.Support.FallbackKeys do
+  @moduledoc "A host's keys plugin after `MishkaPay.Support.SiteKeys` that answers every Acme tenant."
 
   use MishkaPay.Credentials, priority: 60
 

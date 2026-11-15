@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Test.AcmeTwin do
-  @moduledoc "A second provider with the id of `MishkaPay.Test.Acme`, later on the event."
+defmodule MishkaPay.Support.AcmeTwin do
+  @moduledoc "A second provider with the id of `MishkaPay.Support.Acme`, later on the event."
 
   use MishkaPay.Provider, id: "acme", label: "Acme Pay copy", priority: 60
 end

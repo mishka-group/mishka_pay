@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Test.Hidden do
+defmodule MishkaPay.Support.Hidden do
   @moduledoc "An installed provider whose `offered?/0` keeps it out of the offered ones."
 
   use MishkaPay.Provider, id: "hidden", label: "Hidden Pay"

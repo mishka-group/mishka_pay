@@ -25,7 +25,9 @@ end
 
 MishkaInstaller.unsubscribe("mnesia")
 
-# A run killed part-way leaves its test plugins registered on disk; take them out first.
-MishkaPay.Test.Installer.sweep!(["Elixir.MishkaPay.Test."])
+# A run killed part-way leaves its test plugins registered on disk; take them out first. Then the
+# test kit starts, as a project using Mishka Pay starts it.
+MishkaPay.Test.sweep!(["Elixir.MishkaPay.Support."])
+MishkaPay.Test.setup!()
 
 ExUnit.start()
