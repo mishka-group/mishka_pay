@@ -45,6 +45,15 @@ defmodule MishkaPay.PaymentTest do
     assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
              Errors.from_builder(Refund.builder(%{provider: "stripe", payment_id: nil}))
 
+    assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+             Errors.from_builder(
+               Refund.builder(%{
+                 provider: "stripe",
+                 payment_id: "pi_1",
+                 amount: Money.new(:USD, 0)
+               })
+             )
+
     assert {:error, %Errors.Invalid{errors: [%{field: :reason}]}} =
              Errors.from_builder(
                Refund.builder(%{provider: "stripe", payment_id: "pi_1", reason: :bored})

@@ -33,7 +33,7 @@ defmodule MishkaPay.Refund do
       enforce: true,
       derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
-    field :amount, Money.t(), validator: {MishkaPay.Money, :field}
+    field :amount, Money.t(), validator: {__MODULE__, :amount}
 
     field :reason, atom(),
       derives: "validate(enum=Atom[requested_by_customer::duplicate::fraudulent])"
@@ -48,4 +48,17 @@ defmodule MishkaPay.Refund do
 
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
+
+  # A refund of nothing is no refund; an amount left out is the whole payment.
+  @doc false
+  def amount(:amount, value), do: :amount |> MishkaPay.Money.field(value) |> positive()
+
+  defp positive({:ok, :amount, %Money{amount: amount}} = ok) do
+    case Decimal.gt?(amount, 0) do
+      true -> ok
+      false -> {:error, :amount, "The amount field must be more than zero"}
+    end
+  end
+
+  defp positive(other), do: other
 end

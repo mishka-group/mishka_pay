@@ -58,6 +58,19 @@ defmodule MishkaPay.CheckoutTest do
     assert {:ok, _checkout} = build(%{"success_url" => "http://localhost:4000/ok"})
   end
 
+  test "items that are not a list, and metadata that is not strings, are refused" do
+    assert [:items] = fields(build(%{"items" => nil}))
+    assert [:items] = fields(build(%{"items" => %{"name" => "x"}}))
+
+    for metadata <- [%{"a" => 1}, %{"a" => %{"b" => "c"}}, %{a: "b"}, "x"] do
+      assert [:metadata] = fields(build(%{"metadata" => metadata}))
+    end
+  end
+
+  test "a customer is an id or an email, not both" do
+    assert [:customer] = fields(build(%{"customer" => %{"id" => "cus_1", "email" => "a@b.co"}}))
+  end
+
   test "unknown keys and a missing provider are refused" do
     assert [:discount] = fields(build(%{"discount" => "50%"}))
 

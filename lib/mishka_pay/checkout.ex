@@ -17,7 +17,8 @@ defmodule MishkaPay.Checkout do
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
       it comes back on the payment, and it makes the request's idempotency key, so the same
       reference never opens two checkouts.
-    * `:metadata`: up to the provider's limits of extra string pairs.
+    * `:metadata`: extra pairs kept with the checkout, string keys to string values; each provider
+      has its own limits on how many and how long.
 
   What the provider fills in:
 
@@ -35,7 +36,11 @@ defmodule MishkaPay.Checkout do
       derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
     field :tenant, term()
-    field :items, list(), enforce: true, structs: MishkaPay.Price
+
+    field :items, list(),
+      enforce: true,
+      structs: MishkaPay.Price,
+      derives: "validate(not_nil_value, list)"
 
     field :success_url, String.t(),
       enforce: true,
@@ -52,7 +57,7 @@ defmodule MishkaPay.Checkout do
     field :reference, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
 
-    dynamic_field :metadata
+    dynamic_field :metadata, validator: {__MODULE__, :metadata}
 
     field :id, String.t(), derives: "validate(string)"
     field :url, String.t(), derives: "validate(string)"
@@ -73,6 +78,19 @@ defmodule MishkaPay.Checkout do
   end
 
   def return_url(field, url), do: {:ok, field, url}
+
+  @doc false
+  def metadata(:metadata, nil), do: {:ok, :metadata, nil}
+
+  def metadata(:metadata, %{} = metadata) do
+    case Enum.all?(metadata, fn {key, value} -> is_binary(key) and is_binary(value) end) do
+      true -> {:ok, :metadata, metadata}
+      false -> {:error, :metadata, "The metadata field must map string keys to string values"}
+    end
+  end
+
+  def metadata(:metadata, _other),
+    do: {:error, :metadata, "The metadata field must map string keys to string values"}
 
   # Runs before the items are built, so an item's amount may still be a map from JSON. An items
   # list that failed to build is already reported on its own.
