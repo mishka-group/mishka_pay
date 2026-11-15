@@ -23,8 +23,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   }
 
   @doc "Params of `POST /v1/checkout/sessions` for a checkout in `payment` mode."
-  @spec checkout_params(Checkout.t()) :: map()
-  def checkout_params(%Checkout{} = checkout) do
+  @spec checkout_params(Checkout.t(), map()) :: map()
+  def checkout_params(%Checkout{} = checkout, settings \\ %{}) do
     reference = %{@reference => checkout.reference}
 
     %{
@@ -37,8 +37,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "payment_intent_data" => %{"metadata" => reference}
     }
     |> Map.merge(customer(checkout.customer))
-    |> Map.merge(managed_payments(checkout.merchant_of_record))
+    |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
   end
+
+  # The checkout's own choice, else the tenant's setting, else nil: the Stripe account's default.
+  defp merchant_of_record(%Checkout{merchant_of_record: choice}, _settings)
+       when is_boolean(choice),
+       do: choice
+
+  defp merchant_of_record(_checkout, settings), do: Map.get(settings, :merchant_of_record)
 
   # Stripe Managed Payments is Stripe selling as the merchant of record; nil leaves the account's
   # own default.

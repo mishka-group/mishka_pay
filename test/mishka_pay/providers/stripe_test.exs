@@ -65,6 +65,20 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert params["managed_payments"] == %{"enabled" => false}
 
+      defaults = %{params_checkout() | merchant_of_record: nil}
+      assert Stripe.Mapper.checkout_params(defaults)["managed_payments"] == nil
+
+      assert Stripe.Mapper.checkout_params(defaults, %{merchant_of_record: false})[
+               "managed_payments"
+             ] ==
+               %{"enabled" => false}
+
+      assert Stripe.Mapper.checkout_params(%{defaults | merchant_of_record: true}, %{
+               merchant_of_record: false
+             })[
+               "managed_payments"
+             ] == %{"enabled" => true}
+
       assert get_in(params, ["line_items", Access.at(0), "price_data", "product_data", "tax_code"]) ==
                "txcd_10302000"
     end
@@ -214,5 +228,14 @@ defmodule MishkaPay.Providers.StripeTest do
     assert Stripe.form(%{"a" => %{"b" => [%{"c" => 1}, %{"c" => 2}]}, "skip" => nil, "d" => "x"})
            |> Enum.sort() ==
              [{"a[b][0][c]", "1"}, {"a[b][1][c]", "2"}, {"d", "x"}]
+  end
+
+  defp params_checkout do
+    %MishkaPay.Checkout{
+      provider: "stripe",
+      success_url: "https://shop.test/thanks",
+      cancel_url: "https://shop.test/cart",
+      items: [%MishkaPay.Price{name: "Ebook", amount: Money.new(:USD, "1"), quantity: 1}]
+    }
   end
 end

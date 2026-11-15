@@ -26,6 +26,12 @@ defmodule MishkaPay.Credentials do
   tenant; a multi-site one reads the tenant's own. When several plugins listen, the first one that
   answers wins, in the order of their `:priority` (50 by default).
 
+  Besides keys, the answer carries the provider's settings for the tenant:
+
+    * `:merchant_of_record`: `true` or `false` turns selling as the merchant of record on or off
+      for every checkout of this tenant (Stripe Managed Payments); left out, the provider
+      account's own default applies. A checkout's own `:merchant_of_record` still wins.
+
   The answer may use atom or string keys, and the mode may be `"test"` or `"live"`. Its own
   `:provider` and `:tenant` are ignored: they always come from the call.
 
@@ -56,6 +62,7 @@ defmodule MishkaPay.Credentials do
       derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
     field :publishable_key, String.t(), derives: "sanitize(trim) validate(string)"
+    field :merchant_of_record, boolean(), derives: "validate(boolean)"
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
     dynamic_field :extra
   end
