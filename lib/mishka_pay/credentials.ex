@@ -38,34 +38,31 @@ defmodule MishkaPay.Credentials do
   @derive {Inspect, only: [:provider, :tenant, :mode]}
 
   guardedstruct authorized_fields: true do
-    field(:provider, String.t(),
+    field :provider, String.t(),
       enforce: true,
       derives: "sanitize(trim) validate(string, not_empty)",
       validator: {Required, :call}
-    )
 
-    field(:tenant, term())
+    field :tenant, term()
 
-    field(:mode, :test | :live,
+    field :mode, :test | :live,
       default: :test,
       derives: "validate(enum=Atom[test::live])",
       validator: {Required, :call}
-    )
 
-    field(:secret_key, String.t(),
+    field :secret_key, String.t(),
       enforce: true,
       derives: "sanitize(trim) validate(string, not_empty)",
       validator: {Required, :call}
-    )
 
-    field(:publishable_key, String.t(), derives: "sanitize(trim) validate(string)")
-    field(:webhook_secret, String.t(), derives: "sanitize(trim) validate(string)")
-    dynamic_field(:extra)
+    field :publishable_key, String.t(), derives: "sanitize(trim) validate(string)"
+    field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
+    dynamic_field :extra
   end
 
   @doc """
-  The keys of `provider` for `tenant`, as a host plugin answers them: a map of this struct's fields
-  (without `:provider` and `:tenant`, which come from the call), or `nil` when it has none.
+  Answers with a map of this struct's fields for `provider` and `tenant` (without `:provider` and
+  `:tenant`, which come from the call), or `nil` when this plugin has no keys for them.
   """
   @callback credentials(provider :: String.t(), tenant :: term()) :: map() | nil
 

@@ -23,17 +23,15 @@ defmodule MishkaPay.Money do
   alias MishkaPay.Helpers.Required
 
   guardedstruct authorized_fields: true do
-    field(:amount, non_neg_integer(),
+    field :amount, non_neg_integer(),
       enforce: true,
       derives: "validate(integer, min_len=0)",
       validator: {Required, :call}
-    )
 
-    field(:currency, String.t(),
+    field :currency, String.t(),
       enforce: true,
       derives: "sanitize(trim, upcase) validate(string)",
       validator: {__MODULE__, :currency}
-    )
   end
 
   @doc "Money of `amount` smallest units in `currency`, or an `:invalid` class error."
