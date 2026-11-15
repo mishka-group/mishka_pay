@@ -22,7 +22,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   setup do
     key = System.fetch_env!("STRIPE_SECRET_KEY")
-    "sk_test_" <> _ = key
+
+    # A sandbox or test key only, full (sk_test_) or restricted (rk_test_): never a live key.
+    assert String.starts_with?(key, ["sk_test_", "rk_test_"]),
+           "STRIPE_SECRET_KEY must be a Stripe test key"
+
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.put_keys("stripe", %{secret_key: key})
     MishkaPay.Test.stub_http(&StripeMock.forward(&1, "https://api.stripe.com"))
