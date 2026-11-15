@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Ash.Resource do
+defmodule MishkaPay.Errors.Provider do
   @moduledoc """
-  The Spark extension for payment resources (`pay do ... end`). See `MishkaPay.Ash`.
-
-  Stage 4 adds it.
+  The class of errors a provider gives: it declined, or it cannot do what was asked.
   """
+
+  use Splode.ErrorClass, class: :provider
 end

@@ -75,6 +75,8 @@ defmodule MishkaPay.MixProject do
       # The webhook endpoint (`MishkaPay.Webhook`) is a Plug.
       {:plug, "~> 1.20"},
       {:telemetry, "~> 1.4"},
+      # Every error (`MishkaPay.Errors`) is a Splode error, like Ash's and guarded_struct's.
+      {:splode, "~> 0.3"},
       # The Ash layer (`MishkaPay.Ash.*`) compiles only when the host has Ash. Without it the SDK
       # works on plain structs.
       {:ash, "~> 3.37", optional: true},

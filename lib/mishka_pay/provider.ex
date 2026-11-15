@@ -19,9 +19,13 @@ defmodule MishkaPay.Provider do
 
     * `id/0`, `label/0`: who the provider is.
     * `capabilities/0`: what it can do (checkout, refund, subscriptions, webhooks or a return URL with
-      a verify call). A call the provider cannot do answers `{:error, :unsupported}`.
+      a verify call). A call the provider cannot do answers a `MishkaPay.Errors.Unsupported` error.
     * `checkout/2`, `fetch_payment/2`, `refund/2`: the operations, each taking a guarded_struct and the
       site's credentials.
     * `verify_webhook/3`: checks a provider's signed message and turns it into a `MishkaPay.Event`.
+
+  Which providers are installed: `all/0`, `offered/0` and `fetch/1` ask the `mishka_pay:providers`
+  event every time, so the installer's own registry is the only list. The same pattern as
+  `MishkaCmsCore.ProviderRegistry` and `MishkaCmsCore.Captcha.Provider`.
   """
 end

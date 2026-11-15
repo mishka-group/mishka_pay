@@ -4,12 +4,18 @@
 
 defmodule MishkaPay.Providers.Stripe do
   @moduledoc """
-  Stripe as a provider: `use MishkaPay.Provider, id: "stripe"`. One time payments
-  with Stripe Checkout, payments, refunds and the webhook signature.
+  Stripe as a provider: `use MishkaPay.Provider, id: "stripe"`. One time payments with Stripe
+  Checkout, payments, refunds and the webhook signature.
 
-  It talks to Stripe through its own small client (`MishkaPay.Providers.Stripe.Client`), not a third
-  party Stripe library, with one pinned Stripe API version.
+  Its HTTP calls go through `MishkaPay.Client` with Stripe's base URL, the site's secret key, one
+  pinned `Stripe-Version` header and Stripe's form encoding. No third party Stripe library.
 
-  Stage 2 writes it; tests run against Stripe's test mode.
+  `verify_webhook/3` checks the `Stripe-Signature` header: the HMAC of the raw body with the site's
+  webhook secret, compared in constant time, inside the allowed time window.
+
+  Stripe's field names live only in `MishkaPay.Providers.Stripe.Mapper`.
+
+  Stage 2 writes the operations and stage 3 the signature check; tests run against Stripe's test
+  mode.
   """
 end
