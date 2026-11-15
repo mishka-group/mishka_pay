@@ -40,6 +40,8 @@ defmodule MishkaPay.Provider do
   payment operations join the callbacks in stage 2.
   """
 
+  require Logger
+
   alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Errors, Events}
 
@@ -71,15 +73,20 @@ defmodule MishkaPay.Provider do
 
   @optional_callbacks offered?: 0
 
+  @options [:id, :label, :capabilities, :priority]
+
   @doc false
   defmacro __using__(opts) do
+    check_options!(opts)
     id = Keyword.fetch!(opts, :id)
     label = Keyword.fetch!(opts, :label)
     capabilities = Keyword.get(opts, :capabilities, [])
     priority = Keyword.get(opts, :priority, 50)
 
     check_id!(id)
+    check_label!(label)
     check_capabilities!(capabilities)
+    check_priority!(priority)
 
     quote do
       use MishkaInstaller.Event.Hook,
@@ -140,6 +147,9 @@ defmodule MishkaPay.Provider do
 
       :cannot_run ->
         {:error, :cannot_run}
+
+      _not_an_answer ->
+        {:ok, []}
     end
   end
 
@@ -155,14 +165,33 @@ defmodule MishkaPay.Provider do
 
   defp provider?(_other), do: false
 
-  defp offered_of(providers),
-    do: Enum.filter(providers, &(not function_exported?(&1, :offered?, 0) or &1.offered?()))
+  defp offered_of(providers), do: Enum.filter(providers, &offered?/1)
+
+  # One provider whose `offered?/0` raises is left out, and the others are still offered.
+  defp offered?(provider) do
+    not function_exported?(provider, :offered?, 0) or provider.offered?() == true
+  rescue
+    exception ->
+      Logger.warning(
+        "mishka_pay: #{inspect(provider)}.offered?/0 raised and is not offered: " <>
+          Exception.message(exception)
+      )
+
+      false
+  end
 
   defp behaviours(module),
     do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
 
+  defp check_options!(opts) do
+    case Keyword.keys(opts) -- @options do
+      [] -> :ok
+      unknown -> raise ArgumentError, "unknown MishkaPay.Provider options: #{inspect(unknown)}"
+    end
+  end
+
   defp check_id!(id) when is_binary(id) do
-    case Regex.match?(~r/^[a-z][a-z0-9_]*$/, id) do
+    case Regex.match?(~r/\A[a-z][a-z0-9_]*\z/, id) do
       true ->
         :ok
 
@@ -172,15 +201,31 @@ defmodule MishkaPay.Provider do
     end
   end
 
-  defp check_id!(id), do: raise(ArgumentError, "a provider id is a string, got: #{inspect(id)}")
+  defp check_id!(_id),
+    do: raise(ArgumentError, "a provider id is a literal string, such as \"acme\"")
+
+  defp check_label!(label) when is_binary(label) and label != "", do: :ok
+  defp check_label!(_label), do: raise(ArgumentError, "a provider label is a literal string")
 
   defp check_capabilities!(capabilities) when is_list(capabilities) do
-    case capabilities -- @capabilities do
-      [] -> :ok
-      unknown -> raise ArgumentError, "unknown provider capabilities: #{inspect(unknown)}"
+    case {Enum.reject(capabilities, &(&1 in @capabilities)),
+          capabilities -- Enum.uniq(capabilities)} do
+      {[], []} ->
+        :ok
+
+      {[], twice} ->
+        raise ArgumentError, "provider capabilities listed twice: #{inspect(twice)}"
+
+      {unknown, _twice} ->
+        raise ArgumentError, "unknown provider capabilities: #{inspect(unknown)}"
     end
   end
 
-  defp check_capabilities!(other),
-    do: raise(ArgumentError, "capabilities is a list, got: #{inspect(other)}")
+  defp check_capabilities!(_other),
+    do: raise(ArgumentError, "provider capabilities is a literal list of atoms")
+
+  defp check_priority!(priority) when is_integer(priority) and priority >= 0, do: :ok
+
+  defp check_priority!(_other),
+    do: raise(ArgumentError, "a provider priority is a whole number, 0 or more")
 end

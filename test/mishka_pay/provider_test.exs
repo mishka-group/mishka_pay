@@ -42,6 +42,15 @@ defmodule MishkaPay.ProviderTest do
     assert {:error, %Errors.UnknownProvider{reason: :not_installed}} = Provider.fetch("hidden")
   end
 
+  @tag :capture_log
+  test "a provider whose offered?/0 raises is left out, and the others still work" do
+    Installer.start!(MishkaPay.Test.Broken)
+    Installer.start!(Acme)
+
+    refute MishkaPay.Test.Broken in Provider.offered()
+    assert {:ok, Acme} = Provider.fetch("acme")
+  end
+
   test "stopping a provider's plugin takes it out" do
     Installer.start!(Acme)
     {:ok, _stopped} = Event.stop(:name, Acme, false)
@@ -50,25 +59,29 @@ defmodule MishkaPay.ProviderTest do
     assert {:error, %Errors.UnknownProvider{}} = Provider.fetch("acme")
   end
 
-  test "use refuses an id or a capability it does not know, when the module compiles" do
-    assert_raise ArgumentError, ~r/lowercase/, fn ->
-      Code.compile_quoted(
-        quote do
-          defmodule MishkaPay.Test.BadId do
-            use MishkaPay.Provider, id: "Bad Id", label: "Bad"
+  test "use refuses what it cannot check, when the module compiles" do
+    for {opts, message} <- [
+          {[id: "Bad Id", label: "Bad"], ~r/lowercase/},
+          {[id: "abc\n", label: "Bad"], ~r/lowercase/},
+          {[id: :bad, label: "Bad"], ~r/literal string/},
+          {[id: "bad", label: 123], ~r/label/},
+          {[id: "bad", label: "Bad", capabilities: [:teleport]],
+           ~r/unknown provider capabilities: \[:teleport\]/},
+          {[id: "bad", label: "Bad", capabilities: [:refund, :refund]],
+           ~r/listed twice: \[:refund\]/},
+          {[id: "bad", label: "Bad", priority: -5], ~r/priority/},
+          {[id: "bad", label: "Bad", bogus: 1],
+           ~r/unknown MishkaPay.Provider options: \[:bogus\]/}
+        ] do
+      assert_raise ArgumentError, message, fn ->
+        Code.compile_quoted(
+          quote do
+            defmodule MishkaPay.Test.Refused do
+              use MishkaPay.Provider, unquote(opts)
+            end
           end
-        end
-      )
-    end
-
-    assert_raise ArgumentError, ~r/unknown provider capabilities: \[:teleport\]/, fn ->
-      Code.compile_quoted(
-        quote do
-          defmodule MishkaPay.Test.BadCapability do
-            use MishkaPay.Provider, id: "bad", label: "Bad", capabilities: [:teleport]
-          end
-        end
-      )
+        )
+      end
     end
   end
 end

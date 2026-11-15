@@ -22,9 +22,14 @@ defmodule MishkaPay.Test.Installer do
   @spec start!(module()) :: :ok
   def start!(plugin) do
     MishkaInstaller.subscribe("event")
-    start_supervised!(plugin)
-    wait(plugin)
-    MishkaInstaller.unsubscribe("event")
+
+    try do
+      start_supervised!(plugin)
+      wait(plugin)
+    after
+      MishkaInstaller.unsubscribe("event")
+    end
+
     drain()
 
     on_exit(fn -> Event.unregister(:name, plugin, false) end)
