@@ -13,12 +13,14 @@ defmodule MishkaPay.Errors.Refused do
       `:exited`, `:timeout`, `:invalid_answer`.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:operation, :reason], class: :invalid
 
   @impl true
   def message(%{operation: operation, reason: reason}) when is_binary(reason),
-    do: "the #{operation} was refused: #{reason}"
+    do: Messages.text(:refused, operation: operation, reason: reason)
 
   def message(%{operation: operation, reason: reason}),
-    do: "the #{operation} was refused (#{inspect(reason)})"
+    do: Messages.text(:refused, operation: operation, reason: inspect(reason))
 end

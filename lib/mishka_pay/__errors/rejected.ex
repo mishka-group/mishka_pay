@@ -13,12 +13,14 @@ defmodule MishkaPay.Errors.Rejected do
     * `:message`: its own words, for the log.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:provider, :status, :code, :message], class: :provider
 
   @impl true
   def message(%{provider: provider, status: status, code: nil}),
-    do: "#{provider} refused the request (HTTP #{status})"
+    do: Messages.text(:rejected, provider: provider, status: status)
 
   def message(%{provider: provider, status: status, code: code}),
-    do: "#{provider} refused the request: #{code} (HTTP #{status})"
+    do: Messages.text(:rejected_code, provider: provider, code: code, status: status)
 end

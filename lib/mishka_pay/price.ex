@@ -37,7 +37,7 @@ defmodule MishkaPay.Price do
      %{
        field: :amount,
        action: :price,
-       message: "A price needs a name and an amount, or a provider id"
+       message: MishkaPay.Messages.text(:price_needs)
      }}
   end
 end

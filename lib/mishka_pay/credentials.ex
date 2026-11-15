@@ -159,7 +159,7 @@ defmodule MishkaPay.Credentials do
          %{
            field: :credentials,
            action: :answer,
-           message: "A keys plugin must answer a map or nil"
+           message: MishkaPay.Messages.text(:keys_answer)
          }
        ]}
     )

@@ -30,6 +30,8 @@ defmodule MishkaPay.Checkout do
 
   use GuardedStruct
 
+  alias MishkaPay.Messages
+
   guardedstruct authorized_fields: true, main_validator: {__MODULE__, :one_currency} do
     field :provider, String.t(),
       enforce: true,
@@ -73,7 +75,7 @@ defmodule MishkaPay.Checkout do
     case URI.parse(String.trim(url)) do
       %URI{scheme: "https", host: host} when host not in [nil, ""] -> {:ok, field, url}
       %URI{scheme: "http", host: "localhost"} -> {:ok, field, url}
-      _other -> {:error, field, "The #{field} field must be an https address"}
+      _other -> {:error, field, Messages.text(:return_url, field: field)}
     end
   end
 
@@ -85,18 +87,18 @@ defmodule MishkaPay.Checkout do
   def metadata(:metadata, %{} = metadata) do
     case Enum.all?(metadata, fn {key, value} -> is_binary(key) and is_binary(value) end) do
       true -> {:ok, :metadata, metadata}
-      false -> {:error, :metadata, "The metadata field must map string keys to string values"}
+      false -> {:error, :metadata, Messages.text(:metadata_strings)}
     end
   end
 
   def metadata(:metadata, _other),
-    do: {:error, :metadata, "The metadata field must map string keys to string values"}
+    do: {:error, :metadata, Messages.text(:metadata_strings)}
 
   # Runs before the items are built, so an item's amount may still be a map from JSON. An items
   # list that failed to build is already reported on its own.
   @doc false
   def one_currency(%{items: []}),
-    do: {:error, %{field: :items, action: :items, message: "A checkout needs at least one item"}}
+    do: {:error, %{field: :items, action: :items, message: Messages.text(:items_empty)}}
 
   def one_currency(%{items: items} = attrs) when is_list(items) do
     case items |> MapSet.new(&currency/1) |> MapSet.delete(nil) |> MapSet.size() do
@@ -104,8 +106,7 @@ defmodule MishkaPay.Checkout do
         {:ok, attrs}
 
       _many ->
-        {:error,
-         %{field: :items, action: :currency, message: "All items must be in one currency"}}
+        {:error, %{field: :items, action: :currency, message: Messages.text(:items_currency)}}
     end
   end
 

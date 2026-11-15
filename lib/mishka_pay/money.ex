@@ -30,7 +30,7 @@ defmodule MishkaPay.Money do
   error is an `:invalid` class `MishkaPay.Errors` error naming `:amount` or `:currency`.
   """
 
-  alias MishkaPay.Errors
+  alias MishkaPay.{Errors, Messages}
 
   # More than any price, and well inside Decimal's default precision of 28 digits, which every
   # sum and rounding of the amount runs in.
@@ -63,7 +63,7 @@ defmodule MishkaPay.Money do
   def field(name, nil), do: {:ok, name, nil}
 
   def field(name, _other),
-    do: {:error, name, "The #{name} field must be money: an amount and a currency"}
+    do: {:error, name, Messages.text(:money_field, field: name)}
 
   defp checked(name, amount, currency) do
     case new(amount, currency) do
@@ -97,14 +97,14 @@ defmodule MishkaPay.Money do
   defp currency(code) when is_binary(code) or is_atom(code) do
     case code |> to_string() |> String.trim() |> String.upcase() |> Money.validate_currency() do
       {:ok, code} -> {:ok, code}
-      {:error, _unknown} -> invalid(:currency, "The currency field must be a known ISO 4217 code")
+      {:error, _unknown} -> invalid(:currency, Messages.text(:currency_unknown))
     end
   end
 
-  defp currency(_code), do: invalid(:currency, "The currency field must be a known ISO 4217 code")
+  defp currency(_code), do: invalid(:currency, Messages.text(:currency_unknown))
 
   defp amount(amount) when is_float(amount),
-    do: invalid(:amount, "The amount field must be exact: a Decimal, an integer or a string")
+    do: invalid(:amount, Messages.text(:amount_not_exact))
 
   defp amount(amount) when is_binary(amount), do: amount |> String.trim() |> decimal()
   defp amount(amount), do: decimal(amount)
@@ -114,14 +114,14 @@ defmodule MishkaPay.Money do
          false <- Decimal.inf?(decimal) or Decimal.nan?(decimal) do
       non_negative(decimal)
     else
-      _not_a_number -> invalid(:amount, "The amount field must be a number")
+      _not_a_number -> invalid(:amount, Messages.text(:amount_not_number))
     end
   end
 
   defp non_negative(decimal) do
     cond do
-      Decimal.negative?(decimal) -> invalid(:amount, "The amount field must be zero or more")
-      whole_digits(decimal) > @max_digits -> invalid(:amount, "The amount field is too large")
+      Decimal.negative?(decimal) -> invalid(:amount, Messages.text(:amount_negative))
+      whole_digits(decimal) > @max_digits -> invalid(:amount, Messages.text(:amount_too_large))
       true -> {:ok, positive_zero(decimal)}
     end
   end
@@ -139,7 +139,7 @@ defmodule MishkaPay.Money do
   defp money(code, amount) do
     case Money.new(code, amount) do
       %Money{} = money -> {:ok, money}
-      {:error, _reason} -> invalid(:amount, "The amount field must be a number")
+      {:error, _reason} -> invalid(:amount, Messages.text(:amount_not_number))
     end
   end
 
@@ -152,7 +152,7 @@ defmodule MishkaPay.Money do
         {:ok, rounded}
 
       false ->
-        invalid(:amount, "The amount field has more decimal places than #{money.currency} has")
+        invalid(:amount, Messages.text(:amount_places, currency: money.currency))
     end
   end
 

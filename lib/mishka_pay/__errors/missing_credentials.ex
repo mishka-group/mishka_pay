@@ -13,12 +13,19 @@ defmodule MishkaPay.Errors.MissingCredentials do
       came in time.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:provider, :tenant, :reason], class: :invalid
 
   @impl true
   def message(%{provider: provider, tenant: tenant, reason: :no_answer}),
-    do: "no #{provider} keys for tenant #{inspect(tenant)}"
+    do: Messages.text(:missing_keys, provider: provider, tenant: inspect(tenant))
 
   def message(%{provider: provider, tenant: tenant, reason: reason}),
-    do: "the #{provider} keys for tenant #{inspect(tenant)} cannot be read (#{reason})"
+    do:
+      Messages.text(:missing_keys_reason,
+        provider: provider,
+        tenant: inspect(tenant),
+        reason: reason
+      )
 end

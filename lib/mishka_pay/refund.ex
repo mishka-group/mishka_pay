@@ -56,7 +56,7 @@ defmodule MishkaPay.Refund do
   defp positive({:ok, :amount, %Money{amount: amount}} = ok) do
     case Decimal.gt?(amount, 0) do
       true -> ok
-      false -> {:error, :amount, "The amount field must be more than zero"}
+      false -> {:error, :amount, MishkaPay.Messages.text(:amount_not_positive)}
     end
   end
 

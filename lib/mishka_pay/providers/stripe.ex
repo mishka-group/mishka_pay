@@ -44,7 +44,7 @@ defmodule MishkaPay.Providers.Stripe do
     label: "Stripe",
     capabilities: [:checkout, :refund]
 
-  alias MishkaPay.{Checkout, Client, Errors, Refund}
+  alias MishkaPay.{Checkout, Client, Errors, Messages, Refund}
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -158,7 +158,7 @@ defmodule MishkaPay.Providers.Stripe do
              %{
                field: :payment_id,
                action: :stripe_id,
-               message: "The payment_id field is not a Stripe id"
+               message: Messages.text(:stripe_id)
              }
            ]}
         )
@@ -178,11 +178,11 @@ defmodule MishkaPay.Providers.Stripe do
         amount.currency != payment.amount.currency ->
           invalid(
             :amount,
-            "The amount field must be in the payment's currency, #{payment.amount.currency}"
+            Messages.text(:refund_currency, currency: payment.amount.currency)
           )
 
         Decimal.gt?(amount.amount, left) ->
-          invalid(:amount, "The amount field is more than is left to refund on the payment")
+          invalid(:amount, Messages.text(:refund_left))
 
         true ->
           :ok
@@ -205,7 +205,7 @@ defmodule MishkaPay.Providers.Stripe do
       false ->
         invalid(
           :metadata,
-          "The metadata field is over Stripe's limits: 49 keys of 40 characters, values of 500"
+          Messages.text(:stripe_metadata)
         )
     end
   end
@@ -240,7 +240,7 @@ defmodule MishkaPay.Providers.Stripe do
         :ok
 
       false ->
-        invalid(:amount, "Stripe takes three-decimal currencies only with a last decimal of 0")
+        invalid(:amount, Messages.text(:stripe_three_decimal))
     end
   end
 

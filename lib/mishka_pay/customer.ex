@@ -29,7 +29,7 @@ defmodule MishkaPay.Customer do
          %{
            field: :customer,
            action: :customer,
-           message: "A customer is an id or an email, one of them"
+           message: MishkaPay.Messages.text(:customer_one_of)
          }}
     end
   end

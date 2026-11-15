@@ -51,7 +51,7 @@ defmodule MishkaPay.Client do
 
   use GuardedStruct
 
-  alias MishkaPay.Errors
+  alias MishkaPay.{Errors, Messages}
 
   @derive {Inspect, only: [:provider, :method, :base_url, :path]}
 
@@ -231,8 +231,7 @@ defmodule MishkaPay.Client do
         {:ok, :base_url, url}
 
       _other ->
-        {:error, :base_url,
-         "The base_url field must be an http or https address, with no user, query or fragment"}
+        {:error, :base_url, Messages.text(:base_url)}
     end
   end
 
@@ -246,8 +245,7 @@ defmodule MishkaPay.Client do
   def path(:path, "/" <> _rest = path) do
     case Regex.match?(@unsafe_path, path) do
       true ->
-        {:error, :path,
-         "The path field must be one plain path from the root, with no query, dot segment or encoded slash"}
+        {:error, :path, Messages.text(:path_plain)}
 
       false ->
         {:ok, :path, path}
@@ -255,7 +253,7 @@ defmodule MishkaPay.Client do
   end
 
   def path(:path, path) when is_binary(path),
-    do: {:error, :path, "The path field must start with /"}
+    do: {:error, :path, Messages.text(:path_root)}
 
   def path(:path, path), do: {:ok, :path, path}
 
@@ -265,14 +263,14 @@ defmodule MishkaPay.Client do
     {:ok, :params, params}
   rescue
     _not_encodable in [ArgumentError, Protocol.UndefinedError, FunctionClauseError] ->
-      {:error, :params, "The params field must hold plain values only"}
+      {:error, :params, Messages.text(:params_plain)}
   end
 
   def params(:params, params), do: {:ok, :params, params}
 
   @doc false
   def one_body(%{form: form, json: json}) when not is_nil(form) and not is_nil(json),
-    do: {:error, %{field: :json, action: :one_body, message: "Send form or json, not both"}}
+    do: {:error, %{field: :json, action: :one_body, message: Messages.text(:one_body)}}
 
   def one_body(attrs), do: {:ok, attrs}
 

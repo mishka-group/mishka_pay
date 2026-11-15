@@ -10,12 +10,14 @@ defmodule MishkaPay.Errors.Unreachable do
     * `:reason`: the exception Req returned, such as a `Req.TransportError`.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:provider, :reason], class: :provider
 
   @impl true
   def message(%{provider: provider, reason: %{__exception__: true} = reason}),
-    do: "#{provider} did not answer: #{Exception.message(reason)}"
+    do: Messages.text(:unreachable, provider: provider, reason: Exception.message(reason))
 
   def message(%{provider: provider, reason: reason}),
-    do: "#{provider} did not answer: #{inspect(reason)}"
+    do: Messages.text(:unreachable, provider: provider, reason: inspect(reason))
 end

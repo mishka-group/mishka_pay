@@ -11,9 +11,11 @@ defmodule MishkaPay.Errors.Unsupported do
     * `:operation`: the operation asked for, such as `:refund`.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:provider, :operation], class: :provider
 
   @impl true
   def message(%{provider: provider, operation: operation}),
-    do: "#{provider} cannot do #{operation}"
+    do: Messages.text(:unsupported, provider: provider, operation: operation)
 end
