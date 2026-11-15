@@ -83,6 +83,16 @@ defmodule MishkaPayTest do
     end
   end
 
+  # No time passes: a limit of 0 gives the hanging gate no time, and the refusal says why.
+  test "a gate that never answers refuses at its time limit" do
+    MishkaPay.Test.start_plugin!(StockGate)
+    Application.put_env(:mishka_pay, :checkout_gate_timeout, 0)
+    on_exit(fn -> Application.delete_env(:mishka_pay, :checkout_gate_timeout) end)
+
+    assert {:error, %Errors.Refused{reason: :timeout}} =
+             MishkaPay.checkout(%{@checkout | reference: "gate-hang"})
+  end
+
   test "a payment is read again from the provider, and a refund is made there" do
     assert {:ok, %Payment{id: "acme_paid", status: :paid}} =
              MishkaPay.fetch_payment("acme", "acme_paid", "site-a")

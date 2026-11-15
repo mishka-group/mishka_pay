@@ -22,6 +22,12 @@ defmodule MishkaPay.Support.StockGate do
 
   def call(%{checkout: %{reference: "gate-exit"}}), do: exit(:gate_down)
 
+  def call(%{checkout: %{reference: "gate-hang"}}) do
+    receive do
+      :never_sent -> nil
+    end
+  end
+
   def call(%{checkout: checkout} = state),
     do: {:reply, %{state | checkout: %{checkout | metadata: %{"channel" => "web"}}}}
 end

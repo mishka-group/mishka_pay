@@ -39,8 +39,6 @@ defmodule MishkaPay.Credentials do
 
   @derive {Inspect, only: [:provider, :tenant, :mode]}
 
-  @timeout Application.compile_env(:mishka_pay, :credentials_timeout, 5_000)
-
   guardedstruct authorized_fields: true do
     field :provider, String.t(),
       enforce: true,
@@ -103,7 +101,13 @@ defmodule MishkaPay.Credentials do
   """
   @spec fetch(String.t(), term(), keyword()) :: {:ok, t()} | {:error, Splode.Error.t()}
   def fetch(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
-    timeout = opts |> Keyword.get(:timeout, @timeout) |> timeout!()
+    timeout =
+      opts
+      |> Keyword.get_lazy(:timeout, fn ->
+        Application.get_env(:mishka_pay, :credentials_timeout, 5_000)
+      end)
+      |> timeout!()
+
     meta = %{provider: provider, tenant: tenant}
 
     :telemetry.span([:mishka_pay, :credentials], meta, fn ->

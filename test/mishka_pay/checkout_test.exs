@@ -69,6 +69,7 @@ defmodule MishkaPay.CheckoutTest do
 
   test "a customer is an id or an email, not both" do
     assert [:customer] = fields(build(%{"customer" => %{"id" => "cus_1", "email" => "a@b.co"}}))
+    assert [:customer] = fields(build(%{"customer" => %{}}))
   end
 
   test "unknown keys and a missing provider are refused" do

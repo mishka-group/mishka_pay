@@ -16,14 +16,21 @@ defmodule MishkaPay.Customer do
   end
 
   @doc false
-  def one_of(%{id: id, email: email}) when is_binary(id) == is_binary(email),
-    do:
-      {:error,
-       %{
-         field: :customer,
-         action: :customer,
-         message: "A customer is an id or an email, one of them"
-       }}
+  def one_of(attrs) do
+    case {is_binary(attrs[:id]), is_binary(attrs[:email])} do
+      {true, false} ->
+        {:ok, attrs}
 
-  def one_of(attrs), do: {:ok, attrs}
+      {false, true} ->
+        {:ok, attrs}
+
+      _none_or_both ->
+        {:error,
+         %{
+           field: :customer,
+           action: :customer,
+           message: "A customer is an id or an email, one of them"
+         }}
+    end
+  end
 end

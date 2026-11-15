@@ -44,8 +44,6 @@ defmodule MishkaPay do
   alias MishkaPay.{Checkout, Credentials, Errors, Events, Provider, Refund}
   alias MishkaPay.Helpers.Plugins
 
-  @gate_timeout Application.compile_env(:mishka_pay, :checkout_gate_timeout, 5_000)
-
   @doc "Opens a checkout from `attrs` (see `MishkaPay.Checkout`) and answers it with the provider's page."
   @spec checkout(map()) :: {:ok, Checkout.t()} | {:error, Splode.Error.t()}
   def checkout(attrs) when is_map(attrs) do
@@ -94,11 +92,10 @@ defmodule MishkaPay do
   end
 
   defp before_checkout(checkout) do
-    case Plugins.call(
-           Events.checkout_before(),
-           %{checkout: checkout, refused: nil},
-           @gate_timeout
-         ) do
+    timeout = Application.get_env(:mishka_pay, :checkout_gate_timeout, 5_000)
+    state = %{checkout: checkout, refused: nil}
+
+    case Plugins.call(Events.checkout_before(), state, timeout) do
       {:ok, %{refused: nil, checkout: %Checkout{} = checkout}} -> {:ok, checkout}
       {:ok, %{refused: reason}} when not is_nil(reason) -> refused(reason)
       {:ok, _not_an_answer} -> refused(:invalid_answer)
