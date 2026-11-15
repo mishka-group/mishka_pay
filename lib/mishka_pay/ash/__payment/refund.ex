@@ -8,6 +8,8 @@ if Code.ensure_loaded?(Ash) do
     The `:refund` action of `MishkaPay.Ash.Payment`: refunds the stored payment through its
     provider before the transaction starts, reads the payment again and writes it, keeps the
     `MishkaPay.Refund` in the record's `:refund` metadata, and fires `mishka_pay:payment:changed`.
+    When the payment cannot be read again, the row counts the refund itself (never past the
+    payment's amount), and the announcement waits for the next sync.
     """
 
     use Ash.Resource.Change
@@ -62,8 +64,11 @@ if Code.ensure_loaded?(Ash) do
     defp counted(payment, refund) do
       refunded =
         case refund.amount do
-          %Money{amount: amount} -> Decimal.add(payment.amount_refunded, amount)
-          nil -> payment.amount
+          %Money{amount: amount} ->
+            payment.amount_refunded |> Decimal.add(amount) |> Decimal.min(payment.amount)
+
+          nil ->
+            payment.amount
         end
 
       status =

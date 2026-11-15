@@ -58,8 +58,7 @@ if Code.ensure_loaded?(Ash) do
 
     # The answer of the listeners does not change the sync: it already happened.
     @doc false
-    def announce(changeset, {:ok, record} = result) do
-      payment = changeset.context[:mishka_pay_payment]
+    def announce(%{context: %{mishka_pay_payment: %Payment{} = payment}}, {:ok, record} = result) do
       timeout = Application.get_env(:mishka_pay, :payment_changed_timeout, 5_000)
 
       _answer =
@@ -68,6 +67,8 @@ if Code.ensure_loaded?(Ash) do
       result
     end
 
+    # A row changed without the provider's word (a refund counted while the provider could not be
+    # read): the announcement waits for the next sync, which brings it.
     def announce(_changeset, error), do: error
   end
 end

@@ -171,6 +171,7 @@ defmodule MishkaPay.Ash.PaymentTest do
 
     test "a refund that went through still succeeds when the payment cannot be read again" do
       {:ok, payment} = sync()
+      MishkaPay.Test.start_plugin!(PaymentWatcher)
 
       # Stripe answers the read before the refund and the refund itself, then goes down.
       MishkaPay.Test.stub_http(fn conn ->
@@ -196,6 +197,7 @@ defmodule MishkaPay.Ash.PaymentTest do
 
       assert %MishkaPay.Refund{status: :succeeded} = refunded.__metadata__.refund
       assert refunded.status == :partially_refunded
+      refute_received {:payment_changed, _payment, _record}
       assert Decimal.equal?(refunded.amount_refunded, "5")
     end
 

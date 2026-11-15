@@ -78,7 +78,7 @@ defmodule MishkaPay.Ash.InboxTest do
     work()
 
     assert [%{status: :failed, last_error: last_error}] = stored()
-    assert last_error =~ "the store is down"
+    assert last_error == "the event was not processed: the store is down"
   end
 
   test "with no host listener the event is still worked and marked processed" do

@@ -45,6 +45,11 @@ if Code.ensure_loaded?(Ash) do
     """
     @spec message(term()) :: String.t()
     def message(%{errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+
+    def message(%Ash.Error.Unknown.UnknownError{error: inner}) when not is_nil(inner),
+      do: message(inner)
+
+    def message(%{__exception__: true, message: text}) when is_binary(text), do: text
     def message(%{__exception__: true, __struct__: module} = error), do: module.message(error)
     def message(text) when is_binary(text), do: text
     def message(other), do: inspect(other)
