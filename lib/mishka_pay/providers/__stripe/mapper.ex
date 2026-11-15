@@ -8,7 +8,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Stripe's JSON objects (API version `2026-10-28.endive`) become Mishka Pay's structs.
   """
 
-  alias MishkaPay.{Checkout, Money, Payment, Price, Refund}
+  alias MishkaPay.{Checkout, Event, Money, Payment, Price, Refund}
 
   @reference "mishka_pay_reference"
 
@@ -148,6 +148,25 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
            created_at: time(answer["created"])
        }}
     end
+  end
+
+  @doc "A Stripe event (`object: \"event\"`) as a `MishkaPay.Event`, with what it is about."
+  @spec event(map()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
+  def event(event) do
+    object = get_in(event, ["data", "object"]) || %{}
+
+    %{
+      provider: "stripe",
+      id: event["id"],
+      type: event["type"],
+      object_id: object["id"],
+      object_type: object["object"],
+      livemode: event["livemode"],
+      account: event["account"],
+      created_at: time(event["created"])
+    }
+    |> Event.builder()
+    |> MishkaPay.Errors.from_builder()
   end
 
   defp expanded(%{} = object), do: object

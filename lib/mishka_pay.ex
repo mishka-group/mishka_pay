@@ -49,7 +49,7 @@ defmodule MishkaPay do
   def checkout(attrs) when is_map(attrs) do
     span(:checkout, attrs, fn ->
       with {:ok, checkout} <- Errors.from_builder(Checkout.builder(attrs)),
-           {:ok, provider} <- capable(checkout.provider, :checkout),
+           {:ok, provider} <- Provider.capable(checkout.provider, :checkout),
            {:ok, checkout} <- before_checkout(checkout),
            {:ok, keys} <- Credentials.fetch(checkout.provider, checkout.tenant) do
         provider.checkout(checkout, keys)
@@ -63,7 +63,7 @@ defmodule MishkaPay do
   def fetch_payment(provider, payment_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payment_id) do
     span(:payment, %{provider: provider, tenant: tenant}, fn ->
-      with {:ok, module} <- capable(provider, :checkout),
+      with {:ok, module} <- Provider.capable(provider, :checkout),
            {:ok, keys} <- Credentials.fetch(provider, tenant) do
         module.fetch_payment(payment_id, keys)
       end
@@ -75,20 +75,11 @@ defmodule MishkaPay do
   def refund(attrs) when is_map(attrs) do
     span(:refund, attrs, fn ->
       with {:ok, refund} <- Errors.from_builder(Refund.builder(attrs)),
-           {:ok, provider} <- capable(refund.provider, :refund),
+           {:ok, provider} <- Provider.capable(refund.provider, :refund),
            {:ok, keys} <- Credentials.fetch(refund.provider, refund.tenant) do
         provider.refund(refund, keys)
       end
     end)
-  end
-
-  defp capable(id, capability) do
-    with {:ok, provider} <- Provider.fetch(id) do
-      case capability in provider.capabilities() do
-        true -> {:ok, provider}
-        false -> {:error, Errors.Unsupported.exception(provider: id, operation: capability)}
-      end
-    end
   end
 
   defp before_checkout(checkout) do

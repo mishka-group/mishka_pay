@@ -16,7 +16,8 @@ defmodule MishkaPay.Messages do
 
   @typedoc "The name of one message."
   @type key ::
-          :money_field
+          :bad_signature
+          | :money_field
           | :currency_unknown
           | :amount_not_exact
           | :amount_not_number
@@ -173,6 +174,9 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "Stripe takes three-decimal currencies only with a last decimal of 0"
       )
+
+  defp msgid(:bad_signature),
+    do: dgettext_noop("mishka_pay", "the %{provider} webhook cannot be trusted (%{reason})")
 
   defp msgid(:declined),
     do: dgettext_noop("mishka_pay", "%{provider} declined the payment")

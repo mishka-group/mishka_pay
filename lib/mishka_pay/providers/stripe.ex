@@ -27,6 +27,12 @@ defmodule MishkaPay.Providers.Stripe do
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.
     * `refund/2` refunds a PaymentIntent, in full or in part.
 
+    * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
+      `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
+      with every `v1` signature in it, signed within the last five minutes
+      (`config :mishka_pay, MishkaPay.Providers.Stripe, webhook_tolerance: seconds`), and from the
+      same mode (live or test) as the tenant's keys.
+
   Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
   and other errors as `MishkaPay.Errors.Rejected` with its code and status.
 
@@ -46,7 +52,7 @@ defmodule MishkaPay.Providers.Stripe do
   use MishkaPay.Provider,
     id: "stripe",
     label: "Stripe",
-    capabilities: [:checkout, :refund]
+    capabilities: [:checkout, :refund, :webhook]
 
   alias MishkaPay.{Checkout, Client, Errors, Messages, Refund}
   alias MishkaPay.Providers.Stripe.Mapper
@@ -98,6 +104,106 @@ defmodule MishkaPay.Providers.Stripe do
       Mapper.refund(answer, refund)
     end
   end
+
+  @impl MishkaPay.Provider
+  def verify_webhook(payload, headers, keys) when is_binary(payload) do
+    with {:ok, secret} <- webhook_secret(keys),
+         {:ok, header} <- signature_header(headers),
+         {:ok, timestamp, signatures} <- parse_signature(header),
+         :ok <- fresh(timestamp),
+         :ok <- signed(payload, timestamp, signatures, secret),
+         {:ok, %{} = event} <- decode(payload),
+         :ok <- same_mode(event, keys) do
+      Mapper.event(event)
+    end
+  end
+
+  @doc """
+  Stripe's signature of `payload` at `timestamp` (Unix seconds) with webhook `secret`: the `v1`
+  value of a `Stripe-Signature` header. `verify_webhook/3` compares with it, and a test signs a
+  message with it.
+  """
+  @spec signature(binary(), integer(), String.t()) :: String.t()
+  def signature(payload, timestamp, secret),
+    do:
+      :hmac
+      |> :crypto.mac(:sha256, secret, "#{timestamp}.#{payload}")
+      |> Base.encode16(case: :lower)
+
+  defp webhook_secret(%{webhook_secret: secret}) when is_binary(secret) and secret != "",
+    do: {:ok, secret}
+
+  defp webhook_secret(keys),
+    do:
+      {:error,
+       Errors.MissingCredentials.exception(
+         provider: "stripe",
+         tenant: keys.tenant,
+         reason: :no_webhook_secret
+       )}
+
+  defp signature_header(headers) do
+    case for({name, value} <- headers, String.downcase(name) == "stripe-signature", do: value) do
+      [header | _] -> {:ok, header}
+      [] -> bad(:missing)
+    end
+  end
+
+  # `t=1700000000,v1=abc...,v1=def...,v0=...`: the time and every v1 signature (a rolled secret
+  # signs with old and new for a while).
+  defp parse_signature(header) do
+    parts =
+      for part <- String.split(header, ","),
+          [k, v] <- [String.split(String.trim(part), "=", parts: 2)],
+          do: {k, v}
+
+    with {_t, time} <- List.keyfind(parts, "t", 0),
+         {timestamp, ""} <- Integer.parse(time),
+         [_ | _] = signatures <- for({"v1", sig} <- parts, do: sig) do
+      {:ok, timestamp, signatures}
+    else
+      _unreadable -> bad(:malformed)
+    end
+  end
+
+  defp fresh(timestamp) do
+    tolerance =
+      :mishka_pay |> Application.get_env(__MODULE__, []) |> Keyword.get(:webhook_tolerance, 300)
+
+    case abs(System.system_time(:second) - timestamp) <= tolerance do
+      true -> :ok
+      false -> bad(:too_old)
+    end
+  end
+
+  defp signed(payload, timestamp, signatures, secret) do
+    expected = signature(payload, timestamp, secret)
+
+    case Enum.any?(signatures, &Plug.Crypto.secure_compare(&1, expected)) do
+      true -> :ok
+      false -> bad(:mismatch)
+    end
+  end
+
+  defp decode(payload) do
+    case JSON.decode(payload) do
+      {:ok, %{} = event} -> {:ok, event}
+      _not_an_object -> bad(:malformed)
+    end
+  end
+
+  # A live event checked with test keys, or the other way round, is not this tenant's.
+  defp same_mode(%{"livemode" => livemode}, keys) when is_boolean(livemode) do
+    case livemode == (keys.mode == :live) do
+      true -> :ok
+      false -> bad(:mode)
+    end
+  end
+
+  defp same_mode(_event, _keys), do: bad(:malformed)
+
+  defp bad(reason),
+    do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
   defp request(method, path, params, keys, opts \\ []) do
     base = %{

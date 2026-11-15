@@ -111,6 +111,41 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              pay(key, "pm_card_chargeDeclined")
   end
 
+  test "a real event from the sandbox, signed as Stripe signs it, becomes an Event", %{key: key} do
+    {:ok, %{status: 200, body: %{"data" => [event | _]}}} =
+      Client.request(%{
+        provider: "stripe",
+        base_url: "https://api.stripe.com",
+        path: "/v1/events",
+        params: [limit: 1],
+        auth: {:bearer, key},
+        headers: %{"stripe-version" => Stripe.version()}
+      })
+
+    body = JSON.encode!(event)
+    time = System.system_time(:second)
+
+    {:ok, keys} =
+      MishkaPay.Credentials.builder(%{
+        provider: "stripe",
+        secret_key: key,
+        webhook_secret: "whsec_live_test"
+      })
+
+    assert {:ok, %MishkaPay.Event{id: id, type: type, livemode: false}} =
+             Stripe.verify_webhook(
+               body,
+               [
+                 {"stripe-signature",
+                  "t=#{time},v1=#{Stripe.signature(body, time, "whsec_live_test")}"}
+               ],
+               keys
+             )
+
+    assert id == event["id"]
+    assert type == event["type"]
+  end
+
   test "a payment that does not exist is a rejection" do
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_payment("stripe", "pi_doesnotexist")
