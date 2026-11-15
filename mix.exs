@@ -69,7 +69,11 @@ defmodule MishkaPay.MixProject do
       # Providers, credentials and every extension point are mishka_installer plugins and events.
       mishka_dep(:mishka_installer, "~> 0.1.16"),
       # Every input and every answer of a provider is a guarded_struct.
-      mishka_dep(:guarded_struct, "~> 0.1.7", override: true),
+      # Its fix branch until the next guarded_struct release: `validate(not_nil_value)` refuses nil.
+      mishka_dep(:guarded_struct, "~> 0.1.7",
+        override: true,
+        branch: "fix/not-nil-value-on-nil"
+      ),
       # The HTTP client of every provider adapter.
       {:req, "~> 0.7"},
       # The webhook endpoint (`MishkaPay.Webhook`) is a Plug.
@@ -103,16 +107,26 @@ defmodule MishkaPay.MixProject do
   # and a `hex.*` task (`mix hex.build`, `mix hex.publish`) always takes Hex, as a package must.
   # `override: true` goes with the sibling only, for a package another dependency takes from Hex,
   # such as guarded_struct, which mishka_installer takes from Hex.
+  #
+  # `branch:` is for a fix that is not on Hex yet: without a sibling the package comes from that
+  # branch of its GitHub repo. Remove it once the fix is released; Hex refuses a git dependency.
   defp mishka_dep(name, requirement, opts \\ []) do
     {path_opts, opts} = Keyword.split(opts, [:override])
+    {branch, opts} = Keyword.pop(opts, :branch)
 
     sibling? =
       File.dir?(Path.expand("../#{name}/.git", __DIR__)) and
         not Enum.any?(System.argv(), &String.starts_with?(&1, "hex."))
 
-    case sibling? do
-      true -> {name, [path: "../#{name}"] ++ path_opts ++ opts}
-      false -> {name, requirement, opts}
+    case {sibling?, branch} do
+      {true, _branch} ->
+        {name, [path: "../#{name}"] ++ path_opts ++ opts}
+
+      {false, nil} ->
+        {name, requirement, opts}
+
+      {false, branch} ->
+        {name, [github: "mishka-group/#{name}", branch: branch] ++ path_opts ++ opts}
     end
   end
 

@@ -49,7 +49,6 @@ defmodule MishkaPay.Client do
   use GuardedStruct
 
   alias MishkaPay.Errors
-  alias MishkaPay.Helpers.Required
 
   @derive {Inspect, only: [:provider, :method, :base_url, :path]}
 
@@ -59,22 +58,20 @@ defmodule MishkaPay.Client do
   guardedstruct authorized_fields: true, main_validator: {__MODULE__, :one_body} do
     field :provider, String.t(),
       enforce: true,
-      derives: "validate(string, not_empty)",
-      validator: {Required, :call}
+      derives: "validate(not_nil_value, string, not_empty)"
 
     field :method, :get | :post | :put | :patch | :delete,
       default: :get,
-      derives: "validate(enum=Atom[get::post::put::patch::delete])",
-      validator: {Required, :call}
+      derives: "validate(not_nil_value, enum=Atom[get::post::put::patch::delete])"
 
     field :base_url, String.t(),
       enforce: true,
-      derives: "sanitize(trim) validate(string, not_empty)",
+      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)",
       validator: {__MODULE__, :base_url}
 
     field :path, String.t(),
       enforce: true,
-      derives: "validate(string, not_empty)",
+      derives: "validate(not_nil_value, string, not_empty)",
       validator: {__MODULE__, :path}
 
     field :auth, term()
@@ -212,7 +209,7 @@ defmodule MishkaPay.Client do
     end
   end
 
-  def base_url(:base_url, url), do: Required.call(:base_url, url)
+  def base_url(:base_url, url), do: {:ok, :base_url, url}
 
   # One plain path from the root: no second slash at the start, no query or fragment, no backslash,
   # control character, dot segment or percent-encoded slash.
@@ -233,7 +230,7 @@ defmodule MishkaPay.Client do
   def path(:path, path) when is_binary(path),
     do: {:error, :path, "The path field must start with /"}
 
-  def path(:path, path), do: Required.call(:path, path)
+  def path(:path, path), do: {:ok, :path, path}
 
   @doc false
   def params(:params, params) when is_map(params) or is_list(params) do
