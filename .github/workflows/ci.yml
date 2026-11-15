@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: mishka-group/mishka_cms/.github/workflows/mishka-ci.yml@ci-v1
+    with:
+      credence-task: mishka_pay.credence
+      sobelow: true
