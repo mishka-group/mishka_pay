@@ -96,6 +96,14 @@ defmodule MishkaPay.CredentialsTest do
     assert {:ok, _keys} = Credentials.fetch("acme", "site-a", timeout: 50)
   end
 
+  test "a time limit that is not milliseconds or :infinity is refused" do
+    for timeout <- [-1, nil, "5s"] do
+      assert_raise ArgumentError, ~r/timeout/, fn ->
+        Credentials.fetch("acme", nil, timeout: timeout)
+      end
+    end
+  end
+
   @tag :capture_log
   test "a plugin that raises leaves the keys missing, never half read" do
     MishkaPay.Test.start_plugin!(SiteKeys)

@@ -96,11 +96,12 @@ defmodule MishkaPay.Credentials do
 
   The plugins run in a task under `MishkaPay.TaskSupervisor`, not linked to the caller, so a
   plugin that fails or hangs never takes the caller down. The limit is `opts[:timeout]`, or
-  `config :mishka_pay, credentials_timeout: ms`, 5 seconds by default.
+  `config :mishka_pay, credentials_timeout: ms`, 5 seconds by default; `0` gives no plugin time to
+  answer, and anything other than milliseconds or `:infinity` raises an `ArgumentError`.
   """
   @spec fetch(String.t(), term(), keyword()) :: {:ok, t()} | {:error, Splode.Error.t()}
   def fetch(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
-    timeout = Keyword.get(opts, :timeout, @timeout)
+    timeout = opts |> Keyword.get(:timeout, @timeout) |> timeout!()
 
     task =
       Task.Supervisor.async_nolink(MishkaPay.TaskSupervisor, fn ->
@@ -116,6 +117,16 @@ defmodule MishkaPay.Credentials do
       nil -> missing(provider, tenant, :timeout)
     end
   end
+
+  defp timeout!(:infinity), do: :infinity
+  defp timeout!(ms) when is_integer(ms) and ms >= 0, do: ms
+
+  defp timeout!(other),
+    do:
+      raise(
+        ArgumentError,
+        "timeout is milliseconds (0 or more) or :infinity, got: #{inspect(other)}"
+      )
 
   defp exited(provider, tenant, reason) do
     Logger.warning(
