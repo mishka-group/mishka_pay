@@ -96,6 +96,34 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a part refund in another currency or over what is left is refused before Stripe" do
+      for amount <- [%{amount: "5", currency: "EUR"}, %{amount: "11", currency: "USD"}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+                 MishkaPay.refund(%{
+                   provider: "stripe",
+                   tenant: "site-a",
+                   payment_id: "pi_123",
+                   amount: amount
+                 })
+      end
+    end
+
+    test "Stripe's limits on three-decimal currencies and metadata are kept before any request" do
+      kwd = %{@checkout | items: [%{name: "Ebook", amount: %{amount: "1.234", currency: "KWD"}}]}
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} = MishkaPay.checkout(kwd)
+
+      assert {:ok, _checkout} =
+               MishkaPay.checkout(%{
+                 @checkout
+                 | items: [%{name: "Ebook", amount: %{amount: "1.230", currency: "KWD"}}]
+               })
+
+      many = Map.new(1..50, &{"k#{&1}", "v"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :metadata}]}} =
+               MishkaPay.checkout(Map.put(@checkout, :metadata, many))
+    end
+
     test "keys Stripe does not accept are a rejection with its status" do
       MishkaPay.Test.put_keys("stripe", %{secret_key: "not-a-key"})
 
