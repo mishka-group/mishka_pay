@@ -8,7 +8,9 @@ defmodule MishkaPay.Errors.MissingCredentials do
 
     * `:provider`, `:tenant`: what was asked for.
     * `:reason`: `:no_answer` when no plugin on `mishka_pay:credentials` answered, `:cannot_run` when
-      a plugin of the event is registered but not loaded, `:raised` when one raised.
+      a plugin of the event is registered but not loaded, `:raised` when one raised, `:exited`
+      when one called `exit` or `throw` (or a process it called died), `:timeout` when no answer
+      came in time.
   """
 
   use Splode.Error, fields: [:provider, :tenant, :reason], class: :invalid

@@ -3,21 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 defmodule MishkaPay.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  Mishka Pay's own processes: the task supervisor `MishkaPay.Credentials.fetch/3` runs a host's
+  keys plugins under, so a plugin that exits, throws or hangs never takes the caller with it.
+  """
 
   use Application
 
   @impl true
   def start(_type, _args) do
-    children = [
-      # Starts a worker by calling: MishkaPay.Worker.start_link(arg)
-      # {MishkaPay.Worker, arg}
-    ]
-
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
+    children = [{Task.Supervisor, name: MishkaPay.TaskSupervisor}]
     opts = [strategy: :one_for_one, name: MishkaPay.Supervisor]
     Supervisor.start_link(children, opts)
   end

@@ -19,6 +19,15 @@ defmodule MishkaPay.Support.SiteKeys do
   def credentials("acme", "site-extra-key"), do: %{secret_key: "sk_test_x", token: "t"}
   def credentials("acme", "site-boom"), do: raise("the settings store is down")
   def credentials("acme", "site-not-a-map"), do: [secret_key: "sk_test_x"]
+  def credentials("acme", "site-exit"), do: exit(:settings_down)
+  def credentials("acme", "site-throw"), do: throw(:no_keys)
+
+  # A plugin whose store never answers.
+  def credentials("acme", "site-hang") do
+    receive do
+      :never_sent -> nil
+    end
+  end
 
   def credentials("acme", "site-from-json"),
     do: %{"secret_key" => "sk_live_json", "mode" => "live", "provider" => "evil", "extra" => nil}

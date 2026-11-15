@@ -76,6 +76,27 @@ defmodule MishkaPay.CredentialsTest do
   end
 
   @tag :capture_log
+  test "a plugin that exits or throws is a missing-keys error, and the caller lives on" do
+    MishkaPay.Test.start_plugin!(SiteKeys)
+
+    for tenant <- ["site-exit", "site-throw"] do
+      assert {:error, %Errors.MissingCredentials{reason: :exited}} =
+               Credentials.fetch("acme", tenant)
+    end
+
+    assert Process.alive?(self())
+  end
+
+  test "a plugin that never answers is stopped at the time limit" do
+    MishkaPay.Test.start_plugin!(SiteKeys)
+
+    assert {:error, %Errors.MissingCredentials{reason: :timeout}} =
+             Credentials.fetch("acme", "site-hang", timeout: 50)
+
+    assert {:ok, _keys} = Credentials.fetch("acme", "site-a", timeout: 50)
+  end
+
+  @tag :capture_log
   test "a plugin that raises leaves the keys missing, never half read" do
     MishkaPay.Test.start_plugin!(SiteKeys)
 
