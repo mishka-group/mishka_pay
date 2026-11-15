@@ -75,7 +75,9 @@ defmodule MishkaPay.MixProject do
       # The webhook endpoint (`MishkaPay.Webhook`) is a Plug.
       {:plug, "~> 1.20"},
       {:telemetry, "~> 1.4"},
-      # `MishkaPay.Money` holds its amount as a Decimal.
+      # Money is ex_money's `Money`: every ISO 4217 currency, its decimal places and cash rounding,
+      # and formatting in any language, from CLDR through `localize` (no backend module).
+      {:ex_money, "~> 6.3"},
       {:decimal, "~> 3.2"},
       # Every error (`MishkaPay.Errors`) is a Splode error, like Ash's and guarded_struct's.
       {:splode, "~> 0.3"},

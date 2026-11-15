@@ -8,29 +8,16 @@ defmodule MishkaPay.MoneyTest do
   alias GuardedStruct.Errors.Validation
   alias MishkaPay.{Errors, Money}
 
-  test "money keeps an exact amount and an upper case currency" do
-    assert {:ok, %Money{amount: amount, currency: "USD"}} = Money.new("19.99", " usd ")
-    assert Decimal.equal?(amount, "19.99")
+  test "money is ex_money's, with an exact amount and the currency's places" do
+    assert {:ok, %Elixir.Money{currency: :USD} = money} = Money.new("19.99", " usd ")
+    assert Decimal.equal?(money.amount, "19.99")
 
-    assert {:ok, %Money{amount: amount}} = Money.new(5, "EUR")
-    assert Decimal.equal?(amount, 5)
-
-    assert {:ok, %Money{}} = Money.new(Decimal.new("0"), "JPY")
+    assert Money.new(5, "USD") == Money.new(" 5.00 ", :usd)
+    assert {:ok, %Elixir.Money{amount: zero}} = Money.new("-0", "USD")
+    assert Decimal.to_string(zero) == "0.00"
   end
 
-  test "equal amounts are the same struct, written with the currency's places" do
-    assert Money.new(5, "USD") == Money.new(" 5.00 ", "usd")
-    assert {:ok, %Money{amount: amount}} = Money.new("-0", "USD")
-    refute Decimal.negative?(amount)
-    assert Decimal.to_string(amount) == "0.00"
-  end
-
-  test "a negative smallest unit from a provider is an error, never a crash" do
-    assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
-             Money.from_minor(-5, "USD")
-  end
-
-  test "a float, a negative, a word or a missing amount is refused on the amount field" do
+  test "a float, a negative, a word, an infinity or a missing amount is refused on the amount field" do
     for amount <- [19.99, -1, "-0.5", "ten", nil, "Infinity", "NaN"] do
       assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
                Money.new(amount, "USD")
@@ -42,34 +29,31 @@ defmodule MishkaPay.MoneyTest do
              Money.new("19.999", "USD")
 
     assert {:error, %Errors.Invalid{}} = Money.new("100.5", "JPY")
-    assert {:ok, %Money{}} = Money.new("1.234", "KWD")
-    assert {:ok, %Money{}} = Money.new("19.90", "USD")
+    assert {:ok, _money} = Money.new("1.234", "KWD")
   end
 
-  test "a currency that is not three letters is refused on the currency field" do
-    for currency <- ["US", "USDT", "US1", "", nil] do
-      assert {:error, %Errors.Invalid{errors: errors}} = Money.new(100, currency)
-      assert Enum.all?(errors, &match?(%Validation{field: :currency}, &1))
+  test "a currency that is not a known ISO 4217 code is refused on the currency field" do
+    for currency <- ["US", "ZZZ", "US1", "", nil, 42] do
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :currency}]}} =
+               Money.new(100, currency)
     end
   end
 
-  test "the smallest unit follows each currency's decimal places, both ways" do
+  test "the smallest unit follows each currency's places, both ways" do
     for {minor, currency} <- [{1999, "USD"}, {500, "JPY"}, {1234, "KWD"}, {0, "EUR"}] do
       assert {:ok, money} = Money.from_minor(minor, currency)
       assert Money.to_minor(money) == minor
     end
 
-    assert {:ok, %Money{amount: amount}} = Money.from_minor(1999, "usd")
-    assert Decimal.equal?(amount, "19.99")
-    assert {:ok, money} = Money.new("500", "JPY")
-    assert Money.to_minor(money) == 500
+    assert {:ok, money} = Money.from_minor(1999, "usd")
+    assert Decimal.equal?(money.amount, "19.99")
   end
 
-  test "builder takes string keys, as a decoded answer has them, and refuses unknown keys" do
-    assert {:ok, %Money{currency: "JPY"}} =
-             Money.builder(%{"amount" => "500", "currency" => "jpy"})
+  test "a negative smallest unit from a provider is an error, never a crash" do
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
+             Money.from_minor(-5, "USD")
 
-    assert {:error, %Errors.Invalid{errors: [%Validation{field: :rate}]}} =
-             Errors.from_builder(Money.builder(%{amount: 1, currency: "USD", rate: 2}))
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :currency}]}} =
+             Money.from_minor(5, "ZZZ")
   end
 end

@@ -30,6 +30,10 @@ config :spark,
     ]
   ]
 
+# This library converts no currencies, so ex_money's exchange rate service stays off in its own
+# runs. A project that wants rates starts `Money.ExchangeRates.Retriever` itself.
+config :ex_money, auto_start_exchange_rate_service: false
+
 # Only the test run of this library is configured here. A project that uses Mishka Pay configures
 # mishka_installer itself.
 if config_env() == :test, do: import_config("test.exs")
