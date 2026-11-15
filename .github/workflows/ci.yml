@@ -19,3 +19,8 @@ jobs:
     with:
       credence-task: mishka_pay.credence
       sobelow: true
+      # Stripe's own mock server for the :stripe_mock tests; the run fails if it is not up.
+      pre-test: |
+        docker run -d -p 12111:12111 stripe/stripe-mock:latest
+        until curl -s localhost:12111 > /dev/null; do sleep 1; done
+        echo "STRIPE_MOCK_REQUIRED=1" >> "$GITHUB_ENV"

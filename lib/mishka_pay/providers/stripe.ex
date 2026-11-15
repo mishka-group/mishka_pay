@@ -4,18 +4,207 @@
 
 defmodule MishkaPay.Providers.Stripe do
   @moduledoc """
-  Stripe as a provider: `use MishkaPay.Provider, id: "stripe"`. One time payments with Stripe
-  Checkout, payments, refunds and the webhook signature.
+  Stripe as a provider: one time payments with Stripe Checkout, reading a payment and refunds.
 
-  Its HTTP calls go through `MishkaPay.Client` with Stripe's base URL, the site's secret key, one
-  pinned `Stripe-Version` header and Stripe's form encoding. No third party Stripe library.
+  Supervise it to install it, and answer its keys for each tenant (`MishkaPay.Credentials`); only
+  `secret_key` is needed here, `webhook_secret` joins with webhooks.
 
-  `verify_webhook/3` checks the `Stripe-Signature` header: the HMAC of the raw body with the site's
-  webhook secret, compared in constant time, inside the allowed time window.
+      children = [MishkaPay.Providers.Stripe]
 
-  Stripe's field names live only in `MishkaPay.Providers.Stripe.Mapper`.
+  It talks to Stripe through `MishkaPay.Client` (retries, one idempotency key per call,
+  telemetry), with the tenant's secret key and one pinned Stripe API version,
+  `2026-10-28.endive`, so a change of the account's default version never changes what this
+  module reads. No third party Stripe library is used. Stripe's field names live only in
+  `MishkaPay.Providers.Stripe.Mapper`.
 
-  Stage 2 writes the operations and stage 3 the signature check; tests run against Stripe's test
-  mode.
+    * `checkout/2` opens a Checkout Session in `payment` mode and answers its page. The caller's
+      `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
+      payment, and it makes the idempotency key, so the same reference never opens two sessions.
+    * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.
+    * `refund/2` refunds a PaymentIntent, in full or in part.
+
+  Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
+  and other errors as `MishkaPay.Errors.Rejected` with its code and status.
+
+  Stripe counts a few currencies differently from ISO 4217 (HUF, TWD, ISK, UGX, MGA); a checkout or
+  refund in one of them is refused as `MishkaPay.Errors.Unsupported` rather than charged wrong.
+
+  `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
+  another address, such as Stripe's own mock server in tests.
   """
+
+  use MishkaPay.Provider,
+    id: "stripe",
+    label: "Stripe",
+    capabilities: [:checkout, :refund]
+
+  alias MishkaPay.{Checkout, Client, Errors, Refund}
+  alias MishkaPay.Providers.Stripe.Mapper
+
+  @version "2026-10-28.endive"
+  @base_url "https://api.stripe.com"
+  @odd_currencies ~w(HUF TWD ISK UGX MGA)a
+
+  @doc "The Stripe API version every request is pinned to."
+  @spec version() :: String.t()
+  def version, do: @version
+
+  @impl MishkaPay.Provider
+  def checkout(%Checkout{} = checkout, keys) do
+    with :ok <- currencies(checkout.items, :checkout),
+         {:ok, session} <-
+           request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout), keys,
+             key: idempotency_key("checkout", checkout.tenant, checkout.reference)
+           ) do
+      {:ok, Mapper.checkout(session, checkout)}
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payment(payment_id, keys) do
+    with :ok <- stripe_id(payment_id),
+         {:ok, intent} <-
+           request(
+             :get,
+             "/v1/payment_intents/#{payment_id}",
+             [{"expand[]", "latest_charge"}],
+             keys
+           ) do
+      Mapper.payment(intent)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def refund(%Refund{} = refund, keys) do
+    with :ok <- stripe_id(refund.payment_id),
+         :ok <- currencies([refund], :refund),
+         {:ok, answer} <-
+           request(:post, "/v1/refunds", Mapper.refund_params(refund), keys,
+             key: idempotency_key("refund", refund.tenant, refund.reference)
+           ) do
+      Mapper.refund(answer, refund)
+    end
+  end
+
+  defp request(method, path, params, keys, opts \\ []) do
+    base = %{
+      provider: "stripe",
+      method: method,
+      base_url: base_url(),
+      path: path,
+      auth: {:bearer, keys.secret_key},
+      headers: %{"stripe-version" => @version},
+      idempotency_header: "idempotency-key",
+      idempotency_key: opts[:key]
+    }
+
+    base
+    |> Map.put(body_key(method), form(params))
+    |> Client.request()
+    |> answer()
+  end
+
+  defp body_key(:get), do: :params
+  defp body_key(_write), do: :form
+
+  defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
+    do: {:ok, body}
+
+  defp answer({:ok, %Req.Response{status: 402, body: %{"error" => error}}}) do
+    {:error,
+     Errors.Declined.exception(
+       provider: "stripe",
+       reason: error["decline_code"] || error["code"],
+       answer: error
+     )}
+  end
+
+  defp answer({:ok, %Req.Response{status: status, body: body}}) do
+    error = error_of(body)
+
+    {:error,
+     Errors.Rejected.exception(
+       provider: "stripe",
+       status: status,
+       code: error["code"],
+       message: error["message"]
+     )}
+  end
+
+  defp answer({:error, _unreachable} = error), do: error
+
+  defp error_of(%{"error" => %{} = error}), do: error
+  defp error_of(_other), do: %{}
+
+  # A Stripe id is letters, digits and underscores; anything else never reaches a path.
+  defp stripe_id(id) do
+    case is_binary(id) and Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
+      true ->
+        :ok
+
+      false ->
+        Errors.from_builder(
+          {:error,
+           [
+             %{
+               field: :payment_id,
+               action: :stripe_id,
+               message: "The payment_id field is not a Stripe id"
+             }
+           ]}
+        )
+    end
+  end
+
+  defp currencies(items, operation) do
+    odd =
+      for %{amount: %Money{currency: currency}} <- items,
+          currency in @odd_currencies,
+          uniq: true,
+          do: currency
+
+    case odd do
+      [] ->
+        :ok
+
+      [currency | _] ->
+        {:error,
+         Errors.Unsupported.exception(
+           provider: "stripe",
+           operation: "#{operation} in #{currency}"
+         )}
+    end
+  end
+
+  # The same reference for the same tenant is the same request to Stripe, however often it is sent.
+  defp idempotency_key(_operation, _tenant, nil), do: nil
+
+  defp idempotency_key(operation, tenant, reference) do
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary({tenant, reference}))
+    "mishka_pay-#{operation}-" <> Base.url_encode64(digest, padding: false)
+  end
+
+  defp base_url do
+    :mishka_pay
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:base_url, @base_url)
+  end
+
+  @doc """
+  Stripe's form encoding of nested params: `%{"line_items" => [%{"quantity" => 1}]}` becomes
+  `[{"line_items[0][quantity]", "1"}]`. `nil` values are left out.
+  """
+  @spec form(map() | list()) :: [{String.t(), String.t()}]
+  def form(params) when is_list(params), do: params
+
+  def form(params) when is_map(params),
+    do: Enum.flat_map(params, fn {key, value} -> pairs(to_string(key), value) end)
+
+  defp pairs(_key, nil), do: []
+  defp pairs(key, %{} = map), do: Enum.flat_map(map, fn {k, v} -> pairs("#{key}[#{k}]", v) end)
+
+  defp pairs(key, list) when is_list(list),
+    do: list |> Enum.with_index() |> Enum.flat_map(fn {v, i} -> pairs("#{key}[#{i}]", v) end)
+
+  defp pairs(key, value), do: [{key, to_string(value)}]
 end
