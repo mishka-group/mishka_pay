@@ -141,49 +141,68 @@ defmodule MishkaPay.ClientTest do
              })
   end
 
-  test "a Retry-After header is waited for when it is whole seconds, and ignored when it is not" do
-    test = self()
-
+  # Answers `status` with `retry_after` once, then 200.
+  defp retry_once(status, retry_after) do
     Req.Test.stub(__MODULE__, fn conn ->
-      send(test, :attempt)
-
-      case Process.get(:answered) do
+      case Process.put(:answered, true) do
         nil ->
-          Process.put(:answered, true)
-
           conn
-          |> Plug.Conn.put_resp_header("retry-after", "garbage")
-          |> Plug.Conn.send_resp(429, "")
+          |> Plug.Conn.put_resp_header("retry-after", retry_after)
+          |> Plug.Conn.send_resp(status, "")
 
         true ->
           Req.Test.json(conn, %{})
       end
     end)
+  end
 
-    assert {:ok, %Req.Response{status: 200}} = request(%{})
-    assert_received :attempt
-    assert_received :attempt
+  defp watch_retries,
+    do: :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :retry]])
+
+  test "a whole-second Retry-After is the wait, and anything else falls back to retry_delay" do
+    ref = watch_retries()
+
+    retry_once(429, "2")
+    assert {:ok, %Req.Response{status: 200}} = request(%{path: "/v1/ra-two", max_wait: 0})
+
+    assert_received {[:mishka_pay, :request, :retry], ^ref, %{wait: 0},
+                     %{path: "/v1/ra-two", status: 429, retry_after: 2000, attempt: 1}}
+
+    Process.delete(:answered)
+    retry_once(429, "garbage")
+    assert {:ok, %Req.Response{status: 200}} = request(%{path: "/v1/ra-garbage"})
+
+    assert_received {[:mishka_pay, :request, :retry], ^ref, %{wait: 0},
+                     %{path: "/v1/ra-garbage", retry_after: nil}}
   end
 
   test "a long Retry-After is never waited longer than max_wait" do
-    started = System.monotonic_time(:millisecond)
+    ref = watch_retries()
+    retry_once(503, "86400")
 
-    Req.Test.stub(__MODULE__, fn conn ->
-      case Process.get(:answered) do
-        nil ->
-          Process.put(:answered, true)
+    assert {:ok, %Req.Response{status: 200}} = request(%{path: "/v1/ra-long", max_wait: 0})
 
-          conn
-          |> Plug.Conn.put_resp_header("retry-after", "86400")
-          |> Plug.Conn.send_resp(503, "")
+    assert_received {[:mishka_pay, :request, :retry], ^ref, %{wait: 0},
+                     %{path: "/v1/ra-long", retry_after: 86_400_000}}
+  end
 
-        true ->
-          Req.Test.json(conn, %{})
+  test "a network error is retried with the doubling delay, capped by max_wait" do
+    ref = watch_retries()
+    Req.Test.stub(__MODULE__, &Req.Test.transport_error(&1, :econnrefused))
+
+    assert {:error, %Errors.Unreachable{}} =
+             request(%{path: "/v1/net", retry_delay: 1, max_wait: 2, max_retries: 3})
+
+    waits =
+      for attempt <- 1..3 do
+        assert_received {[:mishka_pay, :request, :retry], ^ref, %{wait: wait},
+                         %{path: "/v1/net", reason: :econnrefused, attempt: ^attempt}}
+
+        wait
       end
-    end)
 
-    assert {:ok, %Req.Response{status: 200}} = request(%{max_wait: 50})
-    assert System.monotonic_time(:millisecond) - started < 5_000
+    assert waits == [1, 2, 2]
+    refute_received {[:mishka_pay, :request, :retry], ^ref, _, %{path: "/v1/net"}}
   end
 
   test "options cannot turn retries back on for a write without an idempotency key" do

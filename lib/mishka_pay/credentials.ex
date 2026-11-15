@@ -8,7 +8,7 @@ defmodule MishkaPay.Credentials do
   publishable key, the webhook secret, test or live, and whatever else the provider needs in
   `:extra`.
 
-  Mishka Pay keeps no keys itself. `fetch/2` fires `mishka_pay:credentials`
+  Mishka Pay keeps no keys itself. `fetch/3` fires `mishka_pay:credentials`
   (`MishkaPay.Events.credentials/0`) and the host answers through a plugin, from its settings, its
   database or the environment:
 
@@ -34,29 +34,30 @@ defmodule MishkaPay.Credentials do
 
   use GuardedStruct
 
+  require Logger
+
   alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Errors, Events}
-  alias MishkaPay.Helpers.Required
 
   @derive {Inspect, only: [:provider, :tenant, :mode]}
+
+  @timeout Application.compile_env(:mishka_pay, :credentials_timeout, 5_000)
 
   guardedstruct authorized_fields: true do
     field :provider, String.t(),
       enforce: true,
-      derives: "sanitize(trim) validate(string, not_empty)",
-      validator: {Required, :call}
+      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
     field :tenant, term()
 
     field :mode, :test | :live,
       default: :test,
-      derives: "validate(enum=Atom[test::live])",
+      derives: "validate(not_nil_value, enum=Atom[test::live])",
       validator: {__MODULE__, :mode}
 
     field :secret_key, String.t(),
       enforce: true,
-      derives: "sanitize(trim) validate(string, not_empty)",
-      validator: {Required, :call}
+      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
     field :publishable_key, String.t(), derives: "sanitize(trim) validate(string)"
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
@@ -90,17 +91,66 @@ defmodule MishkaPay.Credentials do
 
   @doc """
   The keys of `provider` for `tenant`, or a `MishkaPay.Errors.MissingCredentials` error when no
-  plugin answers, the event cannot run or a plugin raises. An answer that is not valid keys is an
-  `:invalid` class error naming the field.
+  plugin answers, the event cannot run, a plugin raises, exits or throws, or no answer comes within
+  the time limit. An answer that is not valid keys is an `:invalid` class error naming the field.
+
+  The plugins run in a task under `MishkaPay.TaskSupervisor`, not linked to the caller, so a
+  plugin that fails or hangs never takes the caller down. The limit is `opts[:timeout]`, or
+  `config :mishka_pay, credentials_timeout: ms`, 5 seconds by default; `0` gives no plugin time to
+  answer, and anything other than milliseconds or `:infinity` raises an `ArgumentError`.
+
+  Each fetch is a telemetry span, `[:mishka_pay, :credentials, :start | :stop]`, with `:provider`
+  and `:tenant`, and on `:stop` the `:outcome`: `:ok`, `:invalid`, or the missing-keys reason
+  (`:no_answer`, `:cannot_run`, `:raised`, `:exited`, `:timeout`). Never a key.
   """
-  @spec fetch(String.t(), term()) :: {:ok, t()} | {:error, Splode.Error.t()}
-  def fetch(provider, tenant \\ nil) when is_binary(provider) do
-    Events.credentials()
-    |> Hook.call(%{provider: provider, tenant: tenant, credentials: nil},
-      cannot_run: :cannot_run,
-      raised: :raised
+  @spec fetch(String.t(), term(), keyword()) :: {:ok, t()} | {:error, Splode.Error.t()}
+  def fetch(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    timeout = opts |> Keyword.get(:timeout, @timeout) |> timeout!()
+    meta = %{provider: provider, tenant: tenant}
+
+    :telemetry.span([:mishka_pay, :credentials], meta, fn ->
+      result = ask(provider, tenant, timeout)
+      {result, Map.put(meta, :outcome, outcome(result))}
+    end)
+  end
+
+  defp ask(provider, tenant, timeout) do
+    task =
+      Task.Supervisor.async_nolink(MishkaPay.TaskSupervisor, fn ->
+        Hook.call(Events.credentials(), %{provider: provider, tenant: tenant, credentials: nil},
+          cannot_run: :cannot_run,
+          raised: :raised
+        )
+      end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, answer} -> answer(answer, provider, tenant)
+      {:exit, reason} -> exited(provider, tenant, reason)
+      nil -> missing(provider, tenant, :timeout)
+    end
+  end
+
+  defp outcome({:ok, _keys}), do: :ok
+  defp outcome({:error, %Errors.MissingCredentials{reason: reason}}), do: reason
+  defp outcome({:error, _invalid}), do: :invalid
+
+  defp timeout!(:infinity), do: :infinity
+  defp timeout!(ms) when is_integer(ms) and ms >= 0, do: ms
+
+  defp timeout!(other),
+    do:
+      raise(
+        ArgumentError,
+        "timeout is milliseconds (0 or more) or :infinity, got: #{inspect(other)}"
+      )
+
+  defp exited(provider, tenant, reason) do
+    Logger.warning(
+      "mishka_pay: a #{provider} keys plugin for tenant #{inspect(tenant)} exited: " <>
+        Exception.format_exit(reason)
     )
-    |> answer(provider, tenant)
+
+    missing(provider, tenant, :exited)
   end
 
   # `:provider` and `:tenant` come from the call, whichever key form the answer used, and an
@@ -137,7 +187,7 @@ defmodule MishkaPay.Credentials do
   def mode(:mode, mode) when mode in ["test", "live"],
     do: {:ok, :mode, String.to_existing_atom(mode)}
 
-  def mode(:mode, mode), do: Required.call(:mode, mode)
+  def mode(:mode, mode), do: {:ok, :mode, mode}
 
   defp missing(provider, tenant, reason),
     do:
