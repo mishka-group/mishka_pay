@@ -34,10 +34,8 @@ defmodule MishkaPay.Credentials do
 
   use GuardedStruct
 
-  require Logger
-
-  alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Errors, Events}
+  alias MishkaPay.Helpers.Plugins
 
   @derive {Inspect, only: [:provider, :tenant, :mode]}
 
@@ -115,18 +113,11 @@ defmodule MishkaPay.Credentials do
   end
 
   defp ask(provider, tenant, timeout) do
-    task =
-      Task.Supervisor.async_nolink(MishkaPay.TaskSupervisor, fn ->
-        Hook.call(Events.credentials(), %{provider: provider, tenant: tenant, credentials: nil},
-          cannot_run: :cannot_run,
-          raised: :raised
-        )
-      end)
+    state = %{provider: provider, tenant: tenant, credentials: nil}
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+    case Plugins.call(Events.credentials(), state, timeout) do
       {:ok, answer} -> answer(answer, provider, tenant)
-      {:exit, reason} -> exited(provider, tenant, reason)
-      nil -> missing(provider, tenant, :timeout)
+      {:error, reason} -> missing(provider, tenant, reason)
     end
   end
 
@@ -144,15 +135,6 @@ defmodule MishkaPay.Credentials do
         "timeout is milliseconds (0 or more) or :infinity, got: #{inspect(other)}"
       )
 
-  defp exited(provider, tenant, reason) do
-    Logger.warning(
-      "mishka_pay: a #{provider} keys plugin for tenant #{inspect(tenant)} exited: " <>
-        Exception.format_exit(reason)
-    )
-
-    missing(provider, tenant, :exited)
-  end
-
   # `:provider` and `:tenant` come from the call, whichever key form the answer used, and an
   # `extra` given as nil takes its default.
   defp answer(%{credentials: %{} = keys}, provider, tenant) do
@@ -165,9 +147,6 @@ defmodule MishkaPay.Credentials do
   end
 
   defp answer(%{credentials: nil}, provider, tenant), do: missing(provider, tenant, :no_answer)
-
-  defp answer(reason, provider, tenant) when reason in [:cannot_run, :raised],
-    do: missing(provider, tenant, reason)
 
   defp answer(%{credentials: _not_a_map}, _provider, _tenant) do
     Errors.from_builder(

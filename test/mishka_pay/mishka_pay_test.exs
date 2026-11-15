@@ -69,6 +69,20 @@ defmodule MishkaPayTest do
              MishkaPay.checkout(%{@checkout | reference: "out-of-stock"})
   end
 
+  @tag :capture_log
+  test "a gate that answers junk, drops the checkout or exits refuses the sale" do
+    MishkaPay.Test.start_plugin!(StockGate)
+
+    for {reference, reason} <- [
+          {"gate-junk", :invalid_answer},
+          {"gate-no-checkout", :invalid_answer},
+          {"gate-exit", :exited}
+        ] do
+      assert {:error, %Errors.Refused{reason: ^reason}} =
+               MishkaPay.checkout(%{@checkout | reference: reference})
+    end
+  end
+
   test "a payment is read again from the provider, and a refund is made there" do
     assert {:ok, %Payment{id: "acme_paid", status: :paid}} =
              MishkaPay.fetch_payment("acme", "acme_paid", "site-a")

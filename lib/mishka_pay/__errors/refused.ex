@@ -9,7 +9,8 @@ defmodule MishkaPay.Errors.Refused do
   answer, which counts as no.
 
     * `:operation`: `:checkout`.
-    * `:reason`: the plugin's own words, or `:cannot_run` / `:raised`.
+    * `:reason`: the plugin's own words, or why it gave none: `:cannot_run`, `:raised`,
+      `:exited`, `:timeout`, `:invalid_answer`.
   """
 
   use Splode.Error, fields: [:operation, :reason], class: :invalid

@@ -28,8 +28,11 @@ defmodule MishkaPay do
 
   `checkout/1` fires `mishka_pay:checkout:before` (`MishkaPay.Events.checkout_before/0`) with the
   checked checkout. A host plugin may change it (add metadata, set the customer) or refuse it with
-  a reason, which comes back as a `MishkaPay.Errors.Refused` error. A plugin that cannot run or
-  raises refuses too: a sale never goes ahead on a gate that did not answer.
+  a reason, which comes back as a `MishkaPay.Errors.Refused` error. A gate that does not answer
+  refuses too, with the reason why: it cannot run, raises, exits or throws, gives no answer within
+  `config :mishka_pay, checkout_gate_timeout: ms` (5 seconds), or answers something that is not
+  a checkout (`:invalid_answer`). A sale never goes ahead on a gate that did not say yes. The gate
+  runs like the keys plugins, in a task that cannot take the caller down.
 
   ## Telemetry
 
@@ -38,8 +41,10 @@ defmodule MishkaPay do
   `:provider`, `:unknown`). Never a key or a buyer's details.
   """
 
-  alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Checkout, Credentials, Errors, Events, Provider, Refund}
+  alias MishkaPay.Helpers.Plugins
+
+  @gate_timeout Application.compile_env(:mishka_pay, :checkout_gate_timeout, 5_000)
 
   @doc "Opens a checkout from `attrs` (see `MishkaPay.Checkout`) and answers it with the provider's page."
   @spec checkout(map()) :: {:ok, Checkout.t()} | {:error, Splode.Error.t()}
@@ -89,12 +94,15 @@ defmodule MishkaPay do
   end
 
   defp before_checkout(checkout) do
-    Events.checkout_before()
-    |> Hook.call(%{checkout: checkout, refused: nil}, cannot_run: :cannot_run, raised: :raised)
-    |> case do
-      %{refused: nil, checkout: %Checkout{} = checkout} -> {:ok, checkout}
-      %{refused: reason} when not is_nil(reason) -> refused(reason)
-      reason when reason in [:cannot_run, :raised] -> refused(reason)
+    case Plugins.call(
+           Events.checkout_before(),
+           %{checkout: checkout, refused: nil},
+           @gate_timeout
+         ) do
+      {:ok, %{refused: nil, checkout: %Checkout{} = checkout}} -> {:ok, checkout}
+      {:ok, %{refused: reason}} when not is_nil(reason) -> refused(reason)
+      {:ok, _not_an_answer} -> refused(:invalid_answer)
+      {:error, reason} -> refused(reason)
     end
   end
 
