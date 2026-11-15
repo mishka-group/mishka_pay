@@ -20,12 +20,13 @@ defmodule MishkaPay.Money do
   use GuardedStruct
 
   alias MishkaPay.Errors
+  alias MishkaPay.Helpers.Required
 
   guardedstruct authorized_fields: true do
     field(:amount, non_neg_integer(),
       enforce: true,
       derives: "validate(integer, min_len=0)",
-      validator: {__MODULE__, :present}
+      validator: {Required, :call}
     )
 
     field(:currency, String.t(),
@@ -40,16 +41,10 @@ defmodule MishkaPay.Money do
   def new(amount, currency),
     do: Errors.from_builder(builder(%{amount: amount, currency: currency}))
 
-  # guarded_struct skips every `derives` op, `not_nil_value` included, on a field given as nil, and
-  # `enforce` only asks for the key. A validator is called with nil, so it refuses it here.
-  @doc false
-  def present(field, nil), do: {:error, field, "The #{field} field is required"}
-  def present(field, value), do: {:ok, field, value}
-
   # A validator runs before `derives`, so the code is not trimmed or upper case yet; anything else
   # not a string is left to `validate(string)`.
   @doc false
-  def currency(:currency, nil), do: present(:currency, nil)
+  def currency(:currency, nil), do: Required.call(:currency, nil)
 
   def currency(:currency, code) when is_binary(code) do
     case Regex.match?(~r/^\s*[A-Za-z]{3}\s*$/, code) do
