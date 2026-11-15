@@ -8,11 +8,17 @@ defmodule MishkaPay.Money do
   amount and an ISO 4217 currency, with every currency's decimal places, cash rounding and
   formatting in any language from CLDR (`Money.to_string(money, locale: :de)`).
 
+  Only English locale data ships with `localize`. A project that formats money in other languages
+  downloads their data once at build time, for example `mix localize.download_locales de fr`, and
+  names them in `config :localize, supported_locales: [:en, :de, :fr]`. Without that,
+  `Money.to_string/2` answers in English, with no error.
+
   This module is the check Mishka Pay puts around it before money reaches a provider:
 
     * the amount is a `Decimal`, an integer or a string; a float is refused, since `0.1 + 0.2` is
       not `0.3`;
     * the amount is zero or more: a refund is its own record with a positive amount;
+    * the amount has at most twenty digits before the decimal point;
     * the amount has no more decimal places than its currency (two for USD, none for JPY, three
       for KWD), and is kept with exactly those places, so `5` and `"5.00"` dollars are equal;
     * the currency is a known ISO 4217 code, in any case and with spaces trimmed.
@@ -25,6 +31,10 @@ defmodule MishkaPay.Money do
   """
 
   alias MishkaPay.Errors
+
+  # More than any price, and well inside Decimal's default precision of 28 digits, which every
+  # sum and rounding of the amount runs in.
+  @max_digits 20
 
   @doc "Checked money of `amount` in `currency`."
   @spec new(Decimal.t() | integer() | String.t(), String.t() | atom()) ::
@@ -83,13 +93,23 @@ defmodule MishkaPay.Money do
     end
   end
 
-  # `Decimal.add/2` turns a negative zero into zero.
   defp non_negative(decimal) do
-    case Decimal.negative?(decimal) do
-      true -> invalid(:amount, "The amount field must be zero or more")
-      false -> {:ok, Decimal.add(decimal, 0)}
+    cond do
+      Decimal.negative?(decimal) -> invalid(:amount, "The amount field must be zero or more")
+      whole_digits(decimal) > @max_digits -> invalid(:amount, "The amount field is too large")
+      true -> {:ok, positive_zero(decimal)}
     end
   end
+
+  # Digits before the decimal point, counted on the coefficient and exponent: no arithmetic, so a
+  # huge exponent such as "1e400" is measured without raising.
+  defp whole_digits(%Decimal{coef: 0}), do: 0
+
+  defp whole_digits(%Decimal{coef: coef, exp: exp}),
+    do: max(length(Integer.digits(coef)) + exp, 0)
+
+  defp positive_zero(%Decimal{coef: 0} = zero), do: %{zero | sign: 1}
+  defp positive_zero(decimal), do: decimal
 
   defp money(code, amount) do
     case Money.new(code, amount) do

@@ -24,6 +24,20 @@ defmodule MishkaPay.MoneyTest do
     end
   end
 
+  test "an amount too large to be a price is refused, never a crash" do
+    for amount <- ["1e100", "1e400", Decimal.new("1E+400"), String.duplicate("9", 21)] do
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount} = error]}} =
+               Money.new(amount, "USD")
+
+      assert error.message =~ "too large"
+    end
+
+    assert {:ok, _money} = Money.new(String.duplicate("9", 20) <> ".99", "USD")
+
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
+             Money.from_minor(Integer.pow(10, 40), "USD")
+  end
+
   test "an amount with more decimal places than its currency has is refused" do
     assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
              Money.new("19.999", "USD")
