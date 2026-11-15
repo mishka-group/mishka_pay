@@ -75,25 +75,46 @@ defmodule MishkaPay.CredentialsTest do
     assert keys.extra == %{}
   end
 
+  defp watch_fetches,
+    do: :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :credentials, :stop]])
+
   @tag :capture_log
   test "a plugin that exits or throws is a missing-keys error, and the caller lives on" do
     MishkaPay.Test.start_plugin!(SiteKeys)
+    ref = watch_fetches()
 
     for tenant <- ["site-exit", "site-throw"] do
       assert {:error, %Errors.MissingCredentials{reason: :exited}} =
                Credentials.fetch("acme", tenant)
-    end
 
-    assert Process.alive?(self())
+      assert_received {[:mishka_pay, :credentials, :stop], ^ref, _,
+                       %{tenant: ^tenant, outcome: :exited}}
+    end
   end
 
+  # No time passes here: with a limit of 0 the hanging plugin cannot answer, and the stop event
+  # says why the fetch ended.
   test "a plugin that never answers is stopped at the time limit" do
     MishkaPay.Test.start_plugin!(SiteKeys)
+    ref = watch_fetches()
 
     assert {:error, %Errors.MissingCredentials{reason: :timeout}} =
-             Credentials.fetch("acme", "site-hang", timeout: 50)
+             Credentials.fetch("acme", "site-hang", timeout: 0)
 
-    assert {:ok, _keys} = Credentials.fetch("acme", "site-a", timeout: 50)
+    assert_received {[:mishka_pay, :credentials, :stop], ^ref, _,
+                     %{tenant: "site-hang", outcome: :timeout}}
+  end
+
+  test "every fetch tells its outcome, never a key" do
+    MishkaPay.Test.start_plugin!(SiteKeys)
+    ref = watch_fetches()
+
+    assert {:ok, _keys} = Credentials.fetch("acme", "site-a")
+
+    assert_received {[:mishka_pay, :credentials, :stop], ^ref, _,
+                     %{tenant: "site-a", outcome: :ok} = meta}
+
+    refute inspect(meta) =~ "sk_test"
   end
 
   test "a time limit that is not milliseconds or :infinity is refused" do

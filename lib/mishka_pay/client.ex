@@ -29,7 +29,10 @@ defmodule MishkaPay.Client do
       that header: `idempotency_key` when the caller gives one (derived from its own operation, so a
       repeated call is the same call), a random one otherwise. Every retry sends the same key.
     * **Telemetry.** `[:mishka_pay, :request, :start | :stop | :exception]`, with `:provider`,
-      `:method`, `:path` and `:idempotency_key`, and `:status` on `:stop`. Never a key or a body.
+      `:method`, `:path` and `:idempotency_key`, and `:status` on `:stop`; and
+      `[:mishka_pay, :request, :retry]` before each retry, with the `:wait` in milliseconds, the
+      `:attempt`, the `:status` or network `:reason`, and the `:retry_after` the provider asked
+      for. Never a key or a body.
 
   `request/1` answers `{:ok, %Req.Response{}}` for any HTTP status: the adapter reads its
   provider's own error body. A request that never got an answer is a
@@ -173,14 +176,38 @@ defmodule MishkaPay.Client do
   defp retry(%{method: method, idempotency_key: nil}) when method in @writes,
     do: false
 
-  defp retry(%{retry_delay: base, max_wait: most}), do: &retry?(&1, &2, {base, most})
+  defp retry(%{retry_delay: base, max_wait: most} = spec),
+    do: &retry?(&1, &2, {base, most, Map.take(spec, [:provider, :method, :path])})
 
   defp retry?(request, %Req.Response{status: status} = response, waits)
        when status in @retry_statuses,
-       do: {:delay, response |> retry_after() |> wait(request, waits)}
+       do: delay(request, retry_after(response), %{status: status}, waits)
 
-  defp retry?(request, %Req.TransportError{}, waits), do: {:delay, wait(nil, request, waits)}
+  defp retry?(request, %Req.TransportError{reason: reason}, waits),
+    do: delay(request, nil, %{reason: reason}, waits)
+
   defp retry?(_request, _answer, _waits), do: false
+
+  # Announces each retry Req will make, with the wait it was given, so a caller (or a test) sees
+  # it without timing anything.
+  defp delay(request, asked, cause, {_base, _most, meta} = waits) do
+    attempt = Req.Request.get_private(request, :req_retry_count, 0)
+    wait = wait(asked, request, waits)
+
+    case attempt < Req.Request.get_option(request, :max_retries, 0) do
+      true ->
+        :telemetry.execute(
+          [:mishka_pay, :request, :retry],
+          %{wait: wait},
+          meta |> Map.merge(cause) |> Map.merge(%{attempt: attempt + 1, retry_after: asked})
+        )
+
+      false ->
+        :ok
+    end
+
+    {:delay, wait}
+  end
 
   defp retry_after(response) do
     with [value | _] <- Req.Response.get_header(response, "retry-after"),
@@ -191,10 +218,10 @@ defmodule MishkaPay.Client do
     end
   end
 
-  defp wait(nil, request, {base, most}),
+  defp wait(nil, request, {base, most, _meta}),
     do: min(base * Integer.pow(2, Req.Request.get_private(request, :req_retry_count, 0)), most)
 
-  defp wait(asked, _request, {_base, most}), do: min(asked, most)
+  defp wait(asked, _request, {_base, most, _meta}), do: min(asked, most)
 
   @doc false
   def base_url(:base_url, url) when is_binary(url) do

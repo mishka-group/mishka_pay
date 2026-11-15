@@ -98,11 +98,23 @@ defmodule MishkaPay.Credentials do
   plugin that fails or hangs never takes the caller down. The limit is `opts[:timeout]`, or
   `config :mishka_pay, credentials_timeout: ms`, 5 seconds by default; `0` gives no plugin time to
   answer, and anything other than milliseconds or `:infinity` raises an `ArgumentError`.
+
+  Each fetch is a telemetry span, `[:mishka_pay, :credentials, :start | :stop]`, with `:provider`
+  and `:tenant`, and on `:stop` the `:outcome`: `:ok`, `:invalid`, or the missing-keys reason
+  (`:no_answer`, `:cannot_run`, `:raised`, `:exited`, `:timeout`). Never a key.
   """
   @spec fetch(String.t(), term(), keyword()) :: {:ok, t()} | {:error, Splode.Error.t()}
   def fetch(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     timeout = opts |> Keyword.get(:timeout, @timeout) |> timeout!()
+    meta = %{provider: provider, tenant: tenant}
 
+    :telemetry.span([:mishka_pay, :credentials], meta, fn ->
+      result = ask(provider, tenant, timeout)
+      {result, Map.put(meta, :outcome, outcome(result))}
+    end)
+  end
+
+  defp ask(provider, tenant, timeout) do
     task =
       Task.Supervisor.async_nolink(MishkaPay.TaskSupervisor, fn ->
         Hook.call(Events.credentials(), %{provider: provider, tenant: tenant, credentials: nil},
@@ -117,6 +129,10 @@ defmodule MishkaPay.Credentials do
       nil -> missing(provider, tenant, :timeout)
     end
   end
+
+  defp outcome({:ok, _keys}), do: :ok
+  defp outcome({:error, %Errors.MissingCredentials{reason: reason}}), do: reason
+  defp outcome({:error, _invalid}), do: :invalid
 
   defp timeout!(:infinity), do: :infinity
   defp timeout!(ms) when is_integer(ms) and ms >= 0, do: ms
