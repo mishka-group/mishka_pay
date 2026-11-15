@@ -29,25 +29,32 @@ defmodule MishkaPay.Webhook do
   The provider sends a message again until it gets a 2xx, so the status says whether to:
 
     * `200` the event was handed over and no listener said it failed;
-    * `400` a signature that cannot be trusted (`MishkaPay.Errors.BadSignature`) or a body that
-      cannot be read: sending it again would not help;
+    * `400` a message that cannot be trusted: no keys or no webhook secret for the tenant, a
+      signature that does not match (`MishkaPay.Errors.BadSignature`) or a body that cannot be
+      read. The same answer for all of them, so a stranger cannot tell which tenants exist;
     * `404` no such provider installed, or one without `:webhook`;
-    * `500` no keys for the tenant, or a listener that failed, raised, exited or took longer than
-      `config :mishka_pay, webhook_timeout: ms` (15 seconds): the provider tries again later.
+    * `413` a body over 1 MB;
+    * `500` a checked event that a listener failed to take: it set `:failed`, raised, exited or
+      took longer than `config :mishka_pay, webhook_timeout: ms` (15 seconds).
+
+  Providers send a message again on any status but 2xx, so a tenant whose keys come later still
+  gets its events.
 
   ## Listeners
 
   A listener is a mishka_installer plugin on `mishka_pay:webhook:received`. It gets `%{event:
   event, failed: nil}` and answers it with `:failed` set to a reason when it could not take the
-  event. A provider may send one event twice and in any order: a listener keeps what it did by
+  event; anything but `nil` there counts as failed. A provider may send one event twice and in any order: a listener keeps what it did by
   `event.id` and reads the object again from the provider. Mishka Pay's Ash inbox (stage 4) is
   such a listener. The listeners run like the keys plugins, in a task that cannot take the request
   down.
 
   ## Telemetry
 
-  `[:mishka_pay, :webhook, :start | :stop]` with `:provider` and `:tenant`, and on `:stop` the
-  `:status`, the `:outcome` and the event's `:type` and `:id` when there is one. Never a body.
+  `[:mishka_pay, :webhook, :start | :stop]` with `:provider`, and on `:stop` the `:status`, the
+  `:outcome`, and for a checked event its `:tenant`, `:type` and `:id`. A tenant from the path is
+  reported only once the signature proves it, so strangers cannot fill metrics with made-up ones.
+  Never a body.
   """
 
   @behaviour Plug
@@ -60,7 +67,16 @@ defmodule MishkaPay.Webhook do
   @max_body 1_000_000
 
   @impl Plug
-  def init(opts), do: Keyword.update(opts, :at, [], &String.split(&1, "/", trim: true))
+  def init(opts) do
+    case opts |> Keyword.get(:at, "") |> String.split("/", trim: true) do
+      [] ->
+        raise ArgumentError,
+              ~s|MishkaPay.Webhook needs a path of its own, such as at: "/pay/webhooks"|
+
+      at ->
+        Keyword.put(opts, :at, at)
+    end
+  end
 
   @impl Plug
   def call(conn, opts) do
@@ -79,7 +95,7 @@ defmodule MishkaPay.Webhook do
           {:ok, binary(), Plug.Conn.t()} | {:more, binary(), Plug.Conn.t()} | {:error, term()}
   def read_body(conn, opts, prefix) do
     with {status, body, conn} when status in [:ok, :more] <- Plug.Conn.read_body(conn, opts) do
-      case String.starts_with?(conn.request_path, prefix) do
+      case String.starts_with?(conn.request_path, String.trim_trailing(prefix, "/") <> "/") do
         true ->
           {status, body,
            put_private(
@@ -103,7 +119,7 @@ defmodule MishkaPay.Webhook do
   end
 
   defp handle(conn, provider, tenant) do
-    meta = %{provider: provider, tenant: tenant}
+    meta = %{provider: provider}
 
     {conn, status} =
       :telemetry.span([:mishka_pay, :webhook], meta, fn ->
@@ -121,8 +137,8 @@ defmodule MishkaPay.Webhook do
          {:ok, event} <- module.verify_webhook(payload, conn.req_headers, keys) do
       event = %{event | tenant: tenant}
 
-      {conn, delivered(event), %{outcome: outcome(event), type: event.type, id: event.id}}
-      |> then(fn {conn, status, extra} -> {conn, status, %{extra | outcome: outcome(status)}} end)
+      status = delivered(event)
+      {conn, status, %{outcome: outcome(status), tenant: tenant, type: event.type, id: event.id}}
     else
       {:error, :too_large, conn} -> {conn, 413, %{outcome: :too_large}}
       {:error, error} -> {conn, status(error), %{outcome: reason(error)}}
@@ -158,8 +174,7 @@ defmodule MishkaPay.Webhook do
 
   defp status(%Errors.UnknownProvider{}), do: 404
   defp status(%Errors.Unsupported{}), do: 404
-  defp status(%Errors.MissingCredentials{}), do: 500
-  defp status(_untrusted), do: 400
+  defp status(_untrusted_or_unknown_tenant), do: 400
 
   defp reason(%Errors.BadSignature{reason: reason}), do: reason
   defp reason(%Errors.UnknownProvider{}), do: :unknown_provider

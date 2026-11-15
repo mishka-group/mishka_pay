@@ -153,7 +153,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc "A Stripe event (`object: \"event\"`) as a `MishkaPay.Event`, with what it is about."
   @spec event(map()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
   def event(event) do
-    object = get_in(event, ["data", "object"]) || %{}
+    object = object_of(event)
 
     %{
       provider: "stripe",
@@ -169,6 +169,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  defp object_of(%{"data" => %{"object" => %{} = object}}), do: object
+  defp object_of(_no_object), do: %{}
+
   defp expanded(%{} = object), do: object
   defp expanded(_id_or_nil), do: %{}
 
@@ -176,6 +179,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp id_of(id) when is_binary(id), do: id
   defp id_of(_none), do: nil
 
-  defp time(seconds) when is_integer(seconds), do: DateTime.from_unix!(seconds)
+  defp time(seconds) when is_integer(seconds) do
+    case DateTime.from_unix(seconds) do
+      {:ok, time} -> time
+      {:error, _out_of_range} -> nil
+    end
+  end
+
   defp time(_none), do: nil
 end

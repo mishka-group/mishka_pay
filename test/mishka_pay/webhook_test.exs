@@ -121,17 +121,42 @@ defmodule MishkaPay.WebhookTest do
     assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{status: 500, outcome: :failed}}
   end
 
-  test "an unknown provider is 404, missing keys 500, and other methods and paths are not ours" do
+  test "an unknown provider is 404, an unknown tenant 400 like a bad signature, and other methods and paths are not ours" do
     body = payload()
 
     assert post("/pay/webhooks/acme/site-a", body, signed(body)).status == 404
-    assert post("/pay/webhooks/stripe/site-without-keys", body, signed(body)).status == 500
+    assert post("/pay/webhooks/stripe/site-without-keys", body, signed(body)).status == 400
 
     assert (conn(:get, "/pay/webhooks/stripe/site-a") |> Webhook.call(@opts)).status == 405
 
     elsewhere = conn(:post, "/checkout", "{}") |> Webhook.call(@opts)
     refute elsewhere.halted
     assert elsewhere.status == nil
+  end
+
+  test "a signed event with an odd shape or time is refused or read, never a crash" do
+    for changes <- [%{"data" => "x"}, %{"data" => %{"object" => [1]}}, %{"data" => []}] do
+      body = payload(changes)
+      assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+      assert_received {:webhook_event, %Event{object_id: nil}}
+    end
+
+    body = payload(%{"created" => 99_999_999_999_999_999_999})
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+    assert_received {:webhook_event, %Event{created_at: nil}}
+  end
+
+  test "a tenant from the path reaches telemetry only once the signature proves it", %{ref: ref} do
+    body = payload()
+    assert post("/pay/webhooks/stripe/made-up-tenant", body, signed(body)).status == 400
+    assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, meta}
+    refute Map.has_key?(meta, :tenant)
+  end
+
+  test "the plug must be given a path of its own" do
+    for opts <- [[], [at: "/"], [at: ""]] do
+      assert_raise ArgumentError, ~r/path of its own/, fn -> Webhook.init(opts) end
+    end
   end
 
   test "a body too large to be a webhook is refused before anything reads it" do
