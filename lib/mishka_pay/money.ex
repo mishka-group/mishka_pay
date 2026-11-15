@@ -13,7 +13,8 @@ defmodule MishkaPay.Money do
   The amount takes a `Decimal`, an integer or a string. A float is refused: `0.1 + 0.2` is not
   `0.3`, and money must be exact. An amount is never below zero (a refund is its own record with a
   positive amount) and has no more decimal places than its currency: two for USD, none for JPY,
-  three for KWD.
+  three for KWD. The amount is kept with exactly its currency's places, so `5` and `"5.00"` dollars
+  are the same struct.
 
   Providers count in the smallest unit (cents). `to_minor/1` and `from_minor/2` convert, with the
   ISO 4217 number of decimal places of each currency; a provider whose own count differs for a
@@ -80,8 +81,11 @@ defmodule MishkaPay.Money do
   @spec from_minor(integer(), String.t()) :: {:ok, t()} | {:error, Splode.Error.t()}
   def from_minor(minor, currency) when is_integer(minor) and is_binary(currency) do
     code = currency |> String.trim() |> String.upcase()
-    new(Decimal.new(1, minor, -digits(code)), code)
+    new(Decimal.new(sign(minor), abs(minor), -digits(code)), code)
   end
+
+  defp sign(minor) when minor < 0, do: -1
+  defp sign(_minor), do: 1
 
   @doc "The amount in the currency's smallest unit, as a provider takes it: 19.99 dollars is 1999."
   @spec to_minor(t()) :: integer()
@@ -98,17 +102,23 @@ defmodule MishkaPay.Money do
   def amount(:amount, value) when is_float(value),
     do: {:error, :amount, "The amount field must be exact: a Decimal, an integer or a string"}
 
-  def amount(:amount, value) do
-    case Decimal.cast(value) do
-      {:ok, decimal} -> non_negative(decimal)
-      :error -> {:error, :amount, "The amount field must be a number"}
+  def amount(:amount, value) when is_binary(value), do: amount(:amount, String.trim(value), :cast)
+  def amount(:amount, value), do: amount(:amount, value, :cast)
+
+  defp amount(:amount, value, :cast) do
+    with {:ok, decimal} <- Decimal.cast(value),
+         false <- Decimal.inf?(decimal) or Decimal.nan?(decimal) do
+      non_negative(decimal)
+    else
+      _not_a_number -> {:error, :amount, "The amount field must be a number"}
     end
   end
 
+  # `Decimal.add/2` turns a negative zero into zero.
   defp non_negative(decimal) do
-    case Decimal.negative?(decimal) or Decimal.inf?(decimal) or Decimal.nan?(decimal) do
+    case Decimal.negative?(decimal) do
       true -> {:error, :amount, "The amount field must be zero or more"}
-      false -> {:ok, :amount, decimal}
+      false -> {:ok, :amount, Decimal.add(decimal, 0)}
     end
   end
 
@@ -133,7 +143,7 @@ defmodule MishkaPay.Money do
 
     case places(amount) <= allowed do
       true ->
-        {:ok, attrs}
+        {:ok, %{attrs | amount: Decimal.round(amount, allowed)}}
 
       false ->
         {:error,

@@ -18,8 +18,20 @@ defmodule MishkaPay.MoneyTest do
     assert {:ok, %Money{}} = Money.new(Decimal.new("0"), "JPY")
   end
 
+  test "equal amounts are the same struct, written with the currency's places" do
+    assert Money.new(5, "USD") == Money.new(" 5.00 ", "usd")
+    assert {:ok, %Money{amount: amount}} = Money.new("-0", "USD")
+    refute Decimal.negative?(amount)
+    assert Decimal.to_string(amount) == "0.00"
+  end
+
+  test "a negative smallest unit from a provider is an error, never a crash" do
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
+             Money.from_minor(-5, "USD")
+  end
+
   test "a float, a negative, a word or a missing amount is refused on the amount field" do
-    for amount <- [19.99, -1, "-0.5", "ten", nil, "Infinity"] do
+    for amount <- [19.99, -1, "-0.5", "ten", nil, "Infinity", "NaN"] do
       assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
                Money.new(amount, "USD")
     end
