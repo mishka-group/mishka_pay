@@ -215,11 +215,19 @@ defmodule MishkaPay.ClientTest do
     for {field, attrs} <- [
           base_url: %{base_url: "nothing"},
           base_url: %{base_url: "ftp://api.acme.test"},
+          base_url: %{base_url: "https://user:pw@api.acme.test"},
+          base_url: %{base_url: "https://api.acme.test?a=1"},
           path: %{path: "https://evil.test/x"},
           path: %{path: "//evil.test/x"},
           path: %{path: "no-slash"},
           path: %{path: "/v1/x?key=secret"},
+          path: %{path: "/a\nb"},
+          path: %{path: "/a/../b"},
+          path: %{path: "/%2F%2Fevil"},
+          path: %{path: "/a\\b"},
           params: %{params: [a: [1, 2]]},
+          params: %{params: %{a: %{b: 1}}},
+          params: %{params: [:a]},
           idempotency_header: %{idempotency_header: ""},
           json: %{form: [a: 1], json: %{a: 1}}
         ] do

@@ -36,8 +36,9 @@ defmodule MishkaPay.Client do
   `MishkaPay.Errors.Unreachable` error, and a description that is not valid an `:invalid` one.
   `inspect/1` leaves out `:auth`.
 
-  `base_url` is an `http` or `https` address and `path` starts with a single `/`, with no query
-  (`params` carries it), so a path can never send the request, and its auth, to another host.
+  `base_url` is an `http` or `https` address with no user, query or fragment, and `path` one plain
+  path from `/`: no query (`params` carries it), no control character, dot segment or encoded
+  slash. So a path can never send the request, and its auth, to another host or place.
   `form` and `json` are one or the other. Header names are compared without case.
 
   `:options` takes any other Req option, such as `plug: {Req.Test, MyTest}` in a test. It cannot
@@ -198,22 +199,31 @@ defmodule MishkaPay.Client do
   @doc false
   def base_url(:base_url, url) when is_binary(url) do
     case URI.parse(String.trim(url)) do
-      %URI{scheme: scheme, host: host}
+      %URI{scheme: scheme, host: host, userinfo: nil, query: nil, fragment: nil}
       when scheme in ["http", "https"] and host not in [nil, ""] ->
         {:ok, :base_url, url}
 
       _other ->
-        {:error, :base_url, "The base_url field must be an http or https address"}
+        {:error, :base_url,
+         "The base_url field must be an http or https address, with no user, query or fragment"}
     end
   end
 
   def base_url(:base_url, url), do: Required.call(:base_url, url)
 
+  # One plain path from the root: no second slash at the start, no query or fragment, no backslash,
+  # control character, dot segment or percent-encoded slash.
+  @unsafe_path ~r{\A//|[?#\\\x00-\x1f\x7f]|%2f|%5c|(\A|/)\.\.?(/|\z)}i
+
   @doc false
-  def path(:path, "/" <> rest = path) when is_binary(rest) do
-    case String.starts_with?(rest, "/") or String.contains?(path, ["?", "#", "\\"]) do
-      true -> {:error, :path, "The path field must be one path from the root, with no query"}
-      false -> {:ok, :path, path}
+  def path(:path, "/" <> _rest = path) do
+    case Regex.match?(@unsafe_path, path) do
+      true ->
+        {:error, :path,
+         "The path field must be one plain path from the root, with no query, dot segment or encoded slash"}
+
+      false ->
+        {:ok, :path, path}
     end
   end
 
@@ -227,7 +237,8 @@ defmodule MishkaPay.Client do
     URI.encode_query(params)
     {:ok, :params, params}
   rescue
-    ArgumentError -> {:error, :params, "The params field must hold plain values only"}
+    _not_encodable in [ArgumentError, Protocol.UndefinedError, FunctionClauseError] ->
+      {:error, :params, "The params field must hold plain values only"}
   end
 
   def params(:params, params), do: {:ok, :params, params}
