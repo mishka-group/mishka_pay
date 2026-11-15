@@ -44,7 +44,8 @@ defmodule MishkaPay.Provider do
   them does not compile:
 
     * `:checkout`: `checkout/2` and `fetch_payment/2`;
-    * `:refund`: `refund/2`.
+    * `:refund`: `refund/2`;
+    * `:webhook`: `verify_webhook/3`.
 
   Every operation takes a guarded_struct and the tenant's `MishkaPay.Credentials`, and answers a
   guarded_struct or a `MishkaPay.Errors` error. A project calls them through `MishkaPay`, which
@@ -97,9 +98,25 @@ defmodule MishkaPay.Provider do
   @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
 
-  @optional_callbacks offered?: 0, checkout: 2, fetch_payment: 2, refund: 2
+  @doc """
+  With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
+  the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
+  `MishkaPay.Errors.BadSignature` error.
+  """
+  @callback verify_webhook(
+              payload :: binary(),
+              headers :: [{String.t(), String.t()}],
+              MishkaPay.Credentials.t()
+            ) ::
+              {:ok, MishkaPay.Event.t()} | {:error, Splode.Error.t()}
 
-  @operations %{checkout: [checkout: 2, fetch_payment: 2], refund: [refund: 2]}
+  @optional_callbacks offered?: 0, checkout: 2, fetch_payment: 2, refund: 2, verify_webhook: 3
+
+  @operations %{
+    checkout: [checkout: 2, fetch_payment: 2],
+    refund: [refund: 2],
+    webhook: [verify_webhook: 3]
+  }
 
   @options [:id, :label, :capabilities, :priority]
 
@@ -170,6 +187,20 @@ defmodule MishkaPay.Provider do
   @doc "Lists what a capability asks a provider to define, such as `[checkout: 2, fetch_payment: 2]`."
   @spec operations(capability()) :: keyword(pos_integer())
   def operations(capability), do: Map.get(@operations, capability, [])
+
+  @doc """
+  The offered provider `id` when it has `capability`, or an `UnknownProvider` or `Unsupported`
+  error.
+  """
+  @spec capable(String.t(), capability()) :: {:ok, module()} | {:error, Splode.Error.t()}
+  def capable(id, capability) do
+    with {:ok, provider} <- fetch(id) do
+      case capability in provider.capabilities() do
+        true -> {:ok, provider}
+        false -> {:error, Errors.Unsupported.exception(provider: id, operation: capability)}
+      end
+    end
+  end
 
   @doc "Every installed provider, the first of each id. None when the event cannot run."
   @spec all() :: [module()]

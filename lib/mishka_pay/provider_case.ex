@@ -11,7 +11,7 @@ defmodule MishkaPay.ProviderCase do
       end
 
   It checks that the module implements every required callback of `MishkaPay.Provider`, that its
-  id, label and capabilities are valid, that each capability has its operations, and that once its plugin starts, `MishkaPay.Provider`
+  id, label and capabilities are valid, that each capability has its operations, that a webhook nobody signed is refused, and that once its plugin starts, `MishkaPay.Provider`
   finds it by its id (or lists it, when `offered?/0` keeps it out of the offered ones). Each stage
   of Mishka Pay adds the contract of its operations here, so a provider written today is checked
   against what tomorrow's calls expect.
@@ -40,6 +40,10 @@ defmodule MishkaPay.ProviderCase do
 
         test "declares a valid id, label and capabilities" do
           MishkaPay.ProviderCase.assert_declaration(@mishka_pay_provider)
+        end
+
+        test "with :webhook, refuses a message nobody signed instead of raising" do
+          MishkaPay.ProviderCase.assert_webhook_refuses_unsigned(@mishka_pay_provider)
         end
 
         test "is found once its plugin starts" do
@@ -104,6 +108,29 @@ defmodule MishkaPay.ProviderCase do
     case provider in Provider.offered() do
       true -> assert {:ok, ^provider} = Provider.fetch(provider.id())
       false -> refute function_exported?(provider, :offered?, 0) and provider.offered?()
+    end
+  end
+
+  @doc false
+  def assert_webhook_refuses_unsigned(provider) do
+    case :webhook in provider.capabilities() do
+      true ->
+        {:ok, keys} =
+          MishkaPay.Credentials.builder(%{
+            provider: provider.id(),
+            secret_key: "sk_contract",
+            webhook_secret: "whsec_contract"
+          })
+
+        for headers <- [[], [{"content-type", "application/json"}]],
+            payload <- ["", "{}", "not json"] do
+          assert {:error, %{__exception__: true}} =
+                   provider.verify_webhook(payload, headers, keys),
+                 "#{inspect(provider)}.verify_webhook/3 accepted an unsigned message"
+        end
+
+      false ->
+        :ok
     end
   end
 end

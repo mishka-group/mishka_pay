@@ -15,7 +15,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:webhook:received` | the Ash inbox, or the host | a provider event whose signature was checked |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
 
-  The webhook and payment events arrive with the stage that fires them.
+  The payment event arrives with the stage that fires it.
   """
 
   @doc "Every provider listens here and adds itself to the `providers` list the event carries."
@@ -33,4 +33,12 @@ defmodule MishkaPay.Events do
   """
   @spec checkout_before() :: String.t()
   def checkout_before, do: "mishka_pay:checkout:before"
+
+  @doc """
+  Listeners get every provider event whose signature was checked, as `%{event:
+  %MishkaPay.Event{}, failed: nil}`, and answer it with `:failed` set to a reason when they could
+  not take it, so the provider sends it again. See `MishkaPay.Webhook`.
+  """
+  @spec webhook_received() :: String.t()
+  def webhook_received, do: "mishka_pay:webhook:received"
 end

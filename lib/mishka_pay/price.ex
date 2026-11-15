@@ -12,7 +12,8 @@ defmodule MishkaPay.Price do
     * `:quantity`: 1 by default.
     * `:tax_code`: the provider's tax category of what is sold, such as Stripe's `"txcd_10302000"`
       for a downloaded e-book. A provider that is the merchant of record (Stripe Managed
-      Payments) needs it to work out the tax.
+      Payments) needs it to work out the tax. A price the provider already knows (`:id`) carries
+      its own tax code there, so this one is not sent with it.
     * `:id`: the provider's own id of a price it already knows (`price_...` at Stripe). With it,
       the provider's price is used and `:name` and `:amount` may be left out.
   """
