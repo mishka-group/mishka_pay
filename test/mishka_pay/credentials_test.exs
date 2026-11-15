@@ -58,6 +58,23 @@ defmodule MishkaPay.CredentialsTest do
              Credentials.fetch("acme", "site-extra-key")
   end
 
+  test "an answer that is not a map is refused, never a crash" do
+    Installer.start!(SiteKeys)
+
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :credentials}]}} =
+             Credentials.fetch("acme", "site-not-a-map")
+  end
+
+  test "an answer read from JSON works, and cannot change the provider it is for" do
+    Installer.start!(SiteKeys)
+
+    assert {:ok, keys} = Credentials.fetch("acme", "site-from-json")
+    assert keys.provider == "acme"
+    assert keys.mode == :live
+    assert keys.secret_key == "sk_live_json"
+    assert keys.extra == %{}
+  end
+
   @tag :capture_log
   test "a plugin that raises leaves the keys missing, never half read" do
     Installer.start!(SiteKeys)

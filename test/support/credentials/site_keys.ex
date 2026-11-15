@@ -18,5 +18,10 @@ defmodule MishkaPay.Test.SiteKeys do
   def credentials("acme", "site-unknown-mode"), do: %{secret_key: "sk_test_x", mode: :sandbox}
   def credentials("acme", "site-extra-key"), do: %{secret_key: "sk_test_x", token: "t"}
   def credentials("acme", "site-boom"), do: raise("the settings store is down")
+  def credentials("acme", "site-not-a-map"), do: [secret_key: "sk_test_x"]
+
+  def credentials("acme", "site-from-json"),
+    do: %{"secret_key" => "sk_live_json", "mode" => "live", "provider" => "evil", "extra" => nil}
+
   def credentials(_provider, _tenant), do: nil
 end

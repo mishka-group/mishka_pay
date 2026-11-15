@@ -26,6 +26,9 @@ defmodule MishkaPay.Credentials do
   tenant; a multi-site one reads the tenant's own. When several plugins listen, the first one that
   answers wins, in the order of their `:priority` (50 by default).
 
+  The answer may use atom or string keys, and the mode may be `"test"` or `"live"`. Its own
+  `:provider` and `:tenant` are ignored: they always come from the call.
+
   `inspect/1` shows only the provider, the tenant and the mode, so a key never reaches a log line.
   """
 
@@ -48,7 +51,7 @@ defmodule MishkaPay.Credentials do
     field :mode, :test | :live,
       default: :test,
       derives: "validate(enum=Atom[test::live])",
-      validator: {Required, :call}
+      validator: {__MODULE__, :mode}
 
     field :secret_key, String.t(),
       enforce: true,
@@ -100,17 +103,41 @@ defmodule MishkaPay.Credentials do
     |> answer(provider, tenant)
   end
 
-  defp answer(%{credentials: %{} = keys}, provider, tenant),
-    do:
-      keys
-      |> Map.merge(%{provider: provider, tenant: tenant})
-      |> builder()
-      |> Errors.from_builder()
+  # `:provider` and `:tenant` come from the call, whichever key form the answer used, and an
+  # `extra` given as nil takes its default.
+  defp answer(%{credentials: %{} = keys}, provider, tenant) do
+    keys
+    |> Map.drop([:provider, :tenant, "provider", "tenant"])
+    |> Map.reject(fn {key, value} -> key in [:extra, "extra"] and is_nil(value) end)
+    |> Map.merge(%{provider: provider, tenant: tenant})
+    |> builder()
+    |> Errors.from_builder()
+  end
 
   defp answer(%{credentials: nil}, provider, tenant), do: missing(provider, tenant, :no_answer)
 
   defp answer(reason, provider, tenant) when reason in [:cannot_run, :raised],
     do: missing(provider, tenant, reason)
+
+  defp answer(%{credentials: _not_a_map}, _provider, _tenant) do
+    Errors.from_builder(
+      {:error,
+       [
+         %{
+           field: :credentials,
+           action: :answer,
+           message: "A keys plugin must answer a map or nil"
+         }
+       ]}
+    )
+  end
+
+  # A plugin that reads its keys from JSON or settings answers the mode as a string.
+  @doc false
+  def mode(:mode, mode) when mode in ["test", "live"],
+    do: {:ok, :mode, String.to_existing_atom(mode)}
+
+  def mode(:mode, mode), do: Required.call(:mode, mode)
 
   defp missing(provider, tenant, reason),
     do:
