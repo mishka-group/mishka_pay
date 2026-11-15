@@ -12,11 +12,14 @@ defmodule MishkaPay.Errors.Declined do
     * `:answer`: the provider's whole answer, for the log. Never shown to a buyer.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:provider, :reason, :answer], class: :provider
 
   @impl true
-  def message(%{provider: provider, reason: nil}), do: "#{provider} declined the payment"
+  def message(%{provider: provider, reason: nil}),
+    do: Messages.text(:declined, provider: provider)
 
   def message(%{provider: provider, reason: reason}),
-    do: "#{provider} declined the payment: #{reason}"
+    do: Messages.text(:declined_reason, provider: provider, reason: reason)
 end

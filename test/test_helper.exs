@@ -30,4 +30,20 @@ MishkaInstaller.unsubscribe("mnesia")
 MishkaPay.Test.sweep!(["Elixir.MishkaPay.Support."])
 MishkaPay.Test.setup!()
 
-ExUnit.start()
+# Stripe tests run against Stripe's own mock server when it is up (see
+# MishkaPay.Support.StripeMock), and against a real Stripe test account only with its key.
+stripe_mock? = MishkaPay.Support.StripeMock.available?()
+
+if System.get_env("STRIPE_MOCK_REQUIRED") && not stripe_mock?,
+  do:
+    raise("stripe-mock is required (STRIPE_MOCK_REQUIRED) but does not answer on localhost:12111")
+
+excluded =
+  [
+    stripe_mock: not stripe_mock?,
+    stripe_live: is_nil(System.get_env("STRIPE_SECRET_KEY"))
+  ]
+  |> Enum.filter(fn {_tag, skip?} -> skip? end)
+  |> Enum.map(fn {tag, _skip?} -> tag end)
+
+ExUnit.start(exclude: excluded)

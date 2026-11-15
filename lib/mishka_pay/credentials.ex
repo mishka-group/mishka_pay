@@ -34,14 +34,10 @@ defmodule MishkaPay.Credentials do
 
   use GuardedStruct
 
-  require Logger
-
-  alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Errors, Events}
+  alias MishkaPay.Helpers.Plugins
 
   @derive {Inspect, only: [:provider, :tenant, :mode]}
-
-  @timeout Application.compile_env(:mishka_pay, :credentials_timeout, 5_000)
 
   guardedstruct authorized_fields: true do
     field :provider, String.t(),
@@ -105,7 +101,13 @@ defmodule MishkaPay.Credentials do
   """
   @spec fetch(String.t(), term(), keyword()) :: {:ok, t()} | {:error, Splode.Error.t()}
   def fetch(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
-    timeout = opts |> Keyword.get(:timeout, @timeout) |> timeout!()
+    timeout =
+      opts
+      |> Keyword.get_lazy(:timeout, fn ->
+        Application.get_env(:mishka_pay, :credentials_timeout, 5_000)
+      end)
+      |> timeout!()
+
     meta = %{provider: provider, tenant: tenant}
 
     :telemetry.span([:mishka_pay, :credentials], meta, fn ->
@@ -115,18 +117,11 @@ defmodule MishkaPay.Credentials do
   end
 
   defp ask(provider, tenant, timeout) do
-    task =
-      Task.Supervisor.async_nolink(MishkaPay.TaskSupervisor, fn ->
-        Hook.call(Events.credentials(), %{provider: provider, tenant: tenant, credentials: nil},
-          cannot_run: :cannot_run,
-          raised: :raised
-        )
-      end)
+    state = %{provider: provider, tenant: tenant, credentials: nil}
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+    case Plugins.call(Events.credentials(), state, timeout) do
       {:ok, answer} -> answer(answer, provider, tenant)
-      {:exit, reason} -> exited(provider, tenant, reason)
-      nil -> missing(provider, tenant, :timeout)
+      {:error, reason} -> missing(provider, tenant, reason)
     end
   end
 
@@ -144,15 +139,6 @@ defmodule MishkaPay.Credentials do
         "timeout is milliseconds (0 or more) or :infinity, got: #{inspect(other)}"
       )
 
-  defp exited(provider, tenant, reason) do
-    Logger.warning(
-      "mishka_pay: a #{provider} keys plugin for tenant #{inspect(tenant)} exited: " <>
-        Exception.format_exit(reason)
-    )
-
-    missing(provider, tenant, :exited)
-  end
-
   # `:provider` and `:tenant` come from the call, whichever key form the answer used, and an
   # `extra` given as nil takes its default.
   defp answer(%{credentials: %{} = keys}, provider, tenant) do
@@ -166,9 +152,6 @@ defmodule MishkaPay.Credentials do
 
   defp answer(%{credentials: nil}, provider, tenant), do: missing(provider, tenant, :no_answer)
 
-  defp answer(reason, provider, tenant) when reason in [:cannot_run, :raised],
-    do: missing(provider, tenant, reason)
-
   defp answer(%{credentials: _not_a_map}, _provider, _tenant) do
     Errors.from_builder(
       {:error,
@@ -176,7 +159,7 @@ defmodule MishkaPay.Credentials do
          %{
            field: :credentials,
            action: :answer,
-           message: "A keys plugin must answer a map or nil"
+           message: MishkaPay.Messages.text(:keys_answer)
          }
        ]}
     )

@@ -44,7 +44,7 @@ defmodule MishkaPay.MixProject do
     [
       licenses: ["Apache-2.0"],
       maintainers: ["Shahryar Tavakkoli"],
-      files: ~w(lib .formatter.exs mix.exs LICENSE README*),
+      files: ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README*),
       links: %{
         "GitHub" => @source_url,
         "Sponsor" => "https://github.com/sponsors/mishka-group",
@@ -83,6 +83,8 @@ defmodule MishkaPay.MixProject do
       # and formatting in any language, from CLDR through `localize` (no backend module).
       {:ex_money, "~> 6.3"},
       {:decimal, "~> 3.2"},
+      # Every message a person sees goes through `MishkaPay.Messages`, in the `mishka_pay` domain.
+      {:gettext, "~> 1.0"},
       # Every error (`MishkaPay.Errors`) is a Splode error, like Ash's and guarded_struct's.
       {:splode, "~> 0.3"},
       # The Ash layer (`MishkaPay.Ash.*`) compiles only when the host has Ash. Without it the SDK
@@ -139,6 +141,8 @@ defmodule MishkaPay.MixProject do
         "format --check-formatted",
         "credo --strict",
         "mishka_pay.credence",
+        # Every message of Messages is in priv/gettext/mishka_pay.pot.
+        "gettext.extract --check-up-to-date",
         "sobelow --config",
         "deps.audit",
         "dialyzer",

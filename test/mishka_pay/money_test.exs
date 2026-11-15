@@ -70,4 +70,17 @@ defmodule MishkaPay.MoneyTest do
     assert {:error, %Errors.Invalid{errors: [%Validation{field: :currency}]}} =
              Money.from_minor(5, "ZZZ")
   end
+
+  test "as a field validator, money comes from a Money or a map with string or atom keys" do
+    assert {:ok, :price, %Elixir.Money{currency: :USD}} =
+             Money.field(:price, Elixir.Money.new(:USD, "5"))
+
+    assert {:ok, :price, %Elixir.Money{currency: :EUR}} =
+             Money.field(:price, %{"amount" => "5", "currency" => "eur"})
+
+    assert {:ok, :price, nil} = Money.field(:price, nil)
+    assert {:error, :price, message} = Money.field(:price, %{amount: 5.5, currency: "USD"})
+    assert message =~ "exact"
+    assert {:error, :price, _message} = Money.field(:price, "5 USD")
+  end
 end

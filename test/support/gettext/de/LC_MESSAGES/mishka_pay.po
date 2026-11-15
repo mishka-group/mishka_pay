@@ -1,0 +1,9 @@
+msgid ""
+msgstr ""
+"Language: de\n"
+
+msgid "The amount field is too large"
+msgstr "Der Betrag ist zu groß"
+
+msgid "%{provider} declined the payment: %{reason}"
+msgstr "%{provider} hat die Zahlung abgelehnt: %{reason}"

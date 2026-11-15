@@ -11,11 +11,14 @@ defmodule MishkaPay.Errors.UnknownProvider do
       registered but not loaded, so no provider can be told installed.
   """
 
+  alias MishkaPay.Messages
+
   use Splode.Error, fields: [:provider, :reason], class: :invalid
 
   @impl true
   def message(%{provider: provider, reason: :cannot_run}),
-    do: "payment provider #{provider} cannot be looked up: a provider plugin is not loaded"
+    do: Messages.text(:provider_cannot_run, provider: provider)
 
-  def message(%{provider: provider}), do: "no payment provider #{provider} is installed"
+  def message(%{provider: provider}),
+    do: Messages.text(:provider_not_installed, provider: provider)
 end
