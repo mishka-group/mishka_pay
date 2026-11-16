@@ -795,6 +795,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                phone: true,
                description: "Workshop order",
                statement_suffix: "WORKSHOP",
+               merchant_of_record: false,
                submit_type: :book,
                fields: [
                  %{key: "certname", label: "Name on the certificate"},

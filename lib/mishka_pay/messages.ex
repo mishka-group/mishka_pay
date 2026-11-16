@@ -80,6 +80,7 @@ defmodule MishkaPay.Messages do
           | :stripe_event_types
           | :search_needs
           | :fields_three
+          | :merchant_of_record_off
           | :dropdown_options
           | :declined
           | :declined_reason
@@ -397,6 +398,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
+      )
+
+  defp msgid(:merchant_of_record_off),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} goes only with merchant of record off: set merchant_of_record to false for this checkout"
       )
 
   defp msgid(:fields_three),

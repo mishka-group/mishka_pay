@@ -819,7 +819,8 @@ defmodule MishkaPay.Providers.StripeTest do
             {%{fields: [%{key: "bad key", label: "A"}]}, :fields},
             {%{fields: [%{key: "a", label: "A", type: :dropdown}]}, :fields},
             {%{card_required: false}, :card_required},
-            {%{statement_suffix: "no-dashes"}, :statement_suffix}
+            {%{statement_suffix: "no-dashes"}, :statement_suffix},
+            {%{statement_suffix: "ORDER 1", merchant_of_record: true}, :statement_suffix}
           ] do
         assert {:error, %Errors.Invalid{errors: errors}} =
                  MishkaPay.checkout(Map.merge(@checkout, changes))
@@ -861,6 +862,24 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
                MishkaPay.portal_session(Map.put(base, :flow, :subscription_cancel))
+    end
+
+    test "a choice Stripe takes only with Managed Payments off is a plain refusal naming it" do
+      MishkaPay.Test.stub_http(fn conn ->
+        error = %{
+          "type" => "invalid_request_error",
+          "message" =>
+            "payment_intent_data.statement_descriptor_suffix cannot be used with Managed Payments, which is enabled by default on your account."
+        }
+
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      assert {:error,
+              %Errors.Rejected{code: "merchant_of_record_off", param: "statement_suffix"} = error} =
+               MishkaPay.checkout(Map.put(@checkout, :statement_suffix, "ORDER 1"))
+
+      assert Exception.message(error) =~ "merchant_of_record to false"
     end
 
     test "a refund is read again and listed by payment, as Stripe's spec answers" do

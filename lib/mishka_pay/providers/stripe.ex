@@ -189,6 +189,7 @@ defmodule MishkaPay.Providers.Stripe do
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- currencies(checkout.items),
          :ok <- metadata(checkout.metadata),
+         :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
@@ -1085,6 +1086,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Stripe's names of the fields Mishka Pay calls otherwise; any other is kept as Stripe says it.
   @fields [
+    {"payment_intent_data.statement_descriptor_suffix", "statement_suffix"},
     {"subscription_data", "trial_days"},
     {"restrictions", "max_purchases"},
     {"proration_behavior", "proration"},
@@ -1114,9 +1116,17 @@ defmodule MishkaPay.Providers.Stripe do
   # or a product without the tax code Managed Payments needs.
   defp param_in(message) when is_binary(message) do
     cond do
-      String.contains?(message, "product tax code is missing") -> "tax_code"
-      match = Regex.run(~r/\A`(\w+)` can only be used/, message) -> List.last(match)
-      true -> nil
+      String.contains?(message, "product tax code is missing") ->
+        "tax_code"
+
+      match = Regex.run(~r/\A`(\w+)` can only be used/, message) ->
+        List.last(match)
+
+      match = Regex.run(~r/\A(\S+) cannot be used with Managed Payments/, message) ->
+        List.last(match)
+
+      true ->
+        nil
     end
   end
 
@@ -1131,12 +1141,26 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp code_of(%{"message" => message}) when is_binary(message) do
     cond do
-      String.contains?(message, "already exists") -> "already_exists"
-      String.contains?(message, "when Managed Payments is enabled") -> "managed_payments_invoice"
-      String.contains?(message, "product tax code is missing") -> "tax_code_missing"
-      String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
-      String.contains?(message, "must pass a recurring price") -> "recurring_only"
-      true -> nil
+      String.contains?(message, "already exists") ->
+        "already_exists"
+
+      String.contains?(message, "when Managed Payments is enabled") ->
+        "managed_payments_invoice"
+
+      String.contains?(message, "cannot be used with Managed Payments") ->
+        "merchant_of_record_off"
+
+      String.contains?(message, "product tax code is missing") ->
+        "tax_code_missing"
+
+      String.contains?(message, "does not contain any recurring prices") ->
+        "one_time_only"
+
+      String.contains?(message, "must pass a recurring price") ->
+        "recurring_only"
+
+      true ->
+        nil
     end
   end
 
@@ -1211,6 +1235,28 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp invalid(field, message), do: ProviderKit.invalid(field, message)
+
+  # Stripe takes no statement suffix while it sells as merchant of record (Managed Payments): a
+  # checkout or a site that turns it on is refused before the request.
+  defp suffix_fits(%Checkout{statement_suffix: nil}, _keys), do: :ok
+
+  defp suffix_fits(%Checkout{merchant_of_record: on?} = checkout, keys) do
+    case on? == true or (is_nil(on?) and Map.get(keys, :merchant_of_record) == true) do
+      true ->
+        invalid(
+          :statement_suffix,
+          Messages.text(:merchant_of_record_off, param: "statement_suffix")
+        )
+
+      false ->
+        suffix_mode(checkout)
+    end
+  end
+
+  defp suffix_mode(%Checkout{mode: :subscription}),
+    do: invalid(:statement_suffix, Messages.text(:one_time_only, param: "statement_suffix"))
+
+  defp suffix_mode(_one_time), do: :ok
 
   # Stripe counts ISK, UGX and MGA in whole units only, and BHD, JOD, KWD, OMR and TND with a last
   # decimal of 0; an amount Stripe would read otherwise is refused before any request.
