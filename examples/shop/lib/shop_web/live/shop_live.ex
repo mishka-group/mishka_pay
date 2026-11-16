@@ -445,6 +445,8 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.CheckoutOptionsComponent} id="checkout-more" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.SavedCardsComponent} id="saved-cards" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
@@ -677,6 +679,11 @@ defmodule ShopWeb.ShopLive do
           {:error, error} ->
             flash(socket, :error, MishkaPay.Ash.message(error))
         end
+
+      {:ok, %{setup_intent_id: setup_id} = checkout} when is_binary(setup_id) ->
+        socket
+        |> assign(checkout_read: checkout)
+        |> flash(:info, "Card saved. List the customer's cards under Saved cards.")
 
       {:ok, checkout} ->
         socket
