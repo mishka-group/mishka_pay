@@ -31,6 +31,7 @@ if Code.ensure_loaded?(Ash) do
         {:ok, %Payment{} = payment} ->
           changeset
           |> Ash.Changeset.force_change_attributes(attributes(payment, tenant))
+          |> MishkaPay.Ash.Owner.write(payment.owner)
           |> Ash.Changeset.put_context(:mishka_pay_payment, payment)
 
         {:error, error} ->

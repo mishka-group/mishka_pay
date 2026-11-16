@@ -114,7 +114,8 @@ defmodule MishkaPay.Ash.ResourceTest do
                MishkaPay.Support.Subscription.MishkaPayListener,
                MishkaPay.Support.Customer.MishkaPayListener,
                MishkaPay.Support.Dispute.MishkaPayListener,
-               MishkaPay.Support.SitePayment.MishkaPayListener
+               MishkaPay.Support.SitePayment.MishkaPayListener,
+               MishkaPay.Support.SiteSubscription.MishkaPayListener
              ]
     end
 
@@ -190,6 +191,15 @@ defmodule MishkaPay.Ash.ResourceTest do
       assert %{destination: User, source_attribute: :owner_id} = AshInfo.relationship(Kept, :user)
       assert AshInfo.attribute(Kept, :owner_id)
       refute AshInfo.relationship(Quiet, :user)
+    end
+
+    test "a payment or subscription sync writes its owner into the user; other kinds leave it" do
+      assert {Info.user_attribute(Owned), Info.user_attribute(Kept), Info.user_attribute(Quiet)} ==
+               {:user_id, :owner_id, nil}
+
+      assert :user_id in AshInfo.action(Owned, :sync).upsert_fields
+      refute :owner_id in AshInfo.action(Kept, :sync).upsert_fields
+      assert :price_ids in AshInfo.action(Owned, :sync).upsert_fields
     end
 
     test "an attribute, identity or action the host defines is kept as the host wrote it" do

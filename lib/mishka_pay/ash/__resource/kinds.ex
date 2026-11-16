@@ -120,6 +120,8 @@ if Code.ensure_loaded?(Ash) do
       object([
         {:status, :atom, required(constraints: [one_of: @subscription_statuses])},
         {:plan, :string, public()},
+        {:price_ids, {:array, :string}, required(default: [])},
+        {:product_ids, {:array, :string}, required(default: [])},
         {:amount, :decimal, public()},
         {:currency, :string, public()},
         {:interval, :atom, public(constraints: [one_of: [:day, :week, :month, :year]])},
@@ -183,7 +185,8 @@ if Code.ensure_loaded?(Ash) do
 
     @doc """
     The actions of a kind. `announce?: false` builds their changes without the
-    `mishka_pay:<kind>:changed` event.
+    `mishka_pay:<kind>:changed` event; `user:` names the `belongs_to_user` attribute, which a sync
+    writes from the owner and a customer's `:register` accepts.
     """
     @spec actions(kind(), keyword()) :: [action()]
     def actions(:inbox, _opts) do
@@ -215,7 +218,7 @@ if Code.ensure_loaded?(Ash) do
 
     def actions(:payment, opts) do
       [
-        sync(:payment, :payment_id, {MishkaPay.Ash.Payment.Sync, announce(opts)}),
+        sync(:payment, :payment_id, {MishkaPay.Ash.Payment.Sync, announce(opts)}, opts[:user]),
         {:start_checkout, :action,
          [
            returns: :struct,
@@ -235,7 +238,12 @@ if Code.ensure_loaded?(Ash) do
 
     def actions(:subscription, opts) do
       [
-        sync(:subscription, :subscription_id, {MishkaPay.Ash.Subscription.Sync, announce(opts)}),
+        sync(
+          :subscription,
+          :subscription_id,
+          {MishkaPay.Ash.Subscription.Sync, announce(opts)},
+          opts[:user]
+        ),
         subscription_update(:cancel, opts, [
           argument(:at, :atom,
             constraints: [one_of: [:now, :period_end]],
@@ -282,6 +290,7 @@ if Code.ensure_loaded?(Ash) do
       [
         {:register, :create,
          upsert(:customer,
+           accept: List.wrap(opts[:user]),
            arguments: [
              argument(:provider, :string, allow_nil?: false),
              argument(:tenant, :string),
@@ -351,10 +360,12 @@ if Code.ensure_loaded?(Ash) do
       ]
     end
 
-    # Reads the provider object by its id and writes what the provider said, once per object.
-    defp sync(kind, id, change) do
+    # Reads the provider object by its id and writes what the provider said, once per object. A
+    # payment or a subscription with a user writes its owner there too (`MishkaPay.Ash.Owner`).
+    defp sync(kind, id, change, user \\ nil) do
       {:sync, :create,
        upsert(kind,
+         also: List.wrap(user),
          arguments: [
            argument(:provider, :string, allow_nil?: false),
            argument(id, :string, allow_nil?: false),
@@ -365,10 +376,14 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp upsert(kind, opts) do
+      {also, opts} = Keyword.pop(opts, :also, [])
       synced = for {name, _type, _opts} <- attributes(kind), name not in @object_keys, do: name
       {identity, _fields} = identity(kind)
 
-      [accept: [], upsert?: true, upsert_identity: identity, upsert_fields: synced] ++ opts
+      Keyword.merge(
+        [accept: [], upsert?: true, upsert_identity: identity, upsert_fields: synced ++ also],
+        opts
+      )
     end
 
     defp update(name, change, arguments, opts \\ []) do

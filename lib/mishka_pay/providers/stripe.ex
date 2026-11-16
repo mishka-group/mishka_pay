@@ -51,7 +51,7 @@ defmodule MishkaPay.Providers.Stripe do
   Stripe counts a few currencies differently from ISO 4217: ISK and UGX as two-decimal amounts
   ending in 00, and MGA as zero-decimal. Mishka Pay sends and reads them as Stripe counts them,
   and refuses a fraction of one before any request. HUF and TWD charge with two decimals like
-  other currencies (Stripe pays them out in whole units). It takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 49 keys of 40
+  other currencies (Stripe pays them out in whole units). It takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 48 keys of 40
   characters with values of 500; anything past that is an `:invalid` error before any request.
 
   A refund first reads the payment. A tenant that refunds once is refused a second refund, and a
@@ -960,12 +960,12 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  # Stripe keeps up to 50 metadata keys (one is the reference), of 40 characters, with values of
+  # Stripe keeps up to 50 metadata keys (two are the reference and the owner), of 40 characters, with values of
   # 500.
   defp metadata(nil), do: :ok
 
   defp metadata(metadata) do
-    case map_size(metadata) < 50 and
+    case map_size(metadata) < 49 and
            Enum.all?(metadata, fn {key, value} ->
              String.length(key) <= 40 and String.length(value) <= 500
            end) do

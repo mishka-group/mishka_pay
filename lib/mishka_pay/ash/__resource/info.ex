@@ -27,5 +27,15 @@ if Code.ensure_loaded?(Ash) do
     @spec listener(Spark.Dsl.t() | Ash.Resource.t()) :: module() | nil
     def listener(resource),
       do: Spark.Dsl.Extension.get_persisted(resource, :mishka_pay_listener)
+
+    @doc "The attribute `belongs_to_user` keeps the user in (`:user_id` unless named), or `nil`."
+    @spec user_attribute(Spark.Dsl.t() | Ash.Resource.t()) :: atom() | nil
+    def user_attribute(resource) do
+      case mishka_pay_belongs_to_user(resource) do
+        {:ok, {_user, opts}} -> Keyword.get(opts, :attribute, :user_id)
+        {:ok, _user} -> :user_id
+        :error -> nil
+      end
+    end
   end
 end

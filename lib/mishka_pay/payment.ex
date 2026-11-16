@@ -11,7 +11,8 @@ defmodule MishkaPay.Payment do
     * `:amount`: what was asked, a `Money`; `:amount_refunded`: what went back so far.
     * `:status`: `:pending` (not paid yet), `:requires_action` (the buyer must do something, such
       as 3-D Secure), `:paid`, `:partially_refunded`, `:refunded`, `:failed` or `:canceled`.
-    * `:reference`: the caller's own id given at checkout.
+    * `:reference`: the caller's own id given at checkout; `:owner`: who the sale is for, as the
+      checkout named them (`MishkaPay.Checkout`).
     * `:customer_id`, `:customer_email`, `:customer_name`: the buyer, as far as the provider knows
       them.
     * `:description`: the provider's description of the payment; `:metadata`: the extra pairs
@@ -36,6 +37,7 @@ defmodule MishkaPay.Payment do
     field :amount_refunded, Money.t(), validator: {MishkaPay.Money, :field}
     field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@statuses})"
     field :reference, String.t(), derives: "validate(string)"
+    field :owner, String.t(), derives: "validate(string)"
     field :customer_id, String.t(), derives: "validate(string)"
     field :customer_email, String.t(), derives: "validate(string)"
     field :customer_name, String.t(), derives: "validate(string)"

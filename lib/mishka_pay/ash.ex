@@ -49,6 +49,15 @@ if Code.ensure_loaded?(Ash) do
           do: listener
     end
 
+    @doc """
+    Whether `user` has a subscription in `resource` that gives access now: see
+    `MishkaPay.Ash.Subscribed`, which is also the policy check.
+
+        MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, current_user, tenant: site.id)
+    """
+    @spec subscribed?(Ash.Resource.t(), term(), keyword()) :: boolean()
+    defdelegate subscribed?(resource, user, opts \\ []), to: MishkaPay.Ash.Subscribed
+
     @doc false
     # The `mishka_pay:<kind>:changed` announcement of a change, after its transaction, unless the
     # resource says `announce? false`.

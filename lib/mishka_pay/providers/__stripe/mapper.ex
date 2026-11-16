@@ -25,6 +25,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   }
 
   @reference "mishka_pay_reference"
+  @owner "mishka_pay_owner"
 
   # Where Stripe counts a currency in other places than ISO 4217: ISK and UGX as two-decimal
   # amounts ending in 00, MGA as zero-decimal (docs.stripe.com/currencies).
@@ -77,11 +78,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @doc """
   Params of `POST /v1/checkout/sessions`: a one-time payment, or a subscription with its trial.
-  The reference goes on the payment or the subscription too, so it comes back on either.
+  The reference and the owner go on the payment or the subscription too, so they come back on
+  either.
   """
   @spec checkout_params(Checkout.t(), map()) :: map()
   def checkout_params(%Checkout{} = checkout, settings \\ %{}) do
-    reference = %{@reference => checkout.reference}
+    reference =
+      Map.reject(%{@reference => checkout.reference, @owner => checkout.owner}, fn {_key, value} ->
+        is_nil(value)
+      end)
 
     %{
       "mode" => Atom.to_string(checkout.mode),
@@ -254,8 +259,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         amount_refunded: refunded,
         status: payment_status(intent, refunded, amount),
         reference: get_in(intent, ["metadata", @reference]),
+        owner: get_in(intent, ["metadata", @owner]),
         description: intent["description"],
-        metadata: Map.delete(intent["metadata"] || %{}, @reference),
+        metadata: Map.drop(intent["metadata"] || %{}, [@reference, @owner]),
         refunds: refunds(charge, intent["id"]),
         disputed: charge["disputed"] == true,
         created_at: time(intent["created"])
@@ -326,7 +332,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
       resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),
       reference: get_in(sub, ["metadata", @reference]),
-      metadata: Map.delete(sub["metadata"] || %{}, @reference),
+      owner: get_in(sub, ["metadata", @owner]),
+      metadata: Map.drop(sub["metadata"] || %{}, [@reference, @owner]),
       created_at: time(sub["created"])
     }
     |> Subscription.builder()
@@ -343,6 +350,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           %{
             id: price["id"],
             item_id: item["id"],
+            product_id: id_of(price["product"]),
             name: expanded(price["product"])["name"] || price["nickname"],
             amount: amount,
             quantity: item["quantity"] || 1,

@@ -391,7 +391,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The metadata field is over Stripe's limits: 49 keys of 40 characters, values of 500"
+        "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
       )
 
   defp msgid(:stripe_whole),

@@ -75,8 +75,10 @@ if Code.ensure_loaded?(Ash) do
           type: {:or, [:atom, {:tuple, [:atom, :keyword_list]}]},
           doc: """
           A `:user` belongs_to relationship to the host's user resource, on `:user_id`, or on
-          another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. Rows synced from
-          webhooks have no user, so it may be nil.
+          another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. A payment or a
+          subscription gets its user from the checkout's owner, which `:start_checkout` takes from
+          the actor and every sync writes again (`MishkaPay.Ash.Owner`); a customer's `:register`
+          takes it as an input. It may be nil, for a sale with no owner.
           """
         ]
       ]

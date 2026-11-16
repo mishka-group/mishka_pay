@@ -18,6 +18,10 @@ defmodule MishkaPay.Checkout do
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
       it comes back on the payment, and it makes the request's idempotency key, so the same
       reference never opens two checkouts.
+    * `:owner`: who the sale is for in the caller's app, such as the signed-in user's id. The
+      provider keeps it on the payment or the subscription, and it comes back on either
+      (`MishkaPay.Payment`, `MishkaPay.Subscription`), so access can be given to that user. The
+      Ash layer fills it from the actor (`MishkaPay.Ash.Resource`).
     * `:merchant_of_record`: `true` asks the provider to sell as the merchant of record (it
       collects and files the tax, as Stripe Managed Payments does), `false` asks it not to; left
       out, the provider's account default applies. Each price then needs its `:tax_code`.
@@ -91,6 +95,7 @@ defmodule MishkaPay.Checkout do
     field :reference, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
 
+    field :owner, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
     field :merchant_of_record, boolean(), derives: "validate(boolean)"
 
     dynamic_field :metadata, validator: {__MODULE__, :metadata}

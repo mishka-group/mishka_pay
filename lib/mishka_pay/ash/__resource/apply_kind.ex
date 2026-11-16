@@ -37,7 +37,8 @@ if Code.ensure_loaded?(Ash) do
         announce? = Info.mishka_pay_announce?(dsl)
 
         chosen =
-          for {name, _type, _opts} = action <- Kinds.actions(kind, announce?: announce?),
+          for {name, _type, _opts} = action <-
+                Kinds.actions(kind, announce?: announce?, user: Info.user_attribute(dsl)),
               name in actions,
               do: action
 

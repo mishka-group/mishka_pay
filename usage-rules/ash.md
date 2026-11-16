@@ -30,7 +30,7 @@ defmodule MyApp.Pay.Subscription do
     listen? true                           # default: <Resource>.MishkaPayListener is made
     announce? true                         # default: mishka_pay:subscription:changed after writes
     code_interface? true                   # default: MyApp.Pay.Subscription.cancel!(row, %{at: :now})
-    belongs_to_user MyApp.Accounts.User    # optional: belongs_to :user on :user_id
+    belongs_to_user MyApp.Accounts.User    # optional: belongs_to :user on :user_id, filled from the checkout's owner
     # belongs_to_user {MyApp.Accounts.User, attribute: :owner_id}
     # tenant_from :site_id                 # optional: the host's own site column, without Ash multitenancy
   end
@@ -110,6 +110,26 @@ Ash.create(MyApp.Pay.Payment, %{provider: "stripe", payment_id: "pi_..."},
 
 The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.Tenant`).
 
+## Access: who has a subscription
+
+- `belongs_to_user` on the payment and subscription resources: `:start_checkout` sends the actor
+  as the checkout's `owner`; the provider keeps it; every sync writes it into the user attribute.
+  Pass `owner:` in the checkout map to buy for someone else. A customer's `:register` accepts the
+  user attribute.
+- Gate access with the policy check, never with a hand-written status test:
+
+```elixir
+authorize_if {MishkaPay.Ash.Subscribed, resource: MyApp.Pay.Subscription}
+authorize_if {MishkaPay.Ash.Subscribed, resource: MyApp.Pay.Subscription, product: ["prod_pro"]}
+# price: ..., statuses: [:active, :trialing, :past_due]
+MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
+```
+
+- Access: `:active`, or `:trialing` until `trial_end`. One query per check. The row keeps
+  `price_ids` and `product_ids` for the tier options.
+- Mishka Pay has no admin pages: a host shows the resources and their actions with mishka_gervaz,
+  in the site's tenant, under its own policies.
+
 ## Actions
 
 | Resource | Action | Args |
@@ -128,7 +148,7 @@ The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.
 | Dispute | `:sync` | `provider`, `dispute_id`, `tenant` |
 | Dispute | `:submit_evidence` (update) | `evidence` (the provider's field names), `submit` |
 | Dispute | `:accept` (update) | none |
-| Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata` |
+| Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata`; the user attribute with `belongs_to_user` |
 | Customer | `:sync` | `provider`, `customer_id`, `tenant`; a deleted customer gets `deleted_at` |
 | Customer | `:edit` (update) | `email`, `name`, `phone`, `metadata` |
 | Customer | `:portal` (generic) | `id` (the row's), `return_url`, `configuration`; answers `MishkaPay.PortalSession` |
