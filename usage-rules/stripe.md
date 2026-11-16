@@ -22,8 +22,8 @@
 
 ## Ids and what is refused before any request
 
-- Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, test clocks
-  `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+- Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
+  `cus_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - Refused as `Errors.Unsupported`: HUF, TWD, ISK, UGX, MGA (Stripe counts them differently from
   ISO 4217). BHD, JOD, KWD, OMR and TND only with a last decimal of 0.
 - Metadata: at most 49 keys of 40 characters, values of 500, string keys and values.
@@ -34,6 +34,15 @@
 refunds and the customer in one request, and answers `:status`, `:amount`, `:amount_refunded`,
 `:customer_email`, `:customer_name`, `:card_brand`, `:card_last4`, `:receipt_url`,
 `:failure_code`, `:failure_message`, `:description`, `:metadata` and `:refunds`.
+
+## Customers and the portal
+
+- The customer's `reference` is kept in its metadata as `mishka_pay_reference` and comes back as
+  `:reference`; `:default_payment_method` is the customer's invoice default.
+- The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
+  pass `configuration: "bpc_..."` to use another.
+- Stripe sends `customer.created`, `customer.updated` and `customer.deleted`; the Ash customer
+  listener syncs the row on each.
 
 ## Sandbox
 

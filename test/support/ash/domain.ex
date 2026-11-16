@@ -11,5 +11,6 @@ defmodule MishkaPay.Support.Domain do
     resource MishkaPay.Support.WebhookEvent
     resource MishkaPay.Support.Payment
     resource MishkaPay.Support.Subscription
+    resource MishkaPay.Support.Customer
   end
 end

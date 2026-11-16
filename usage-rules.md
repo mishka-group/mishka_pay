@@ -85,6 +85,11 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
 | `MishkaPay.invoices(provider, subscription_id, tenant)` | `[%MishkaPay.Invoice{}]`, newest first |
+| `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |
+| `MishkaPay.update_customer(attrs)` | the customer after (`attrs` has `:provider` and `:id`) |
+| `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
+| `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | `[%MishkaPay.Customer{}]` |
+| `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
 
 A one-time checkout:
 
@@ -113,6 +118,32 @@ redirect(conn, external: checkout.url)
 - A **subscription** is a checkout with `mode: :subscription`, items with `interval:` and an
   optional `trial_days:`. See `usage-rules/subscriptions.md`.
 - A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
+- A checkout's `customer:` names the buyer by `id` (a customer made with `create_customer/1`) or by
+  `email`, never both.
+
+## Customers and the portal
+
+Make one provider customer per user and keep its id with the user; a returning buyer then pays
+as that customer (`customer: %{id: id}`), and the portal shows their cards, invoices and
+subscriptions.
+
+```elixir
+{:ok, customer} =
+  MishkaPay.create_customer(%{provider: "stripe", tenant: site.id, email: user.email,
+                              name: user.name, reference: user.id})
+
+{:ok, portal} =
+  MishkaPay.portal_session(%{provider: "stripe", tenant: site.id, customer_id: customer.id,
+                             return_url: url(~p"/account")})
+
+redirect(conn, external: portal.url)
+```
+
+- `reference` is the host's user id. Sent again within a day with the same fields, it answers the
+  same customer instead of a second one; with other fields Stripe refuses it (`Errors.Rejected`,
+  status 400). Change a customer with `update_customer/1`.
+- `return_url` follows the checkout URL rule. A customer the provider deleted reads back as
+  `Errors.Rejected` with code `"customer_deleted"`.
 
 ## Errors
 
@@ -162,7 +193,7 @@ end
 
 The event names live in `MishkaPay.Events` (`checkout_before/0`, `credentials/0`,
 `webhook_received/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
-`providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
+`customer_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
 nothing. Supervise every listener like any child.
 
 ## Rules for an agent writing payment code

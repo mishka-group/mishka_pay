@@ -118,6 +118,10 @@ defmodule MishkaPay.Support.Acme do
     do: {:ok, %{customer | id: "acme_cus_1"}}
 
   @impl MishkaPay.Provider
+  def fetch_customer("acme_cus_gone", %{secret_key: "sk_acme"}),
+    do:
+      {:error, Errors.Rejected.exception(provider: "acme", status: 404, code: "customer_deleted")}
+
   def fetch_customer("acme_cus_" <> _ = id, %{secret_key: "sk_acme"}),
     do: Customer.builder(%{provider: "acme", id: id, email: "ava@example.com", name: "Ava"})
 
