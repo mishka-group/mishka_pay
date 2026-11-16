@@ -32,11 +32,17 @@ defmodule ShopWeb.ShopLive do
   # needs a tax code on every price.
   @tax_code "txcd_10302000"
 
+  # The most of one product a demo checkout sells, so a typo never opens Stripe for thousands.
+  @max_quantity 10
+
+  @settings_topic "pay:settings"
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Shop.PubSub, LiveFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
+      Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
       ShopWeb.Endpoint.subscribe("pay:inbox")
     end
 
@@ -79,11 +85,10 @@ defmodule ShopWeb.ShopLive do
   def handle_event("buy", %{"product" => id} = params, socket) do
     product = Enum.find(@products, &(&1.id == id))
 
-    Payment
-    |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout(product, params)})
-    |> Ash.run_action(authorize?: false)
-    |> case do
-      {:ok, %{url: url}} -> {:noreply, redirect(socket, external: url)}
+    with {:ok, count} <- quantity(params["quantity"]),
+         {:ok, %{url: url}} <- start_checkout(product, count, params) do
+      {:noreply, redirect(socket, external: url)}
+    else
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
@@ -109,22 +114,23 @@ defmodule ShopWeb.ShopLive do
   end
 
   def handle_event("sync", %{"payment_id" => payment_id}, socket) do
-    case sync(String.trim(payment_id)) do
-      {:ok, payment} ->
-        {:noreply,
-         socket
-         |> stream_insert(:payments, payment, at: 0)
-         |> select(payment.id)
-         |> flash(:info, "Payment read from Stripe and saved.")}
-
-      {:error, error} ->
-        {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+    with {:ok, payment_id} <- payment_id(payment_id),
+         {:ok, payment} <- sync(payment_id) do
+      {:noreply,
+       socket
+       |> stream_insert(:payments, payment, at: 0)
+       |> select(payment.id)
+       |> flash(:info, "Payment read from Stripe and saved.")}
+    else
+      {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
 
   def handle_event("read_checkout", %{"checkout_id" => checkout_id}, socket) do
-    case MishkaPay.fetch_checkout("stripe", String.trim(checkout_id), @tenant) do
-      {:ok, checkout} -> {:noreply, socket |> clear_flash() |> assign(checkout_read: checkout)}
+    with {:ok, checkout_id} <- checkout_id(checkout_id),
+         {:ok, checkout} <- MishkaPay.fetch_checkout("stripe", checkout_id, @tenant) do
+      {:noreply, socket |> clear_flash() |> assign(checkout_read: checkout)}
+    else
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
@@ -139,6 +145,8 @@ defmodule ShopWeb.ShopLive do
 
     case Ash.create(Setting, attrs, action: :save, authorize?: false) do
       {:ok, _setting} ->
+        Phoenix.PubSub.broadcast_from(Shop.PubSub, self(), @settings_topic, :settings_changed)
+
         {:noreply,
          socket
          |> assign_status()
@@ -154,8 +162,11 @@ defmodule ShopWeb.ShopLive do
     {:noreply,
      socket
      |> stream_insert(:payments, record, at: 0)
-     |> assign(last: newest(socket.assigns.last, record))}
+     |> assign(last: newest(socket.assigns.last, record))
+     |> reselect(record)}
   end
+
+  def handle_info(:settings_changed, socket), do: {:noreply, assign_status(socket)}
 
   def handle_info({:telemetry, entry}, socket),
     do: {:noreply, stream_insert(socket, :telemetry, entry, at: 0)}
@@ -180,7 +191,8 @@ defmodule ShopWeb.ShopLive do
         <p class="text-sm opacity-70 mt-2">
           Test card <code>4242 4242 4242 4242</code>, any future date, any CVC.
           <code>4000 0000 0000 0002</code>
-          is declined.
+          is declined. Prices are before tax: Stripe adds the tax at checkout, so its page can show
+          a higher total.
         </p>
       </section>
 
@@ -206,14 +218,17 @@ defmodule ShopWeb.ShopLive do
 
       <section>
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
-        <form phx-submit="read_checkout" class="join">
+        <form phx-submit="read_checkout" class="join w-full max-w-2xl">
           <input
             name="checkout_id"
             placeholder="cs_test_... (shown after each purchase)"
-            class="input input-sm join-item w-96"
+            class="input input-sm join-item min-w-0 flex-1"
             required
           />
-          <button class="btn btn-sm join-item">MishkaPay.fetch_checkout/3</button>
+          <button class="btn btn-sm join-item shrink-0">
+            <span class="sm:hidden">Read</span>
+            <span class="hidden sm:inline">MishkaPay.fetch_checkout/3</span>
+          </button>
         </form>
         <.checkout_card :if={@checkout_read} checkout={@checkout_read} />
       </section>
@@ -234,7 +249,7 @@ defmodule ShopWeb.ShopLive do
     """
   end
 
-  defp checkout(product, params) do
+  defp checkout(product, count, params) do
     %{
       provider: "stripe",
       tenant: @tenant,
@@ -243,7 +258,7 @@ defmodule ShopWeb.ShopLive do
           name: product.name,
           amount: %{amount: product.price, currency: "USD"},
           tax_code: @tax_code,
-          quantity: quantity(params["quantity"])
+          quantity: count
         }
       ],
       success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
@@ -253,6 +268,12 @@ defmodule ShopWeb.ShopLive do
       merchant_of_record: on_off(params["merchant_of_record"]),
       metadata: metadata(params["meta_key"], params["meta_value"])
     }
+  end
+
+  defp start_checkout(product, count, params) do
+    Payment
+    |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout(product, count, params)})
+    |> Ash.run_action(authorize?: false)
   end
 
   # The buyer comes back from Stripe with the session id: read it, and when it made a payment, keep
@@ -302,6 +323,12 @@ defmodule ShopWeb.ShopLive do
       end
     end)
   end
+
+  # The open details panel follows the payment when another tab, a webhook or a sync changes it.
+  defp reselect(%{assigns: %{selected: %{payment: %{id: id}} = selected}} = socket, %{id: id}),
+    do: select(socket, id, selected.refund)
+
+  defp reselect(socket, _record), do: socket
 
   defp sync(payment_id) do
     Ash.create(Payment, %{provider: "stripe", payment_id: payment_id, tenant: @tenant},
@@ -358,9 +385,25 @@ defmodule ShopWeb.ShopLive do
   end
 
   defp quantity(value) do
-    case Integer.parse(value || "") do
-      {count, ""} when count > 0 -> count
-      _one -> 1
+    case Integer.parse(String.trim(value || "")) do
+      {count, ""} when count in 1..@max_quantity -> {:ok, count}
+      _refused -> {:error, "Quantity must be a whole number from 1 to #{@max_quantity}."}
+    end
+  end
+
+  defp payment_id(value) do
+    case String.trim(value) do
+      "" -> {:error, "Type a payment id first, it starts with pi_."}
+      "cs_" <> _ -> {:error, "That is a checkout id (cs_). Use \"Read a checkout back\" below."}
+      id -> {:ok, id}
+    end
+  end
+
+  defp checkout_id(value) do
+    case String.trim(value) do
+      "" -> {:error, "Type a checkout id first, it starts with cs_."}
+      "pi_" <> _ -> {:error, "That is a payment id (pi_). Use \"Read payment\" above."}
+      id -> {:ok, id}
     end
   end
 

@@ -84,7 +84,9 @@ defmodule ShopWeb.PayComponents do
       <div class="card-body">
         <.icon name={@product.icon} class="size-8 text-primary" />
         <h3 class="card-title">{@product.name}</h3>
-        <p class="text-2xl font-semibold">${@product.price}</p>
+        <p class="text-2xl font-semibold">
+          ${@product.price} <span class="text-xs font-normal opacity-60">+ tax</span>
+        </p>
         <button
           name="product"
           value={@product.id}
@@ -110,7 +112,16 @@ defmodule ShopWeb.PayComponents do
       <div class="collapse-content grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label class="fieldset">
           <span class="fieldset-legend">Quantity</span>
-          <input name="quantity" type="number" min="1" value="1" class="input input-sm" />
+          <input
+            name="quantity"
+            type="number"
+            min="1"
+            max="10"
+            step="1"
+            value="1"
+            class="input input-sm"
+          />
+          <span class="label text-xs">1 to 10</span>
         </label>
         <label class="fieldset">
           <span class="fieldset-legend">Buyer email</span>
@@ -146,13 +157,14 @@ defmodule ShopWeb.PayComponents do
   def last_bought(assigns) do
     ~H"""
     <section class="card bg-base-200 border border-success/40">
-      <div class="card-body flex-row items-center gap-4">
+      <div class="card-body flex-row flex-wrap items-center gap-4">
         <.icon name="hero-shopping-bag" class="size-8 text-success" />
         <div class="flex-1">
           <p class="text-sm opacity-70">Last bought</p>
           <p class="text-lg font-semibold">
             {product_name(@payment.reference)} · {money(@payment.amount, @payment.currency)}
           </p>
+          <p class="text-xs opacity-60">What Stripe charged, with the tax it added at checkout.</p>
         </div>
         <.status_badge status={@payment.status} />
         <button class="btn btn-sm" phx-click="select" phx-value-id={@payment.id}>Details</button>
@@ -213,18 +225,18 @@ defmodule ShopWeb.PayComponents do
     <section id="payment-details" class="card bg-base-200 border border-primary/40">
       <div class="card-body gap-4">
         <div class="flex items-center gap-3">
-          <h2 class="card-title flex-1">
+          <h2 class="card-title flex-1 min-w-0 flex-wrap">
             {product_name(@selected.payment.reference)}
-            <code class="text-sm opacity-70">{@selected.payment.provider_id}</code>
+            <code class="text-sm opacity-70 break-all">{@selected.payment.provider_id}</code>
           </h2>
           <a
             href={"https://dashboard.stripe.com/test/payments/#{@selected.payment.provider_id}"}
             target="_blank"
-            class="btn btn-ghost btn-sm"
+            class="btn btn-ghost btn-sm shrink-0"
           >
             Stripe <.icon name="hero-arrow-top-right-on-square" class="size-4" />
           </a>
-          <button class="btn btn-ghost btn-sm" phx-click="close" aria-label="Close">
+          <button class="btn btn-ghost btn-sm shrink-0" phx-click="close" aria-label="Close">
             <.icon name="hero-x-mark" class="size-5" />
           </button>
         </div>

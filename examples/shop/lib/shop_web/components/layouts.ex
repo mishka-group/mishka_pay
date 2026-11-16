@@ -35,15 +35,20 @@ defmodule ShopWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8 border-b border-base-300">
-      <div class="flex-1 flex items-center gap-2">
-        <.icon name="hero-credit-card" class="size-6 text-primary" />
-        <span class="font-semibold">Mishka Pay demo shop</span>
-        <span class="badge badge-warning badge-sm">Stripe sandbox</span>
+    <header class="navbar px-4 sm:px-6 lg:px-8 border-b border-base-300 gap-2">
+      <div class="flex-1 min-w-0 flex items-center gap-2">
+        <.icon name="hero-credit-card" class="size-6 shrink-0 text-primary" />
+        <span class="font-semibold truncate">Mishka Pay demo shop</span>
+        <span class="badge badge-warning badge-sm hidden sm:inline-flex">Stripe sandbox</span>
       </div>
       <div class="flex-none flex items-center gap-2">
-        <a href="https://dashboard.stripe.com/test/payments" class="btn btn-ghost btn-sm">
-          Stripe dashboard <.icon name="hero-arrow-top-right-on-square" class="size-4" />
+        <a
+          href="https://dashboard.stripe.com/test/payments"
+          class="btn btn-ghost btn-sm"
+          aria-label="Stripe dashboard"
+        >
+          <span class="hidden sm:inline">Stripe dashboard</span>
+          <.icon name="hero-arrow-top-right-on-square" class="size-4" />
         </a>
         <.theme_toggle />
       </div>
