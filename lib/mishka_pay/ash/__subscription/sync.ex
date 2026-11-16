@@ -25,7 +25,7 @@ if Code.ensure_loaded?(Ash) do
     defp fetch(changeset) do
       provider = Ash.Changeset.get_argument(changeset, :provider)
       subscription_id = Ash.Changeset.get_argument(changeset, :subscription_id)
-      tenant = Ash.Changeset.get_argument(changeset, :tenant)
+      tenant = MishkaPay.Ash.Tenant.of(changeset)
 
       changeset
       |> Ash.Changeset.force_change_attribute(:tenant, tenant)

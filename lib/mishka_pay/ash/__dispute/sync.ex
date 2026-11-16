@@ -24,8 +24,10 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp ask(changeset, :sync) do
-      [provider, id, tenant] =
-        Enum.map([:provider, :dispute_id, :tenant], &Ash.Changeset.get_argument(changeset, &1))
+      [provider, id] =
+        Enum.map([:provider, :dispute_id], &Ash.Changeset.get_argument(changeset, &1))
+
+      tenant = MishkaPay.Ash.Tenant.of(changeset)
 
       changeset
       |> Ash.Changeset.force_change_attributes(%{

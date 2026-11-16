@@ -66,6 +66,35 @@ config :my_app, Oban,
 Generate migrations with `mix ash.codegen <name>` after adding a fragment (and add Oban's own
 migration once).
 
+## Many sites (Mishka CMS)
+
+A resource may carry Ash multitenancy on the host's own attribute; then each action runs with the
+site as Ash's tenant, the provider's keys are read for that site, and each webhook's row is synced
+inside the site its URL names (`/pay/webhooks/stripe/<site id>`). The row's `:tenant` keeps it for
+later actions. Keep the webhook inbox global (no multitenancy): a webhook comes before any site is
+chosen.
+
+```elixir
+defmodule MyApp.Pay.Payment do
+  use Ash.Resource, domain: MyApp.Pay, data_layer: AshPostgres.DataLayer,
+    fragments: [MishkaPay.Ash.Payment]
+
+  attributes do
+    attribute :site_id, :uuid, allow_nil?: false, public?: true
+  end
+
+  multitenancy do
+    strategy :attribute
+    attribute :site_id
+  end
+end
+
+Ash.create(MyApp.Pay.Payment, %{provider: "stripe", payment_id: "pi_..."},
+  action: :sync, tenant: site.id)
+```
+
+The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.Tenant`).
+
 ## Actions
 
 | Resource | Action | Args |

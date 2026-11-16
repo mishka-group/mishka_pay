@@ -50,7 +50,11 @@ if Code.ensure_loaded?(Ash) do
         tenant: event.tenant && to_string(event.tenant)
       }
 
-      case Ash.create(resource, args, action: :sync, authorize?: false) do
+      case Ash.create(
+             resource,
+             args,
+             [action: :sync] ++ MishkaPay.Ash.Tenant.opts(resource, args.tenant)
+           ) do
         {:ok, _customer} -> state
         {:error, error} -> %{state | failed: MishkaPay.Ash.message(error)}
       end
