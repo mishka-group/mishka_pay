@@ -31,6 +31,7 @@ defmodule MishkaPay.Messages do
           | :params_plain
           | :one_body
           | :return_url
+          | :ui_mode_urls
           | :metadata_strings
           | :items_empty
           | :items_currency
@@ -70,6 +71,8 @@ defmodule MishkaPay.Messages do
           | :paypal_id
           | :refund_currency
           | :refund_left
+          | :capture_over
+          | :capture_invoice
           | :refund_once
           | :refund_nothing_left
           | :refund_reference
@@ -164,6 +167,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:return_url),
     do: dgettext_noop("mishka_pay", "The %{field} field must be an https address")
+
+  defp msgid(:ui_mode_urls),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A hosted checkout needs success_url and cancel_url; an embedded one needs return_url instead"
+      )
 
   defp msgid(:metadata_strings),
     do: dgettext_noop("mishka_pay", "The metadata field must map string keys to string values")
@@ -374,6 +384,16 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The amount field is more than is left to refund on the payment"
       )
+
+  defp msgid(:capture_invoice),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Holding the money to capture later does not go with an invoice made at payment, and a merchant of record always makes one: turn both off for this checkout"
+      )
+
+  defp msgid(:capture_over),
+    do: dgettext_noop("mishka_pay", "The amount field is more than the payment holds")
 
   defp msgid(:refund_once),
     do:

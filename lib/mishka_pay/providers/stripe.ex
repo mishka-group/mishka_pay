@@ -67,6 +67,8 @@ defmodule MishkaPay.Providers.Stripe do
     label: "Stripe",
     capabilities: [
       :checkout,
+      :embedded_checkout,
+      :capture,
       :payment_list,
       :catalog,
       :payment_link,
@@ -117,9 +119,12 @@ defmodule MishkaPay.Providers.Stripe do
     "payment_intent.canceled" => [:payment],
     "payment_intent.processing" => [:payment],
     "payment_intent.requires_action" => [:payment],
+    "payment_intent.amount_capturable_updated" => [:payment],
     "charge.succeeded" => [:payment],
     "charge.failed" => [:payment],
     "charge.refunded" => [:payment],
+    "charge.captured" => [:payment],
+    "charge.expired" => [:payment],
     "refund.created" => [:payment],
     "refund.updated" => [:payment],
     "refund.failed" => [:payment],
@@ -190,6 +195,7 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- currencies(checkout.items),
          :ok <- metadata(checkout.metadata),
          :ok <- expiry(checkout.expires_at),
+         :ok <- held(checkout, keys),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -197,6 +203,18 @@ defmodule MishkaPay.Providers.Stripe do
       {:ok, Mapper.checkout(session, checkout)}
     end
   end
+
+  # Stripe refuses to hold the money where it makes an invoice after payment: with `invoice: true`,
+  # or as the merchant of record (Managed Payments), which always makes one. An account whose
+  # default is Managed Payments is refused by Stripe itself (`capture_invoice`).
+  defp held(%Checkout{capture: :manual} = checkout, keys) do
+    case checkout.invoice == true or Mapper.merchant_of_record(checkout, keys) == true do
+      true -> invalid(:capture, Messages.text(:capture_invoice))
+      false -> :ok
+    end
+  end
+
+  defp held(_checkout, _keys), do: :ok
 
   @impl MishkaPay.Provider
   def fetch_checkout(checkout_id, keys) do
@@ -243,15 +261,67 @@ defmodule MishkaPay.Providers.Stripe do
   defp read_payment(payment_id, keys) do
     with :ok <- stripe_id(payment_id, "pi_", :payment_id),
          {:ok, intent} <-
+           request(:get, "/v1/payment_intents/#{payment_id}", payment_expand(), keys) do
+      Mapper.payment(intent)
+    end
+  end
+
+  defp payment_expand,
+    do: [
+      {"expand[]", "latest_charge"},
+      {"expand[]", "latest_charge.refunds"},
+      {"expand[]", "customer"}
+    ]
+
+  # A part is checked against the payment first: Stripe reads `amount_to_capture` in the
+  # payment's own currency, so money in another one would be taken as the wrong sum.
+  @impl MishkaPay.Provider
+  def capture_payment(payment_id, opts, keys) do
+    amount = opts[:amount]
+
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
+         :ok <- capturable(payment_id, amount, keys),
+         {:ok, intent} <-
            request(
-             :get,
-             "/v1/payment_intents/#{payment_id}",
-             [
-               {"expand[]", "latest_charge"},
-               {"expand[]", "latest_charge.refunds"},
-               {"expand[]", "customer"}
-             ],
-             keys
+             :post,
+             "/v1/payment_intents/#{payment_id}/capture",
+             form(Mapper.capture_params(amount)) ++ payment_expand(),
+             keys,
+             key:
+               ProviderKit.idempotency_key(
+                 "capture",
+                 keys.tenant,
+                 {payment_id, amount && Mapper.minor(amount)}
+               )
+           ) do
+      Mapper.payment(intent)
+    end
+  end
+
+  defp capturable(_payment_id, nil, _keys), do: :ok
+
+  defp capturable(payment_id, amount, keys) do
+    with :ok <- currencies([%{amount: amount}]),
+         {:ok, payment} <- read_payment(payment_id, keys) do
+      cond do
+        amount.currency != payment.amount.currency ->
+          invalid(:amount, Messages.text(:refund_currency, currency: payment.amount.currency))
+
+        Decimal.gt?(amount.amount, payment.amount.amount) ->
+          invalid(:amount, Messages.text(:capture_over))
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def cancel_payment(payment_id, keys) do
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
+         {:ok, intent} <-
+           request(:post, "/v1/payment_intents/#{payment_id}/cancel", payment_expand(), keys,
+             key: ProviderKit.idempotency_key("payment-cancel", keys.tenant, payment_id)
            ) do
       Mapper.payment(intent)
     end
@@ -1115,6 +1185,7 @@ defmodule MishkaPay.Providers.Stripe do
   defp param_in(message) when is_binary(message) do
     cond do
       String.contains?(message, "product tax code is missing") -> "tax_code"
+      String.contains?(message, "separate authorization and capture") -> "capture"
       match = Regex.run(~r/\A`(\w+)` can only be used/, message) -> List.last(match)
       true -> nil
     end
@@ -1124,7 +1195,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
   # its words; so is an invoice turned off where Managed Payments must make one, a product without
-  # the tax code it needs, and a choice that belongs only to one-time or only to recurring prices.
+  # the tax code it needs, a choice that belongs only to one-time or only to recurring prices, and
+  # a hold on the card where an invoice is made after payment.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
 
   defp code_of(%{"code" => code}) when is_binary(code), do: code
@@ -1136,6 +1208,7 @@ defmodule MishkaPay.Providers.Stripe do
       String.contains?(message, "product tax code is missing") -> "tax_code_missing"
       String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
       String.contains?(message, "must pass a recurring price") -> "recurring_only"
+      String.contains?(message, "separate authorization and capture") -> "capture_invoice"
       true -> nil
     end
   end

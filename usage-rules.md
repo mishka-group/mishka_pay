@@ -93,6 +93,8 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.checkout(attrs)` | `{:ok, %MishkaPay.Checkout{url: url}}`: redirect the buyer to `url` |
 | `MishkaPay.fetch_checkout(provider, checkout_id, tenant)` | the checkout read back, with `:payment_id` or `:subscription_id` once paid |
 | `MishkaPay.fetch_payment(provider, payment_id, tenant)` | `%MishkaPay.Payment{}` with status, buyer, card, refunds |
+| `MishkaPay.checkout(%{ui_mode: :embedded, return_url: url, ...})` | `%MishkaPay.Checkout{client_secret: secret}`: the provider's form inside the site's page |
+| `MishkaPay.capture_payment(provider, payment_id, tenant, amount: money)`, `cancel_payment/3` | the `%MishkaPay.Payment{}` after: a held (`:authorized`) payment taken, all or part, or let go |
 | `MishkaPay.refund(attrs)` | `%MishkaPay.Refund{}` |
 | `MishkaPay.fetch_refund(provider, refund_id, tenant)`, `list_refunds(provider, tenant, payment_id: id)` | `%MishkaPay.Refund{}` read again; a `MishkaPay.Page` of them |
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
@@ -158,6 +160,14 @@ redirect(conn, external: checkout.url)
 - A **subscription** is a checkout with `mode: :subscription`, items with `interval:` and an
   optional `trial_days:`. See `usage-rules/subscriptions.md`.
 - A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
+- **Embedded:** `ui_mode: :embedded` shows the provider's form inside the site's own page. It takes
+  one `return_url` instead of `success_url` and `cancel_url`, and answers `:client_secret` (no
+  `:url`). Give the secret to that buyer's page only; Stripe.js mounts the form with it. The
+  provider needs `:embedded_checkout`.
+- **Pay later:** `capture: :manual` (one-time checkouts only) holds the money on the card. The
+  payment reads `:authorized` until `capture_payment/4` takes it (all, or `amount:`) or
+  `cancel_payment/3` lets it go. A hold ends by itself after some days (Stripe: 7). The provider
+  needs `:capture`.
 - A checkout's `customer:` names the buyer by `id` (a customer made with `create_customer/1`) or by
   `email`, never both.
 

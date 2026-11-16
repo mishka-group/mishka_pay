@@ -42,12 +42,13 @@ defmodule MishkaPay.ProviderKit do
   @doc """
   Whether `refund` may go to the provider for `payment` as it is now: refused when the site
   refunds once and the payment has a refund, when nothing is left, or when a part refund is in
-  another currency or over what is left.
+  another currency or over what is left. What is left counts from what the provider took, a part
+  when a held payment was captured in part.
   """
   @spec refundable(Refund.t(), Payment.t(), map()) :: :ok | {:error, Splode.Error.t()}
   def refundable(%Refund{amount: amount}, %Payment{} = payment, keys) do
     refunded = payment.amount_refunded || Money.new(payment.amount.currency, 0)
-    left = Decimal.sub(payment.amount.amount, refunded.amount)
+    left = Decimal.sub(taken(payment).amount, refunded.amount)
 
     cond do
       keys.refunds == :once and Money.positive?(refunded) ->
@@ -69,6 +70,9 @@ defmodule MishkaPay.ProviderKit do
         :ok
     end
   end
+
+  defp taken(%Payment{amount_captured: %Money{} = captured}), do: captured
+  defp taken(%Payment{amount: amount}), do: amount
 
   @doc "An `:invalid` class error on `field` with `message`, as a builder error would be."
   @spec invalid(atom(), String.t()) :: {:error, Splode.Error.t()}

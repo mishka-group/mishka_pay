@@ -15,8 +15,13 @@ defmodule MishkaPay.Checkout do
 
     * `:provider` and `:tenant`: which provider, with whose keys (`MishkaPay.Credentials`).
     * `:items`: one or more `MishkaPay.Price`, all in one currency.
-    * `:success_url`, `:cancel_url`: where the buyer is sent after paying or giving up; `https`, or
-      `http` on `localhost`.
+    * `:ui_mode`: `:hosted` (the default) sends the buyer to the provider's page; `:embedded`
+      shows the provider's form inside the site's own page, and needs `:embedded_checkout`.
+    * `:success_url`, `:cancel_url`: with `:hosted`, where the buyer is sent after paying or
+      giving up; `https`, or `http` on `localhost`. Both are required.
+    * `:return_url`: with `:embedded`, the one address the buyer comes back to after paying, or
+      after a payment method's own page. It is required, and replaces the two above. At Stripe,
+      `{CHECKOUT_SESSION_ID}` in it becomes the checkout's id.
     * `:customer`: an optional buyer: `%{id: "cus_..."}` for a customer the provider keeps, or
       `%{email: "..."}` to fill in a new buyer's email; one or the other (`MishkaPay.Customer`).
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
@@ -62,6 +67,10 @@ defmodule MishkaPay.Checkout do
     * `:tax_id_collection`: `true` lets a business buyer give its tax id.
     * `:invoice`: in a one-time checkout, `true` makes an invoice for the payment, which the
       provider can email with the receipt; a subscription makes its own invoices.
+    * `:capture`: in a one-time checkout, `:manual` only holds the money on the buyer's card: the
+      payment waits as `:authorized` until `MishkaPay.capture_payment/4` takes it, all or part,
+      or `MishkaPay.cancel_payment/3` lets it go. Needs `:capture`. `:automatic` (the default)
+      takes it at once. Card holds end on their own after some days (Stripe: 7 by default).
 
   A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
   leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
@@ -69,7 +78,9 @@ defmodule MishkaPay.Checkout do
   What the provider fills in:
 
     * `:id`: the provider's id of the checkout (`cs_...` at Stripe).
-    * `:url`: the page to send the buyer to.
+    * `:url`: the page to send the buyer to, with `:hosted`.
+    * `:client_secret`: with `:embedded`, what the site's page gives the provider's script to
+      show the form (Stripe.js `initEmbeddedCheckout`). Send it only to that buyer's browser.
     * `:status`: `:open`, `:complete` or `:expired`.
     * `:payment_id`: the payment it made, once there is one (a one-time checkout).
     * `:subscription_id`: the subscription it started, once there is one.
@@ -97,15 +108,26 @@ defmodule MishkaPay.Checkout do
       structs: MishkaPay.Price,
       derives: "validate(not_nil_value, list)"
 
+    field :ui_mode, :hosted | :embedded,
+      default: :hosted,
+      derives: "validate(not_nil_value, enum=Atom[hosted::embedded])",
+      validator: {__MODULE__, :ui_mode}
+
     field :success_url, String.t(),
-      enforce: true,
-      derives: "sanitize(trim) validate(not_nil_value, string)",
+      derives: "sanitize(trim) validate(string)",
       validator: {__MODULE__, :return_url}
 
     field :cancel_url, String.t(),
-      enforce: true,
-      derives: "sanitize(trim) validate(not_nil_value, string)",
+      derives: "sanitize(trim) validate(string)",
       validator: {__MODULE__, :return_url}
+
+    field :return_url, String.t(),
+      derives: "sanitize(trim) validate(string)",
+      validator: {__MODULE__, :return_url}
+
+    field :capture, :automatic | :manual,
+      derives: "validate(enum=Atom[automatic::manual])",
+      validator: {__MODULE__, :capture}
 
     field :customer, struct(), struct: MishkaPay.Customer
 
@@ -119,6 +141,7 @@ defmodule MishkaPay.Checkout do
 
     field :id, String.t(), derives: "validate(string)"
     field :url, String.t(), derives: "validate(string)"
+    field :client_secret, String.t(), derives: "validate(string)"
 
     field :status, :open | :complete | :expired,
       derives: "validate(enum=Atom[open::complete::expired])"
@@ -191,6 +214,14 @@ defmodule MishkaPay.Checkout do
   def billing_address(field, value),
     do: Choice.atom(field, value, ~w(auto required))
 
+  @doc false
+  def ui_mode(field, value),
+    do: Choice.atom(field, value, ~w(hosted embedded))
+
+  @doc false
+  def capture(field, value),
+    do: Choice.atom(field, value, ~w(automatic manual))
+
   # A checkout that expires is one that has not expired yet.
   @doc false
   def later(field, %DateTime{} = at) do
@@ -239,7 +270,8 @@ defmodule MishkaPay.Checkout do
   # reported on its own.
   @doc false
   def consistent(attrs) do
-    with {:ok, attrs} <- one_currency(attrs),
+    with {:ok, attrs} <- urls_mode(attrs),
+         {:ok, attrs} <- one_currency(attrs),
          {:ok, attrs} <- one_buyer(attrs),
          {:ok, attrs} <- one_discount_way(attrs),
          {:ok, attrs} <- customer_creation_mode(attrs),
@@ -247,6 +279,39 @@ defmodule MishkaPay.Checkout do
          {:ok, attrs} <- options_mode(attrs),
          do: fits_mode(attrs)
   end
+
+  # A hosted checkout comes back to its success or cancel page; an embedded one to its return
+  # page only.
+  defp urls_mode(attrs) do
+    wrong =
+      if key(attrs, :ui_mode) in [:embedded, "embedded"],
+        do: [:success_url, :cancel_url],
+        else: [:return_url]
+
+    case Enum.find(wrong, &key(attrs, &1)) do
+      nil -> {:ok, attrs}
+      field -> {:error, page_error(field)}
+    end
+  end
+
+  @doc """
+  Whether built `checkout` has the pages its `:ui_mode` needs: `:success_url` and `:cancel_url`
+  when hosted, `:return_url` when embedded. `MishkaPay.checkout/1` checks it after the build, so
+  a page given and refused is reported once, by its own field.
+  """
+  @spec pages(t()) :: :ok | {:error, Splode.Error.t()}
+  def pages(%__MODULE__{} = checkout) do
+    needed =
+      if checkout.ui_mode == :embedded, do: [:return_url], else: [:success_url, :cancel_url]
+
+    case Enum.find(needed, &is_nil(Map.get(checkout, &1))) do
+      nil -> :ok
+      field -> MishkaPay.Errors.from_builder({:error, [page_error(field)]})
+    end
+  end
+
+  defp page_error(field),
+    do: %{field: field, action: :ui_mode, message: Messages.text(:ui_mode_urls)}
 
   # Discounts the checkout applies, or codes the buyer types: providers take one or the other.
   defp one_discount_way(attrs) do
@@ -275,6 +340,14 @@ defmodule MishkaPay.Checkout do
            field: :card_required,
            action: :mode,
            message: Messages.text(:recurring_only, param: "card_required")
+         }}
+
+      key(attrs, :capture) in [:manual, "manual"] and subscription? ->
+        {:error,
+         %{
+           field: :capture,
+           action: :mode,
+           message: Messages.text(:one_time_only, param: "capture")
          }}
 
       not is_nil(key(attrs, :submit_type)) and subscription? ->

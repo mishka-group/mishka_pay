@@ -863,6 +863,83 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.portal_session(Map.put(base, :flow, :subscription_cancel))
     end
 
+    test "an embedded checkout that holds the money goes to Stripe as its spec accepts" do
+      embedded =
+        @checkout
+        |> Map.drop([:success_url, :cancel_url])
+        |> Map.merge(%{
+          ui_mode: :embedded,
+          return_url: "https://shop.test/return?session_id={CHECKOUT_SESSION_ID}",
+          capture: :manual
+        })
+
+      assert {:ok, %Checkout{id: "cs_" <> _, ui_mode: :embedded, capture: :manual}} =
+               MishkaPay.checkout(embedded)
+
+      params =
+        Stripe.Mapper.checkout_params(%{
+          params_checkout()
+          | ui_mode: :embedded,
+            success_url: nil,
+            cancel_url: nil,
+            return_url: "https://shop.test/return",
+            capture: :manual
+        })
+
+      assert {params["ui_mode"], params["return_url"]} ==
+               {"embedded_page", "https://shop.test/return"}
+
+      refute Map.has_key?(params, "success_url")
+      assert params["payment_intent_data"]["capture_method"] == "manual"
+
+      hosted = Stripe.Mapper.checkout_params(params_checkout())
+      assert hosted["success_url"] == "https://shop.test/thanks"
+      refute Map.has_key?(hosted, "ui_mode")
+      refute Map.has_key?(hosted["payment_intent_data"], "capture_method")
+    end
+
+    test "a held payment is captured, whole or in part, or let go, as Stripe's spec accepts" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
+
+      assert {:ok, %Payment{id: "pi_" <> _}} =
+               MishkaPay.capture_payment("stripe", "pi_123", "site-a")
+
+      assert_received {_, ^ref, _,
+                       %{
+                         path: "/v1/payment_intents/pi_123/capture",
+                         idempotency_key: "mishka_pay-capture-" <> _ = whole
+                       }}
+
+      assert {:ok, %Payment{}} =
+               MishkaPay.capture_payment("stripe", "pi_123", "site-a",
+                 amount: %{amount: "5", currency: "USD"}
+               )
+
+      assert_received {_, ^ref, _,
+                       %{path: "/v1/payment_intents/pi_123/capture", idempotency_key: part}}
+
+      refute part == whole
+
+      assert {:ok, %Payment{}} = MishkaPay.cancel_payment("stripe", "pi_123", "site-a")
+
+      assert_received {_, ^ref, _,
+                       %{
+                         path: "/v1/payment_intents/pi_123/cancel",
+                         idempotency_key: "mishka_pay-payment-cancel-" <> _
+                       }}
+
+      # Stripe's fixture holds 10.99 USD.
+      for {amount, message} <- [
+            {%{amount: "5", currency: "EUR"}, "in the payment's currency, USD"},
+            {%{amount: "50", currency: "USD"}, "more than the payment holds"}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :amount, message: text}]}} =
+                 MishkaPay.capture_payment("stripe", "pi_123", "site-a", amount: amount)
+
+        assert text =~ message
+      end
+    end
+
     test "a refund is read again and listed by payment, as Stripe's spec answers" do
       assert {:ok, %Refund{provider: "stripe", id: "re_" <> _, amount: %Elixir.Money{}}} =
                MishkaPay.fetch_refund("stripe", "re_123", "site-a")
@@ -1574,6 +1651,119 @@ defmodule MishkaPay.Providers.StripeTest do
   defp named?(event, :subscription), do: event.subscription_id == "sub_1"
   defp named?(event, :dispute), do: event.dispute_id == "dp_1"
   defp named?(event, :customer), do: {event.object_type, event.object_id} == {"customer", "cus_1"}
+
+  test "a capture or a release that cannot be right is refused before any request" do
+    MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+    for amount <- [
+          %{amount: "0", currency: "USD"},
+          "five",
+          %{amount: "5", currency: "XYZ"},
+          %{amount: "1.5", currency: "ISK"}
+        ] do
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.capture_payment("stripe", "pi_123", nil, amount: amount)
+    end
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+             MishkaPay.capture_payment("stripe", "ch_123")
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+             MishkaPay.cancel_payment("stripe", "cs_123")
+
+    # Stripe makes an invoice after payment with `invoice: true` and as the merchant of record,
+    # and holds no money then.
+    held = Map.put(@checkout, :capture, :manual)
+
+    for attrs <- [Map.put(held, :invoice, true), Map.put(held, :merchant_of_record, true)] do
+      assert {:error, %Errors.Invalid{errors: [%{field: :capture}]}} = MishkaPay.checkout(attrs)
+    end
+  end
+
+  test "Stripe's refusal to hold the money where it invoices names the capture choice" do
+    MishkaPay.Test.stub_http(fn conn ->
+      conn
+      |> Plug.Conn.put_status(400)
+      |> Req.Test.json(%{
+        "error" => %{
+          "type" => "invalid_request_error",
+          "message" =>
+            "Post-payment invoice creation does not support separate authorization and capture. Please set payment_intent_data[capture_method] to `automatic`."
+        }
+      })
+    end)
+
+    assert {:error, %Errors.Rejected{code: "capture_invoice", param: "capture"} = error} =
+             MishkaPay.checkout(Map.put(@checkout, :capture, :manual))
+
+    assert Exception.message(error) =~ "merchant of record"
+  end
+
+  test "an embedded Checkout Session reads back with its client secret and return page" do
+    session = %{
+      "id" => "cs_test_a1",
+      "object" => "checkout.session",
+      "ui_mode" => "embedded_page",
+      "url" => nil,
+      "client_secret" => "cs_test_a1_secret_xyz",
+      "return_url" => "https://shop.test/return?session_id={CHECKOUT_SESSION_ID}",
+      "status" => "open",
+      "currency" => "usd",
+      "amount_total" => 1999
+    }
+
+    assert %Checkout{
+             ui_mode: :embedded,
+             client_secret: "cs_test_a1_secret_xyz",
+             return_url: "https://shop.test/return?session_id={CHECKOUT_SESSION_ID}",
+             url: nil
+           } = Stripe.Mapper.checkout(session)
+
+    assert %Checkout{ui_mode: :hosted, client_secret: nil} =
+             Stripe.Mapper.checkout(%{
+               session
+               | "ui_mode" => "hosted_page",
+                 "client_secret" => nil
+             })
+  end
+
+  test "a held PaymentIntent is authorized, and one captured in part counts its refunds on the part" do
+    held = %{
+      "id" => "pi_1",
+      "object" => "payment_intent",
+      "amount" => 2000,
+      "amount_capturable" => 2000,
+      "amount_received" => 0,
+      "capture_method" => "manual",
+      "currency" => "usd",
+      "status" => "requires_capture",
+      "created" => 1_794_825_000,
+      "latest_charge" => %{"id" => "ch_1", "amount_refunded" => 0, "captured" => false}
+    }
+
+    assert {:ok, %Payment{status: :authorized, amount_captured: nil}} =
+             Stripe.Mapper.payment(held)
+
+    captured = %{
+      held
+      | "status" => "succeeded",
+        "amount_capturable" => 0,
+        "amount_received" => 1200,
+        "latest_charge" => %{"id" => "ch_1", "amount_refunded" => 1200, "captured" => true}
+    }
+
+    assert {:ok, %Payment{status: :refunded, amount: amount, amount_captured: part}} =
+             Stripe.Mapper.payment(captured)
+
+    assert {Money.to_string!(amount), Money.to_string!(part)} == {"$20.00", "$12.00"}
+
+    assert {:ok, %Payment{status: :partially_refunded}} =
+             Stripe.Mapper.payment(put_in(captured, ["latest_charge", "amount_refunded"], 200))
+
+    assert Stripe.Mapper.capture_params(nil) == %{}
+    assert Stripe.Mapper.capture_params(Money.new(:USD, "12")) == %{"amount_to_capture" => 1200}
+    assert Stripe.Mapper.capture_params(Money.new(:ISK, "5")) == %{"amount_to_capture" => 500}
+  end
 
   test "a dispute maps with its status, due date and evidence count" do
     assert {:ok,

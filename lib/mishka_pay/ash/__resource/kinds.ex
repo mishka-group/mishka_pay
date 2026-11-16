@@ -25,6 +25,7 @@ if Code.ensure_loaded?(Ash) do
     @payment_statuses [
       :pending,
       :requires_action,
+      :authorized,
       :paid,
       :partially_refunded,
       :refunded,

@@ -9,8 +9,12 @@ defmodule MishkaPay.Payment do
 
     * `:id`: the provider's id (`pi_...` at Stripe).
     * `:amount`: what was asked, a `Money`; `:amount_refunded`: what went back so far.
+    * `:amount_captured`: what the provider took, once paid; less than `:amount` when a held
+      payment was captured in part (`MishkaPay.capture_payment/4`).
     * `:status`: `:pending` (not paid yet), `:requires_action` (the buyer must do something, such
-      as 3-D Secure), `:paid`, `:partially_refunded`, `:refunded`, `:failed` or `:canceled`.
+      as 3-D Secure), `:authorized` (the money is held on the card and waits for
+      `MishkaPay.capture_payment/4` or `MishkaPay.cancel_payment/3`), `:paid`,
+      `:partially_refunded`, `:refunded`, `:failed` or `:canceled`.
     * `:reference`: the caller's own id given at checkout; `:owner`: who the sale is for, as the
       checkout named them (`MishkaPay.Checkout`).
     * `:customer_id`, `:customer_email`, `:customer_name`: the buyer, as far as the provider knows
@@ -33,13 +37,14 @@ defmodule MishkaPay.Payment do
 
   use GuardedStruct
 
-  @statuses "Atom[pending::requires_action::paid::partially_refunded::refunded::failed::canceled]"
+  @statuses "Atom[pending::requires_action::authorized::paid::partially_refunded::refunded::failed::canceled]"
 
   guardedstruct authorized_fields: true do
     field :provider, String.t(), enforce: true, derives: "validate(not_nil_value, string)"
     field :id, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
     field :amount, Money.t(), enforce: true, validator: {MishkaPay.Money, :field}
     field :amount_refunded, Money.t(), validator: {MishkaPay.Money, :field}
+    field :amount_captured, Money.t(), validator: {MishkaPay.Money, :field}
     field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@statuses})"
     field :reference, String.t(), derives: "validate(string)"
     field :owner, String.t(), derives: "validate(string)"
