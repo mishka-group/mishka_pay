@@ -17,14 +17,33 @@ defmodule ShopWeb.BillsComponent do
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
   @impl true
-  def mount(socket), do: {:ok, assign(socket, bill: nil, deleted: nil, steps: [])}
+  def mount(socket) do
+    {:ok,
+     assign(socket,
+       bill: nil,
+       deleted: nil,
+       steps: [],
+       error: nil,
+       form: %{
+         "item_name" => "Consulting, one hour",
+         "item_amount" => "120.00",
+         "item_quantity" => "1",
+         "collection" => "send_invoice"
+       }
+     )}
+  end
 
   @impl true
   def update(assigns, socket),
     do: {:ok, assign(socket, tenant: assigns.tenant, customers: customers())}
 
   @impl true
+  # The form keeps what was typed, so a refused bill can be fixed instead of typed again.
+  def handle_event("draft", params, socket), do: {:noreply, assign(socket, form: params)}
+
   def handle_event("create", params, socket) do
+    socket = assign(socket, form: params, error: nil)
+
     with {:ok, customer_id} <- customer_id(params),
          {:ok, bill} <-
            MishkaPay.create_invoice(draft(customer_id, params, socket.assigns.tenant)) do
@@ -33,7 +52,20 @@ defmodule ShopWeb.BillsComponent do
        |> assign(bill: bill, deleted: nil, steps: [])
        |> step("Made as a draft", bill)}
     else
-      {:error, error} -> {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+      {:error, error} -> {:noreply, refused(socket, error)}
+    end
+  end
+
+  def handle_event("read", %{"bill_id" => id}, socket) do
+    case MishkaPay.fetch_invoice("stripe", String.trim(id), socket.assigns.tenant) do
+      {:ok, bill} ->
+        {:noreply,
+         socket
+         |> assign(bill: bill, deleted: nil, error: nil, steps: [])
+         |> step("Read again", bill)}
+
+      {:error, error} ->
+        {:noreply, refused(socket, error)}
     end
   end
 
@@ -50,7 +82,7 @@ defmodule ShopWeb.BillsComponent do
         {:noreply, socket |> assign(bill: bill) |> step(done(action), bill)}
 
       {:error, error} ->
-        {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+        {:noreply, refused(socket, error)}
     end
   end
 
@@ -70,6 +102,7 @@ defmodule ShopWeb.BillsComponent do
       <div class="grid gap-4 md:grid-cols-2">
         <form
           id="bill-form"
+          phx-change="draft"
           phx-submit="create"
           phx-target={@myself}
           class="rounded-box bg-base-200 p-4 space-y-3"
@@ -81,7 +114,11 @@ defmodule ShopWeb.BillsComponent do
               <span class="fieldset-legend">Customer</span>
               <select name="customer" class="select select-sm" data-testid="bill-customer">
                 <option value="">Pick one</option>
-                <option :for={customer <- @customers} value={customer.provider_id}>
+                <option
+                  :for={customer <- @customers}
+                  value={customer.provider_id}
+                  selected={@form["customer"] == customer.provider_id}
+                >
                   {customer.name || customer.email || customer.provider_id}
                 </option>
               </select>
@@ -90,6 +127,7 @@ defmodule ShopWeb.BillsComponent do
               <span class="fieldset-legend">or its id</span>
               <input
                 name="customer_id"
+                value={@form["customer_id"]}
                 placeholder="cus_..."
                 class="input input-sm"
                 data-testid="bill-customer-id"
@@ -99,7 +137,7 @@ defmodule ShopWeb.BillsComponent do
               <span class="fieldset-legend">What it bills</span>
               <input
                 name="item_name"
-                value="Consulting, one hour"
+                value={@form["item_name"]}
                 class="input input-sm"
                 data-testid="bill-item-name"
               />
@@ -109,7 +147,7 @@ defmodule ShopWeb.BillsComponent do
                 <span class="fieldset-legend">Price, USD</span>
                 <input
                   name="item_amount"
-                  value="120.00"
+                  value={@form["item_amount"]}
                   class="input input-sm"
                   data-testid="bill-item-amount"
                 />
@@ -120,7 +158,7 @@ defmodule ShopWeb.BillsComponent do
                   name="item_quantity"
                   type="number"
                   min="1"
-                  value="1"
+                  value={@form["item_quantity"]}
                   class="input input-sm"
                   data-testid="bill-item-quantity"
                 />
@@ -129,14 +167,22 @@ defmodule ShopWeb.BillsComponent do
             <label class="fieldset">
               <span class="fieldset-legend">How it is paid</span>
               <select name="collection" class="select select-sm" data-testid="bill-collection">
-                <option value="send_invoice">Email it, the customer pays on Stripe's page</option>
-                <option value="charge_automatically">Charge the saved card</option>
+                <option value="send_invoice" selected={@form["collection"] == "send_invoice"}>
+                  Email it, the customer pays on Stripe's page
+                </option>
+                <option
+                  value="charge_automatically"
+                  selected={@form["collection"] == "charge_automatically"}
+                >
+                  Charge the saved card
+                </option>
               </select>
             </label>
             <label class="fieldset">
               <span class="fieldset-legend">Days to pay (emailed bills)</span>
               <input
                 name="days_until_due"
+                value={@form["days_until_due"]}
                 type="number"
                 min="1"
                 placeholder="30"
@@ -148,6 +194,7 @@ defmodule ShopWeb.BillsComponent do
               <span class="fieldset-legend">Note on the bill</span>
               <input
                 name="description"
+                value={@form["description"]}
                 placeholder="Thank you for your order."
                 class="input input-sm"
                 data-testid="bill-description"
@@ -161,9 +208,26 @@ defmodule ShopWeb.BillsComponent do
           >
             Make the bill
           </button>
+          <p :if={@error} class="alert alert-error text-sm" data-testid="bill-error">{@error}</p>
         </form>
 
         <div class="rounded-box bg-base-200 p-4 space-y-3" data-testid="bill-result">
+          <form
+            id="bill-lookup"
+            phx-submit="read"
+            phx-target={@myself}
+            class="join"
+            data-testid="bill-lookup"
+          >
+            <input
+              name="bill_id"
+              placeholder="in_... a bill made before"
+              required
+              class="input input-sm join-item"
+              data-testid="bill-lookup-id"
+            />
+            <button class="btn btn-sm join-item" data-testid="bill-lookup-submit">Read it</button>
+          </form>
           <p
             :if={!@bill and !@deleted}
             class="text-sm opacity-70"
@@ -390,6 +454,12 @@ defmodule ShopWeb.BillsComponent do
   end
 
   defp blank_nil(_none), do: nil
+
+  # A refusal shows beside the form that made it, and in the page's alerts.
+  defp refused(socket, error) do
+    message = if is_binary(error), do: error, else: MishkaPay.Ash.message(error)
+    socket |> assign(error: message) |> say(:error, message)
+  end
 
   defp say(socket, kind, message) do
     send(self(), {:flash, kind, message})
