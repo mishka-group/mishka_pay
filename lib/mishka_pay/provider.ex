@@ -66,6 +66,7 @@ defmodule MishkaPay.Provider do
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
       `update_payment_link/2`;
     * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
+    * `:file`: `upload_file/2`, `fetch_file/2`, `file_link/3`;
     * `:webhook`: `verify_webhook/3`;
     * `:event_list`: `list_events/2`.
 
@@ -98,6 +99,7 @@ defmodule MishkaPay.Provider do
     :catalog,
     :payment_link,
     :dispute,
+    :file,
     :webhook,
     :event_list,
     :return_verify
@@ -123,6 +125,7 @@ defmodule MishkaPay.Provider do
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
+    * `:file`: keeps files, such as dispute evidence, and makes public links to them.
     * `:webhook`: sends signed messages when something changes.
     * `:event_list`: lists the messages it sent, to deliver again those a site missed.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
@@ -143,6 +146,7 @@ defmodule MishkaPay.Provider do
           | :catalog
           | :payment_link
           | :dispute
+          | :file
           | :payment_list
           | :webhook
           | :event_list
@@ -434,6 +438,18 @@ defmodule MishkaPay.Provider do
   @callback accept_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:file`. Uploads a file, after checking the provider takes its type and size."
+  @callback upload_file(MishkaPay.FileUpload.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:file`. Reads one file the provider keeps."
+  @callback fetch_file(file_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:file`. Makes a public link to a file; `:expires_at` ends it."
+  @callback file_link(file_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:payment_link`. Makes a payment link and answers it with its `:id` and `:url`."
   @callback create_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
@@ -530,6 +546,9 @@ defmodule MishkaPay.Provider do
                       list_disputes: 2,
                       update_dispute: 2,
                       accept_dispute: 2,
+                      upload_file: 2,
+                      fetch_file: 2,
+                      file_link: 3,
                       create_payment_link: 2,
                       fetch_payment_link: 2,
                       list_payment_links: 2,
@@ -601,6 +620,7 @@ defmodule MishkaPay.Provider do
     ],
     event_list: [list_events: 2],
     dispute: [fetch_dispute: 2, list_disputes: 2, update_dispute: 2, accept_dispute: 2],
+    file: [upload_file: 2, fetch_file: 2, file_link: 3],
     payment_link: [
       create_payment_link: 2,
       fetch_payment_link: 2,

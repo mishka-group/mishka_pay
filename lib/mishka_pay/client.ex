@@ -42,7 +42,12 @@ defmodule MishkaPay.Client do
   `base_url` is an `http` or `https` address with no user, query or fragment, and `path` one plain
   path from `/`: no query (`params` carries it), no control character, dot segment or encoded
   slash. So a path can never send the request, and its auth, to another host or place.
-  `form` and `json` are one or the other. Header names are compared without case.
+  Header names are compared without case.
+
+  The body is one of `form`, `json` or `multipart`. `multipart` sends `multipart/form-data`, the
+  way a file is uploaded: a list of `{name, value}` parts, where a value is a binary, or
+  `{binary, filename: "receipt.pdf", content_type: "application/pdf"}` for a file. A value is
+  always bytes in memory, never a path or a stream, so a request never reads a file from disk.
 
   `:options` takes any other Req option, such as `plug: {Req.Test, MyTest}` in a test, on top of
   `config :mishka_pay, req_options: [...]` (see `MishkaPay.Test.stub_http/1`). It cannot
@@ -86,6 +91,7 @@ defmodule MishkaPay.Client do
 
     field :form, term(), derives: "validate(either=[map, list])"
     field :json, term()
+    field :multipart, term(), validator: {__MODULE__, :multipart}
 
     field :idempotency_header, String.t(),
       derives: "sanitize(trim, downcase) validate(string, not_empty)"
@@ -150,11 +156,21 @@ defmodule MishkaPay.Client do
       |> put_present(:params, spec.params)
       |> put_present(:form, spec.form)
       |> put_present(:json, spec.json)
+      |> put_present(:form_multipart, spec.multipart)
 
     :mishka_pay
     |> Application.get_env(:req_options, [])
     |> Keyword.merge(spec.options)
-    |> Keyword.drop([:auth, :params, :form, :json, :body, :headers, :retry_delay])
+    |> Keyword.drop([
+      :auth,
+      :params,
+      :form,
+      :json,
+      :form_multipart,
+      :body,
+      :headers,
+      :retry_delay
+    ])
     |> Req.new()
     |> Req.merge(ours)
   end
@@ -268,11 +284,43 @@ defmodule MishkaPay.Client do
 
   def params(:params, params), do: {:ok, :params, params}
 
+  # Parts of names and bytes only: a binary, or a binary with its filename and content type.
   @doc false
-  def one_body(%{form: form, json: json}) when not is_nil(form) and not is_nil(json),
-    do: {:error, %{field: :json, action: :one_body, message: Messages.text(:one_body)}}
+  def multipart(:multipart, [_ | _] = parts) do
+    case Enum.all?(parts, &part?/1) do
+      true -> {:ok, :multipart, parts}
+      false -> {:error, :multipart, Messages.text(:multipart_parts)}
+    end
+  end
 
-  def one_body(attrs), do: {:ok, attrs}
+  def multipart(:multipart, nil), do: {:ok, :multipart, nil}
+  def multipart(:multipart, _other), do: {:error, :multipart, Messages.text(:multipart_parts)}
+
+  defp part?({name, value}) when is_binary(name) or is_atom(name), do: part_value?(value)
+  defp part?(_other), do: false
+
+  defp part_value?(value) when is_binary(value), do: true
+
+  defp part_value?({value, opts}) when is_binary(value) and is_list(opts),
+    do:
+      Enum.all?(opts, fn
+        {key, text} when key in [:filename, :content_type] -> is_binary(text)
+        _other -> false
+      end)
+
+  defp part_value?(_other), do: false
+
+  # One body at most; the second one given is the field in the error.
+  @doc false
+  def one_body(attrs) do
+    case for(name <- [:form, :json, :multipart], not is_nil(Map.get(attrs, name)), do: name) do
+      [_first, second | _rest] ->
+        {:error, %{field: second, action: :one_body, message: Messages.text(:one_body)}}
+
+      _one_or_none ->
+        {:ok, attrs}
+    end
+  end
 
   defp answer({:ok, %Req.Response{} = response}, _spec), do: {:ok, response}
 

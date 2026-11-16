@@ -67,6 +67,77 @@ defmodule MishkaPay.ClientTest do
     assert "mp_" <> _ = key
   end
 
+  test "a multipart body goes as multipart/form-data, with each part's name, filename and type" do
+    answer([503, 200])
+    png = <<0x89, "PNG", 0, 1, 2>>
+
+    assert {:ok, %Req.Response{status: 200}} =
+             request(%{
+               method: :post,
+               idempotency_header: "idempotency-key",
+               multipart: [
+                 {"purpose", "dispute_evidence"},
+                 {"file", {png, filename: "log \"1\".png", content_type: "image/png"}}
+               ]
+             })
+
+    # Each try encodes the parts again, under its own boundary, with the same idempotency key.
+    keys =
+      for _try <- 1..2 do
+        assert_received {:attempt, "POST", "/v1/things", "", body, headers}
+        assert "multipart/form-data; boundary=" <> boundary = headers["content-type"]
+        assert headers["content-length"] == Integer.to_string(byte_size(body))
+
+        assert body ==
+                 "--#{boundary}\r\ncontent-disposition: form-data; name=\"purpose\"\r\n\r\n" <>
+                   "dispute_evidence\r\n" <>
+                   "--#{boundary}\r\ncontent-disposition: form-data; name=\"file\"; " <>
+                   "filename=\"log %221%22.png\"\r\ncontent-type: image/png\r\n\r\n" <>
+                   png <> "\r\n--#{boundary}--\r\n"
+
+        headers["idempotency-key"]
+      end
+
+    assert [key, key] = keys
+    assert "mp_" <> _ = key
+  end
+
+  test "a multipart part is bytes in memory only, never a path, a stream or a second body" do
+    base = %{provider: "acme", base_url: "https://api.acme.test", path: "/v1/x", method: :post}
+
+    for parts <- [
+          [],
+          [{"file", File.stream!(__ENV__.file)}],
+          [{"file", {File.stream!(__ENV__.file), filename: "x"}}],
+          [{"file", {"bytes", path: "/etc/passwd"}}],
+          [{"file", {"bytes", filename: :x}}],
+          [{"file", 1}],
+          [:file],
+          %{"file" => "bytes"}
+        ] do
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :multipart}]}} =
+               Client.request(Map.put(base, :multipart, parts)),
+             inspect(parts)
+    end
+
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :multipart}]}} =
+             Client.request(Map.merge(base, %{form: [a: 1], multipart: [{"a", "1"}]}))
+  end
+
+  test "options cannot swap the multipart body" do
+    answer([200])
+
+    request(%{
+      method: :post,
+      multipart: [{"a", "1"}],
+      options: [plug: {Req.Test, __MODULE__}, form_multipart: [{"b", "2"}], form: [c: 3]]
+    })
+
+    assert_received {:attempt, "POST", _, _, body, _headers}
+    assert body =~ "name=\"a\"\r\n\r\n1\r\n"
+    refute body =~ "name=\"b\""
+  end
+
   test "the caller's own idempotency key is the one sent" do
     answer([200])
 

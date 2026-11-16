@@ -44,6 +44,11 @@ defmodule MishkaPay.Providers.Stripe do
       `invoice_settings.default_payment_method`.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
+    * `upload_file/2` sends a file to `files.stripe.com` as `multipart/form-data`; dispute
+      evidence only as PDF, JPEG or PNG, up to 5 MB, and its bytes must be the type it names.
+      `fetch_file/2` reads one, and `file_link/3` makes a FileLink, a public address of it.
+      `update_dispute/2` takes only a file id (`file_...`) in the evidence fields that hold a
+      file, such as `receipt` and `uncategorized_file`.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
@@ -65,7 +70,8 @@ defmodule MishkaPay.Providers.Stripe do
   Stripe counts a refund in the payment's own currency.
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
-  another address, such as Stripe's own mock server in tests.
+  another address, such as Stripe's own mock server in tests. Uploads go to `files_url` when it is
+  set, else to `base_url` when that is set, else to `https://files.stripe.com`.
   """
 
   use MishkaPay.Provider,
@@ -77,6 +83,7 @@ defmodule MishkaPay.Providers.Stripe do
       :catalog,
       :payment_link,
       :dispute,
+      :file,
       :expire,
       :refund,
       :refund_read,
@@ -112,6 +119,19 @@ defmodule MishkaPay.Providers.Stripe do
   @version "2026-10-28.endive"
   @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
+  @files_url "https://files.stripe.com"
+
+  # What Stripe takes for each purpose of a file: its most bytes and its types, with the first
+  # bytes of each type (docs.stripe.com/file-upload).
+  @file_rules %{
+    dispute_evidence:
+      {5_000_000,
+       %{
+         "application/pdf" => "%PDF-",
+         "image/jpeg" => <<0xFF, 0xD8, 0xFF>>,
+         "image/png" => <<0x89, "PNG">>
+       }}
+  }
   @three_decimal ~w(BHD JOD KWD OMR TND)a
 
   @handled %{
@@ -880,6 +900,7 @@ defmodule MishkaPay.Providers.Stripe do
   def update_dispute(evidence, keys) do
     with :ok <- dispute_id(evidence.dispute_id),
          :ok <- metadata(evidence.metadata),
+         :ok <- evidence_files(evidence.evidence),
          {:ok, answer} <-
            request(
              :post,
@@ -893,6 +914,74 @@ defmodule MishkaPay.Providers.Stripe do
            ) do
       Mapper.dispute(answer)
     end
+  end
+
+  @impl MishkaPay.Provider
+  def upload_file(%MishkaPay.FileUpload{} = upload, keys) do
+    with :ok <- file_fits(upload),
+         {:ok, answer} <-
+           request(:post, "/v1/files", Mapper.file_params(upload), keys, upload: true) do
+      Mapper.file(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_file(file_id, keys) do
+    with :ok <- stripe_id(file_id, "file_", :file_id),
+         {:ok, answer} <- request(:get, "/v1/files/#{file_id}", [], keys) do
+      Mapper.file(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def file_link(file_id, opts, keys) do
+    with :ok <- stripe_id(file_id, "file_", :file_id),
+         :ok <- link_expiry(opts[:expires_at]),
+         {:ok, answer} <-
+           request(:post, "/v1/file_links", Mapper.file_link_params(file_id, opts), keys) do
+      Mapper.file_link(answer)
+    end
+  end
+
+  # A file of a type Stripe takes for its purpose, within its size, whose bytes are that type.
+  defp file_fits(%{purpose: purpose, content_type: type, content: bytes}) do
+    {most, types} = Map.fetch!(@file_rules, purpose)
+
+    case Map.fetch(types, type) do
+      :error ->
+        invalid(:content_type, Messages.text(:stripe_file_type, types: "PDF, JPEG or PNG"))
+
+      {:ok, _magic} when byte_size(bytes) > most ->
+        invalid(:content, Messages.text(:stripe_file_size, megabytes: div(most, 1_000_000)))
+
+      {:ok, magic} ->
+        case String.starts_with?(bytes, magic) do
+          true -> :ok
+          false -> invalid(:content, Messages.text(:file_content, content_type: type))
+        end
+    end
+  end
+
+  defp link_expiry(nil), do: :ok
+
+  defp link_expiry(%DateTime{} = at) do
+    case DateTime.after?(at, DateTime.utc_now()) do
+      true -> :ok
+      false -> invalid(:expires_at, Messages.text(:expires_past))
+    end
+  end
+
+  defp link_expiry(_not_a_time), do: invalid(:expires_at, Messages.text(:expires_past))
+
+  # The evidence fields that hold a file take only a Stripe file id.
+  defp evidence_files(nil), do: :ok
+
+  defp evidence_files(evidence) do
+    evidence
+    |> Map.take(Mapper.evidence_files())
+    |> Enum.find_value(:ok, fn {_name, id} ->
+      with :ok <- stripe_id(id, "file_", :evidence), do: nil
+    end)
   end
 
   @impl MishkaPay.Provider
@@ -1114,12 +1203,13 @@ defmodule MishkaPay.Providers.Stripe do
     do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
   # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
+  # `upload: true` sends `params` as multipart parts to Stripe's files host.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
     base = %{
       provider: "stripe",
       method: method,
-      base_url: base_url(),
+      base_url: base_url(opts[:upload] == true),
       path: path,
       auth: {:bearer, keys.secret_key},
       headers: %{"stripe-version" => @version},
@@ -1128,13 +1218,14 @@ defmodule MishkaPay.Providers.Stripe do
     }
 
     base
-    |> Map.put(body_key(method), form(params))
+    |> put_body(method, params, opts[:upload] == true)
     |> Client.request()
     |> answer()
   end
 
-  defp body_key(:get), do: :params
-  defp body_key(_write), do: :form
+  defp put_body(spec, _method, parts, true), do: Map.put(spec, :multipart, parts)
+  defp put_body(spec, :get, params, false), do: Map.put(spec, :params, form(params))
+  defp put_body(spec, _write, params, false), do: Map.put(spec, :form, form(params))
 
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
@@ -1375,10 +1466,14 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp three_decimal_ok?(_item), do: true
 
-  defp base_url do
-    :mishka_pay
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(:base_url, @base_url)
+  # The API's address, or the files host's for an upload: its own setting, else the API's.
+  defp base_url(upload?) do
+    config = Application.get_env(:mishka_pay, __MODULE__, [])
+
+    case upload? do
+      true -> config[:files_url] || Keyword.get(config, :base_url, @files_url)
+      false -> Keyword.get(config, :base_url, @base_url)
+    end
   end
 
   @doc """

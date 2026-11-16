@@ -66,6 +66,7 @@ defmodule MishkaPay do
     * payment links: `:payment_link_create`, `:payment_link`, `:payment_link_update`,
       `:payment_link_list`;
     * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`;
+    * files: `:file_upload`, `:file`, `:file_link`;
     * events: `:event_list`.
   """
 
@@ -602,6 +603,35 @@ defmodule MishkaPay do
   def accept_dispute(provider, dispute_id, tenant \\ nil)
       when is_binary(provider) and is_binary(dispute_id) do
     capable(:dispute, :dispute_accept, provider, tenant, & &1.accept_dispute(dispute_id, &2))
+  end
+
+  @doc """
+  Uploads a file from `attrs` (see `MishkaPay.FileUpload`): a receipt, a download log or a
+  screenshot that answers a dispute. Answers it as a `MishkaPay.File`; put its `:id` in the
+  dispute's evidence with `update_dispute/1`.
+  """
+  @spec upload_file(map()) :: {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+  def upload_file(attrs) when is_map(attrs),
+    do: made(:file_upload, :file, attrs, MishkaPay.FileUpload, [], :upload_file)
+
+  @doc "Reads file `file_id` from `provider`, with `tenant`'s keys."
+  @spec fetch_file(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+  def fetch_file(provider, file_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(file_id) do
+    capable(:file, :file, provider, tenant, & &1.fetch_file(file_id, &2))
+  end
+
+  @doc """
+  Makes a public link to file `file_id` (`MishkaPay.FileLink`), an address a site can show to a
+  person without any key. `expires_at:` (a `DateTime` still to come) ends it; without it, it
+  never ends.
+  """
+  @spec file_link(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+  def file_link(provider, file_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(file_id) do
+    capable(:file, :file_link, provider, tenant, & &1.file_link(file_id, opts, &2))
   end
 
   # A struct built from the caller's map and handed to the provider's `callback`.
