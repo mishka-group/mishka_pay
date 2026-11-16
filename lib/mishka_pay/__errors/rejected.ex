@@ -37,7 +37,7 @@ defmodule MishkaPay.Errors.Rejected do
   def message(%{code: "idempotency_error"}), do: Messages.text(:reference_reused)
 
   def message(%{provider: provider, code: "resource_missing"}),
-    do: Messages.text(:rejected_missing, provider: provider)
+    do: Messages.text(:rejected_missing, provider: MishkaPay.Provider.label_of(provider))
 
   def message(%{code: "managed_payments_invoice"}), do: Messages.text(:managed_payments_invoice)
   def message(%{code: "tax_code_missing"}), do: Messages.text(:tax_code_missing)
@@ -61,10 +61,14 @@ defmodule MishkaPay.Errors.Rejected do
     do: Messages.text(:recurring_only, param: param || "this choice")
 
   def message(%{provider: provider, code: "already_exists"}),
-    do: Messages.text(:rejected_exists, provider: provider)
+    do: Messages.text(:rejected_exists, provider: MishkaPay.Provider.label_of(provider))
 
   def message(%{provider: provider, code: nil, param: param}) when is_binary(param),
-    do: Messages.text(:rejected_param, provider: provider, param: param)
+    do:
+      Messages.text(:rejected_param,
+        provider: MishkaPay.Provider.label_of(provider),
+        param: param
+      )
 
   def message(%{provider: provider, status: status, code: nil}),
     do: Messages.text(:rejected, provider: provider, status: status)

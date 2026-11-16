@@ -271,7 +271,7 @@ defmodule MishkaPay.Providers.StripeTest do
                })
 
       assert Exception.message(error) ==
-               "stripe did not accept the value given for trial_days: check it and try again"
+               "Stripe did not accept the value given for trial_days: check it and try again"
     end
 
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do
@@ -325,12 +325,12 @@ defmodule MishkaPay.Providers.StripeTest do
                  code: "SPRING"
                })
 
-      assert MishkaPay.Ash.message(taken) == "stripe already has one with that code or id"
+      assert MishkaPay.Ash.message(taken) == "Stripe already has one with that code or id"
 
       assert {:error, %Errors.Rejected{code: "resource_missing"} = missing} =
                MishkaPay.checkout(Map.put(@checkout, :discounts, [%{coupon_id: "NOPE"}]))
 
-      assert Exception.message(missing) == "stripe has nothing with the id given"
+      assert Exception.message(missing) == "Stripe has nothing with the id given"
     end
 
     test "a link Stripe refuses for a missing tax code or a one-time-only choice says which, plainly" do

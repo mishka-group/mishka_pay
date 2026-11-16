@@ -920,6 +920,20 @@ defmodule MishkaPay.Provider do
   @spec offered() :: [module()]
   def offered, do: offered_of(all())
 
+  @doc """
+  The name a person reads for provider `id`: its `label/0` when it is installed (`"Stripe"`,
+  `"PayPal"`), else the id with a capital.
+  """
+  @spec label_of(String.t() | nil) :: String.t()
+  def label_of(id) when is_binary(id) do
+    case fetch(id) do
+      {:ok, provider} -> provider.label()
+      {:error, _unknown} -> String.capitalize(id)
+    end
+  end
+
+  def label_of(_none), do: "The provider"
+
   @doc "The offered provider whose id is `id`."
   @spec fetch(String.t()) :: {:ok, module()} | {:error, Splode.Error.t()}
   def fetch(id) when is_binary(id) do
