@@ -21,9 +21,8 @@ defmodule Shop.Application do
         {Phoenix.PubSub, name: Shop.PubSub},
         {Oban, AshOban.config(Application.fetch_env!(:shop, :ash_domains), oban())},
         # mishka_installer's plugin registry when nothing else starts it, before every plugin.
+        # The providers (Stripe, PayPal) are started by Mishka Pay's own application.
         MishkaPay.Registry,
-        MishkaPay.Providers.Stripe,
-        MishkaPay.Providers.PayPal,
         Shop.Pay.Keys,
         Shop.Pay.Gate
       ] ++

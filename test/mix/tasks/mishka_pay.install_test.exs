@@ -13,7 +13,7 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
     |> assert_creates("lib/test/pay/keys.ex")
     |> assert_has_patch("lib/test/application.ex", """
     + |      MishkaPay.Registry,
-    + |      MishkaPay.Providers.Stripe,
+    + |      Test.Pay.Keys,
     """)
     |> assert_has_patch("config/test.exs", """
     + |config :mishka_pay, req_options: [plug: {Req.Test, MishkaPay.Client}]

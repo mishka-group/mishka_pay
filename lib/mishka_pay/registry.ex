@@ -4,13 +4,12 @@
 
 defmodule MishkaPay.Registry do
   @moduledoc """
-  mishka_installer's plugin registry, for a project where nothing else starts it. List it first in
-  the application's children, before the provider and every other plugin
-  (`mix igniter.install mishka_pay` does):
+  mishka_installer's plugin registry, for a project outside Mishka CMS. List it first in the
+  application's children, before the project's own plugins (`mix igniter.install mishka_pay`
+  does); Mishka Pay's application starts the providers, which register as soon as it is up:
 
       children = [
         MishkaPay.Registry,
-        MishkaPay.Providers.Stripe,
         MyApp.Pay.Keys,
         ...
       ]

@@ -140,7 +140,15 @@ defmodule MishkaPay.Credentials do
     end)
   end
 
+  # A test's own keys (`MishkaPay.Test.put_keys/3`) answer before the project's plugins.
   defp ask(provider, tenant, timeout) do
+    case MishkaPay.Test.Keys.credentials(provider, tenant) do
+      nil -> ask_plugins(provider, tenant, timeout)
+      keys -> answer(%{credentials: keys}, provider, tenant)
+    end
+  end
+
+  defp ask_plugins(provider, tenant, timeout) do
     state = %{provider: provider, tenant: tenant, credentials: nil}
 
     case Plugins.call(Events.credentials(), state, timeout) do

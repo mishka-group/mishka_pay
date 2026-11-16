@@ -58,16 +58,14 @@ defmodule MishkaPay.Test do
   alias MishkaPay.Test.Keys
 
   @doc """
-  Prepares a test run: mishka_installer's plugin registry (`start_registry!/0`), the table
-  `put_keys/3` writes to and the keys plugin that reads it, started once and waited for. Call it in
-  `test_helper.exs`.
+  Prepares a test run: mishka_installer's plugin registry (`start_registry!/0`) and the table
+  `put_keys/3` writes to. Call it in `test_helper.exs`.
   """
   @spec setup!() :: :ok
   def setup! do
     start_registry!()
     Keys.new_table()
-    {:ok, _supervisor} = Supervisor.start_link([Keys], strategy: :one_for_one)
-    await(Keys)
+    :ok
   end
 
   @doc """

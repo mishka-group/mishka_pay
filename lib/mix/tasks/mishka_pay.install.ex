@@ -18,7 +18,7 @@ defmodule Mix.Tasks.MishkaPay.Install.Docs do
     It adds, and never twice:
 
       * `MishkaPay.Registry` first, which starts mishka_installer's plugin registry when nothing else
-        does (as in a project's test run), then the Stripe provider and a keys plugin (`<App>.Pay.Keys`) to the application's children;
+        does (as in a project's test run), then a keys plugin (`<App>.Pay.Keys`) to the application's children;
         the keys plugin answers each site's Stripe keys at runtime, from the environment until the
         project keeps them per site;
       * the webhook endpoint (`plug MishkaPay.Webhook, at: "/pay/webhooks"`) before
@@ -84,8 +84,7 @@ if Code.ensure_loaded?(Igniter) do
       igniter
       |> create_once(keys, keys_module())
       |> Application.add_new_child(MishkaPay.Registry)
-      |> Application.add_new_child(MishkaPay.Providers.Stripe, after: [MishkaPay.Registry])
-      |> Application.add_new_child(keys, after: [MishkaPay.Providers.Stripe])
+      |> Application.add_new_child(keys, after: [MishkaPay.Registry])
       |> webhook_plug()
       |> registry()
       |> test_helper()
@@ -271,7 +270,7 @@ if Code.ensure_loaded?(Igniter) do
           igniter
           |> create_once(resource, resource_body(domain, kind, table, repo))
           |> Application.add_new_child(Module.concat(resource, MishkaPayListener),
-            after: [MishkaPay.Providers.Stripe]
+            after: [MishkaPay.Registry]
           )
         end)
 

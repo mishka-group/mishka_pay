@@ -4,15 +4,14 @@
 
 defmodule MishkaPay.Test.Keys do
   @moduledoc """
-  The keys plugin `MishkaPay.Test.put_keys/3` feeds: it answers first (priority 0) with the keys a
-  test put for itself, and `nil` otherwise, so the project's own plugins answer the rest.
+  The keys `MishkaPay.Test.put_keys/3` feeds. `MishkaPay.Credentials.fetch/3` reads them before
+  any keys plugin: a test's own keys answer first, and the project's plugins answer the rest. It is
+  a table, not a plugin, so a project's plugin registry holds nothing of the test kit's.
 
   The keys live in a public ETS table keyed by the test's pid. A plugin runs in the caller's
   process, so the lookup walks the caller and its `$callers`: a test's own tasks see its keys, and
   async tests never see each other's.
   """
-
-  use MishkaPay.Credentials, priority: 0
 
   @table __MODULE__
 
@@ -30,8 +29,16 @@ defmodule MishkaPay.Test.Keys do
   @doc false
   def delete(test), do: :ets.match_delete(@table, {{test, :_, :_}, :_})
 
-  @impl MishkaPay.Credentials
+  @doc false
+  @spec credentials(String.t(), term()) :: map() | nil
   def credentials(provider, tenant) do
+    case :ets.whereis(@table) do
+      :undefined -> nil
+      _table -> find(provider, tenant)
+    end
+  end
+
+  defp find(provider, tenant) do
     Enum.find_value([self() | Process.get(:"$callers", [])], fn pid ->
       lookup({pid, provider, tenant}) || lookup({pid, provider, :any})
     end)
