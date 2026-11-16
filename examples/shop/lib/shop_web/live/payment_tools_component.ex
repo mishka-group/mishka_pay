@@ -18,7 +18,7 @@ defmodule ShopWeb.PaymentToolsComponent do
   def mount(socket) do
     {:ok,
      socket
-     |> assign(loaded?: false, refunds: nil, refund: nil)
+     |> assign(loaded?: false, refunds: nil, refund: nil, refund_error: nil)
      |> stream_configure(:payments, dom_id: &"payment-tools-#{&1.id}")}
   end
 
@@ -73,10 +73,11 @@ defmodule ShopWeb.PaymentToolsComponent do
   def handle_event("read_refund", %{"refund_id" => value}, socket) do
     with {:ok, refund_id} <- refund_id(value),
          {:ok, refund} <- MishkaPay.fetch_refund("stripe", refund_id, socket.assigns.tenant) do
-      {:noreply, assign(socket, refund: refund)}
+      {:noreply, assign(socket, refund: refund, refund_error: nil)}
     else
       {:error, error} ->
-        {:noreply, socket |> assign(refund: nil) |> say(:error, MishkaPay.Ash.message(error))}
+        message = if is_binary(error), do: error, else: MishkaPay.Ash.message(error)
+        {:noreply, socket |> assign(refund: nil, refund_error: message) |> say(:error, message)}
     end
   end
 
@@ -100,6 +101,9 @@ defmodule ShopWeb.PaymentToolsComponent do
           />
           <button class="btn btn-sm join-item" data-testid="read-refund-submit">Read refund</button>
         </form>
+        <p :if={@refund_error} class="alert alert-error text-sm" data-testid="read-refund-error">
+          {@refund_error}
+        </p>
       </div>
       <p class="text-sm opacity-70">
         Each payment's refunds as Stripe lists them. A payment bought with "Pay later" (Checkout
