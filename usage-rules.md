@@ -101,6 +101,8 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |
 | `MishkaPay.pause_collection(provider, id, tenant, behavior: ...)`, `resume_collection/3` | stops or starts charging without cancelling |
 | `MishkaPay.fetch_invoice(provider, invoice_id, tenant)` | `%MishkaPay.Invoice{}` with its `:lines` |
+| `MishkaPay.create_invoice(attrs)` (`MishkaPay.InvoiceDraft`) | a draft `%MishkaPay.Invoice{}` for a customer, with its items |
+| `MishkaPay.finalize_invoice/3`, `send_invoice/3`, `pay_invoice(p, id, tenant, out_of_band: true)`, `void_invoice/3`, `mark_invoice_uncollectible/3`, `delete_invoice/3` | open, email, settle or end a one-off bill |
 | `MishkaPay.fetch_dispute/3`, `list_disputes/3`, `update_dispute(attrs)`, `accept_dispute/3` | `%MishkaPay.Dispute{}`: a chargeback, answered with evidence or accepted |
 | `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` (or `customer_id:`) | a `MishkaPay.Page` of `%MishkaPay.Invoice{}` |
 | `MishkaPay.list_payments(provider, tenant, customer_id: id)` | a `MishkaPay.Page` of `%MishkaPay.Payment{}` |

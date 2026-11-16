@@ -51,6 +51,8 @@ defmodule MishkaPay do
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
       `:subscription_unpause`, `:invoices`, `:invoice`;
+    * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
+      `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`, `:portal`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
@@ -552,6 +554,69 @@ defmodule MishkaPay do
       end
     end
   end
+
+  @doc """
+  Makes a draft bill for a customer from `attrs` (see `MishkaPay.InvoiceDraft`), with its items,
+  and answers it as a `MishkaPay.Invoice`. Open it with `finalize_invoice/3`.
+  """
+  @spec create_invoice(map()) :: {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def create_invoice(attrs) when is_map(attrs) do
+    span(:invoice_create, attrs, fn ->
+      with {:ok, draft} <- Errors.from_builder(MishkaPay.InvoiceDraft.builder(attrs)),
+           {:ok, module} <- Provider.capable(draft.provider, :invoice),
+           {:ok, keys} <- Credentials.fetch(draft.provider, draft.tenant) do
+        module.create_invoice(draft, keys)
+      end
+    end)
+  end
+
+  @doc "Opens draft bill `invoice_id` for payment: it gets its number, and its customer can pay it."
+  @spec finalize_invoice(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def finalize_invoice(provider, invoice_id, tenant \\ nil) when is_binary(invoice_id),
+    do: invoice_call(:invoice_finalize, provider, tenant, & &1.finalize_invoice(invoice_id, &2))
+
+  @doc "Emails open bill `invoice_id` to its customer, with the provider's page to pay it."
+  @spec send_invoice(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def send_invoice(provider, invoice_id, tenant \\ nil) when is_binary(invoice_id),
+    do: invoice_call(:invoice_send, provider, tenant, & &1.send_invoice(invoice_id, &2))
+
+  @doc """
+  Settles open bill `invoice_id`: charges the customer's saved payment method now, or with
+  `out_of_band: true` marks it paid by other means (cash, a bank transfer seen by hand).
+  """
+  @spec pay_invoice(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def pay_invoice(provider, invoice_id, tenant \\ nil, opts \\ []) when is_binary(invoice_id),
+    do: invoice_call(:invoice_pay, provider, tenant, & &1.pay_invoice(invoice_id, opts, &2))
+
+  @doc "Voids open bill `invoice_id`: it stays on record and can no longer be paid."
+  @spec void_invoice(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def void_invoice(provider, invoice_id, tenant \\ nil) when is_binary(invoice_id),
+    do: invoice_call(:invoice_void, provider, tenant, & &1.void_invoice(invoice_id, &2))
+
+  @doc "Marks open bill `invoice_id` as one that will not be paid; it can still be paid later."
+  @spec mark_invoice_uncollectible(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def mark_invoice_uncollectible(provider, invoice_id, tenant \\ nil)
+      when is_binary(invoice_id) do
+    invoice_call(
+      :invoice_uncollectible,
+      provider,
+      tenant,
+      & &1.mark_invoice_uncollectible(invoice_id, &2)
+    )
+  end
+
+  @doc "Deletes draft bill `invoice_id`; an open one cannot be deleted, only voided."
+  @spec delete_invoice(String.t(), String.t(), term()) :: :ok | {:error, Splode.Error.t()}
+  def delete_invoice(provider, invoice_id, tenant \\ nil) when is_binary(invoice_id),
+    do: invoice_call(:invoice_delete, provider, tenant, & &1.delete_invoice(invoice_id, &2))
+
+  defp invoice_call(operation, provider, tenant, call) when is_binary(provider),
+    do: capable(:invoice, operation, provider, tenant, call)
 
   @doc "Reads subscription `subscription_id` again from `provider`, with `tenant`'s keys."
   @spec fetch_subscription(String.t(), String.t(), term()) ::

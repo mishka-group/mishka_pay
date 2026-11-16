@@ -17,6 +17,9 @@ defmodule MishkaPay.Invoice do
     * `:period_start`, `:period_end`: the period it bills.
     * `:hosted_url`, `:pdf_url`: the provider's page and PDF of the bill, for the buyer.
     * `:payment_id`: the payment that paid it, when the provider names one.
+    * `:number`: the bill's number once finalized; `:collection`: `:charge_automatically` or
+      `:send_invoice`; `:due_at`: when a sent bill is due; `:description`; `:reference`: the
+      caller's own id from `MishkaPay.InvoiceDraft`.
     * `:created_at`: when the provider made it.
   """
 
@@ -40,6 +43,14 @@ defmodule MishkaPay.Invoice do
     field :hosted_url, String.t(), derives: "validate(string)"
     field :pdf_url, String.t(), derives: "validate(string)"
     field :payment_id, String.t(), derives: "validate(string)"
+    field :number, String.t(), derives: "validate(string)"
+
+    field :collection, :charge_automatically | :send_invoice,
+      derives: "validate(enum=Atom[charge_automatically::send_invoice])"
+
+    field :due_at, DateTime.t(), derives: "validate(struct)"
+    field :description, String.t(), derives: "validate(string)"
+    field :reference, String.t(), derives: "validate(string)"
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 end

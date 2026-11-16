@@ -53,6 +53,8 @@ defmodule MishkaPay.Provider do
       `mode: :subscription`);
     * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
       `pause_collection/3`, `resume_collection/2`;
+    * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
+      `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
     * `:portal`: `portal_session/2`;
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
@@ -83,6 +85,7 @@ defmodule MishkaPay.Provider do
     :refund_read,
     :subscription,
     :subscription_change,
+    :invoice,
     :customer,
     :portal,
     :discount,
@@ -104,6 +107,7 @@ defmodule MishkaPay.Provider do
     * `:subscription`: charges again on a schedule.
     * `:subscription_change`: changes a running subscription's plan or quantity with proration,
       previews what that bills, and pauses or resumes its collection.
+    * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:customer`: keeps buyers (create, read, update, list).
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:discount`: keeps coupons and the promotion codes buyers type.
@@ -121,6 +125,7 @@ defmodule MishkaPay.Provider do
           | :refund_read
           | :subscription
           | :subscription_change
+          | :invoice
           | :customer
           | :portal
           | :discount
@@ -177,6 +182,34 @@ defmodule MishkaPay.Provider do
   @doc "With `:refund_read`. One page of refunds, newest first; `:payment_id` filters to one payment."
   @callback list_refunds(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Makes a draft bill with its items, and answers it."
+  @callback create_invoice(MishkaPay.InvoiceDraft.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Opens a draft for payment: it gets its number and can be paid."
+  @callback finalize_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Emails an open bill to its customer."
+  @callback send_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Charges an open bill now, or marks it paid outside the provider (`out_of_band: true`)."
+  @callback pay_invoice(invoice_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Ends an open bill that should never have been sent."
+  @callback void_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Marks an open bill as one that will not be paid."
+  @callback mark_invoice_uncollectible(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Deletes a draft bill."
+  @callback delete_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              :ok | {:error, Splode.Error.t()}
 
   @doc "With `:subscription`. Reads one subscription again from the provider."
   @callback fetch_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -385,6 +418,13 @@ defmodule MishkaPay.Provider do
                       expire_checkout: 2,
                       refund: 2,
                       fetch_refund: 2,
+                      create_invoice: 2,
+                      finalize_invoice: 2,
+                      send_invoice: 2,
+                      pay_invoice: 3,
+                      void_invoice: 2,
+                      mark_invoice_uncollectible: 2,
+                      delete_invoice: 2,
                       list_refunds: 2,
                       fetch_subscription: 2,
                       cancel_subscription: 3,
@@ -445,6 +485,15 @@ defmodule MishkaPay.Provider do
       preview_subscription_change: 2,
       pause_collection: 3,
       resume_collection: 2
+    ],
+    invoice: [
+      create_invoice: 2,
+      finalize_invoice: 2,
+      send_invoice: 2,
+      pay_invoice: 3,
+      void_invoice: 2,
+      mark_invoice_uncollectible: 2,
+      delete_invoice: 2
     ],
     customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
     portal: [portal_session: 2],

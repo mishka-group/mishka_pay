@@ -76,6 +76,7 @@ defmodule MishkaPay.Providers.Stripe do
       :refund_read,
       :subscription,
       :subscription_change,
+      :invoice,
       :customer,
       :portal,
       :discount,
@@ -318,6 +319,91 @@ defmodule MishkaPay.Providers.Stripe do
   def fetch_invoice(invoice_id, keys) do
     with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
          {:ok, invoice} <- request(:get, "/v1/invoices/#{invoice_id}", [], keys) do
+      Mapper.invoice(invoice)
+    end
+  end
+
+  # A draft bill, then each item on it; a draft left half made is deleted, so a retry with the
+  # same reference starts clean.
+  @impl MishkaPay.Provider
+  def create_invoice(%MishkaPay.InvoiceDraft{} = draft, keys) do
+    with :ok <- stripe_id(draft.customer_id, "cus_", :customer_id),
+         :ok <- invoice_prices(draft.items),
+         :ok <- currencies(draft.items),
+         :ok <- metadata(draft.metadata),
+         {:ok, %{"id" => invoice_id}} <-
+           request(:post, "/v1/invoices", Mapper.invoice_params(draft), keys,
+             key: ProviderKit.idempotency_key("invoice", draft.tenant, draft.reference)
+           ) do
+      case add_items(draft, invoice_id, keys) do
+        :ok ->
+          fetch_invoice(invoice_id, keys)
+
+        {:error, _refused} = error ->
+          _deleted = request(:delete, "/v1/invoices/#{invoice_id}", [], keys)
+          error
+      end
+    end
+  end
+
+  # A catalog item is sold by a Stripe price id.
+  defp invoice_prices(items) do
+    case Enum.find(items, &(is_binary(&1.id) and not stripe_price?(&1.id))) do
+      nil -> :ok
+      %{id: id} -> stripe_id(id, "price_", :items)
+    end
+  end
+
+  defp add_items(draft, invoice_id, keys) do
+    draft.items
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {item, index}, :ok ->
+      params = Mapper.invoice_item_params(item, invoice_id, draft.customer_id)
+
+      case request(:post, "/v1/invoiceitems", params, keys,
+             key: ProviderKit.idempotency_key("invoice-item", draft.tenant, {invoice_id, index})
+           ) do
+        {:ok, _item} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  @impl MishkaPay.Provider
+  def finalize_invoice(invoice_id, keys),
+    do: invoice_step(invoice_id, "finalize", %{"auto_advance" => false}, keys)
+
+  @impl MishkaPay.Provider
+  def send_invoice(invoice_id, keys), do: invoice_step(invoice_id, "send", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def pay_invoice(invoice_id, opts, keys) do
+    params =
+      case Keyword.get(opts, :out_of_band, false) do
+        true -> %{"paid_out_of_band" => true}
+        false -> %{}
+      end
+
+    invoice_step(invoice_id, "pay", params, keys)
+  end
+
+  @impl MishkaPay.Provider
+  def void_invoice(invoice_id, keys), do: invoice_step(invoice_id, "void", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def mark_invoice_uncollectible(invoice_id, keys),
+    do: invoice_step(invoice_id, "mark_uncollectible", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def delete_invoice(invoice_id, keys) do
+    with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
+         {:ok, _deleted} <- request(:delete, "/v1/invoices/#{invoice_id}", [], keys),
+         do: :ok
+  end
+
+  defp invoice_step(invoice_id, step, params, keys) do
+    with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
+         {:ok, invoice} <- request(:post, "/v1/invoices/#{invoice_id}/#{step}", params, keys) do
       Mapper.invoice(invoice)
     end
   end

@@ -555,6 +555,80 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
+  test "a one-off bill is made with its items, opened, sent, paid by hand, and another voided or given up" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        email: "bill-#{run}@example.com",
+        reference: "bill-#{run}"
+      })
+
+    {:ok, %MishkaPay.Product{id: product_id}} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Live bill #{run}"})
+
+    {:ok, %MishkaPay.Price{id: price_id}} =
+      MishkaPay.create_price(%{
+        provider: "stripe",
+        product_id: product_id,
+        amount: %{amount: "5.00", currency: "USD"}
+      })
+
+    on_exit(fn ->
+      MishkaPay.archive_price("stripe", price_id)
+      MishkaPay.archive_product("stripe", product_id)
+    end)
+
+    draft = fn reference ->
+      %{
+        provider: "stripe",
+        customer_id: customer_id,
+        collection: :send_invoice,
+        days_until_due: 7,
+        description: "Setup work",
+        reference: reference,
+        items: [
+          %{name: "Setup", amount: %{amount: "120.00", currency: "USD"}, quantity: 2},
+          %{id: price_id, quantity: 3}
+        ]
+      }
+    end
+
+    assert {:ok, %Invoice{id: invoice_id, status: :draft, total: total, reference: reference}} =
+             MishkaPay.create_invoice(draft.("bill-#{run}-1"))
+
+    assert reference == "bill-#{run}-1"
+    assert Money.equal?(total, Money.new(:USD, "255.00"))
+
+    assert {:ok, %Invoice{id: ^invoice_id}} = MishkaPay.create_invoice(draft.("bill-#{run}-1"))
+
+    assert {:ok,
+            %Invoice{status: :open, number: number, hosted_url: "https://" <> _, due_at: due}} =
+             MishkaPay.finalize_invoice("stripe", invoice_id)
+
+    assert number =~ ~r/\w+-\d+/
+    assert %DateTime{} = due
+    assert {:ok, %Invoice{status: :open}} = MishkaPay.send_invoice("stripe", invoice_id)
+
+    assert {:ok, %Invoice{status: :paid}} =
+             MishkaPay.pay_invoice("stripe", invoice_id, nil, out_of_band: true)
+
+    {:ok, %Invoice{id: second}} = MishkaPay.create_invoice(draft.("bill-#{run}-2"))
+    {:ok, _open} = MishkaPay.finalize_invoice("stripe", second)
+    assert {:ok, %Invoice{status: :void}} = MishkaPay.void_invoice("stripe", second)
+
+    {:ok, %Invoice{id: third}} = MishkaPay.create_invoice(draft.("bill-#{run}-3"))
+    {:ok, _open} = MishkaPay.finalize_invoice("stripe", third)
+
+    assert {:ok, %Invoice{status: :uncollectible}} =
+             MishkaPay.mark_invoice_uncollectible("stripe", third)
+
+    {:ok, %Invoice{id: fourth}} = MishkaPay.create_invoice(draft.("bill-#{run}-4"))
+    assert :ok = MishkaPay.delete_invoice("stripe", fourth)
+    assert {:error, %Errors.Rejected{}} = MishkaPay.fetch_invoice("stripe", fourth)
+  end
+
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do
     run = System.unique_integer([:positive])
 

@@ -440,11 +440,81 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       period_end: time(invoice["period_end"]),
       hosted_url: invoice["hosted_invoice_url"],
       pdf_url: invoice["invoice_pdf"],
-      payment_id: id_of(invoice["payment_intent"]),
+      payment_id: id_of(invoice["payment_intent"]) || paid_by(invoice),
+      number: invoice["number"],
+      collection: known(invoice["collection_method"], ~w(charge_automatically send_invoice)),
+      due_at: time(invoice["due_date"]),
+      description: invoice["description"],
+      reference: get_in(invoice, ["metadata", @reference]),
       created_at: time(invoice["created"])
     }
     |> Invoice.builder()
     |> MishkaPay.Errors.from_builder()
+  end
+
+  # In this API version an invoice names what paid it in its payments list.
+  defp paid_by(%{"payments" => %{"data" => [_ | _] = payments}}) do
+    Enum.find_value(payments, &id_of(get_in(&1, ["payment", "payment_intent"])))
+  end
+
+  defp paid_by(_invoice), do: nil
+
+  @doc """
+  Params of `POST /v1/invoices` for a draft: its customer, how it is collected, and the reference
+  in its metadata. Its items are added after, each on its own (`invoice_item_params/3`).
+  """
+  @spec invoice_params(MishkaPay.InvoiceDraft.t()) :: map()
+  def invoice_params(draft) do
+    %{
+      "customer" => draft.customer_id,
+      "collection_method" => Atom.to_string(draft.collection),
+      "days_until_due" =>
+        (draft.collection == :send_invoice && (draft.days_until_due || 30)) || nil,
+      "description" => draft.description,
+      "footer" => draft.footer,
+      "auto_advance" => false,
+      "pending_invoice_items_behavior" => "exclude",
+      "currency" => draft_currency(draft.items),
+      "metadata" =>
+        Map.merge(
+          draft.metadata || %{},
+          (draft.reference && %{@reference => draft.reference}) || %{}
+        )
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp draft_currency(items) do
+    Enum.find_value(items, fn
+      %Price{amount: %{currency: currency}} -> currency |> to_string() |> String.downcase()
+      _catalog -> nil
+    end)
+  end
+
+  @doc "Params of `POST /v1/invoiceitems` for one item of a draft, on `invoice_id`."
+  @spec invoice_item_params(Price.t(), String.t(), String.t()) :: map()
+  def invoice_item_params(%Price{id: id, quantity: quantity}, invoice_id, customer_id)
+      when is_binary(id) do
+    %{
+      "invoice" => invoice_id,
+      "customer" => customer_id,
+      "pricing" => %{"price" => id},
+      "quantity" => quantity
+    }
+  end
+
+  def invoice_item_params(%Price{} = price, invoice_id, customer_id) do
+    %{
+      "invoice" => invoice_id,
+      "customer" => customer_id,
+      "description" => price.name,
+      "currency" => price.amount.currency |> to_string() |> String.downcase(),
+      "unit_amount_decimal" => price.amount |> minor() |> Integer.to_string(),
+      "quantity" => price.quantity,
+      "tax_code" => price.tax_code,
+      "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   # Stripe sums an invoice's taxes in `total_taxes`.

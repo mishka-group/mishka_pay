@@ -5,8 +5,8 @@
 defmodule Mix.Tasks.MishkaPay.Stripe.CheckVersionTest do
   use ExUnit.Case, async: false
 
-  alias Mix.Tasks.MishkaPay.Stripe.CheckVersion
   alias MishkaPay.Providers.Stripe
+  alias Mix.Tasks.MishkaPay.Stripe.CheckVersion
 
   setup do
     Mix.shell(Mix.Shell.Process)

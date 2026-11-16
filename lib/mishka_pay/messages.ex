@@ -76,6 +76,7 @@ defmodule MishkaPay.Messages do
           | :stripe_metadata
           | :stripe_three_decimal
           | :stripe_whole
+          | :due_sent_only
           | :declined
           | :declined_reason
           | :missing_keys
@@ -392,6 +393,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
+      )
+
+  defp msgid(:due_sent_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Days to pay go only with a bill that is sent (collection: send_invoice)"
       )
 
   defp msgid(:stripe_whole),

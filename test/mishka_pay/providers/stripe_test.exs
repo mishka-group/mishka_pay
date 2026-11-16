@@ -687,6 +687,57 @@ defmodule MishkaPay.Providers.StripeTest do
       assert %DateTime{} = payment.created_at
     end
 
+    test "a one-off bill goes to Stripe as a draft and its items, as Stripe's spec accepts" do
+      draft = %{
+        provider: "stripe",
+        tenant: "site-a",
+        customer_id: "cus_123",
+        collection: :send_invoice,
+        reference: "order-9",
+        items: [
+          %{name: "Setup", amount: %{amount: "120", currency: "USD"}, quantity: 2},
+          %{id: "price_123"}
+        ]
+      }
+
+      assert {:ok, %Invoice{id: "in_" <> _}} = MishkaPay.create_invoice(draft)
+
+      for call <- [
+            &MishkaPay.finalize_invoice/3,
+            &MishkaPay.send_invoice/3,
+            &MishkaPay.void_invoice/3,
+            &MishkaPay.mark_invoice_uncollectible/3
+          ] do
+        assert {:ok, %Invoice{}} = call.("stripe", "in_123", "site-a")
+      end
+
+      assert {:ok, %Invoice{}} =
+               MishkaPay.pay_invoice("stripe", "in_123", "site-a", out_of_band: true)
+
+      assert :ok = MishkaPay.delete_invoice("stripe", "in_123", "site-a")
+    end
+
+    test "a bill that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      line = %{name: "Setup", amount: %{amount: "10", currency: "USD"}}
+      base = %{provider: "stripe", customer_id: "cus_123", items: [line]}
+
+      for {attrs, field} <- [
+            {%{base | items: []}, :items},
+            {%{base | items: [Map.put(line, :interval, :month)]}, :items},
+            {%{base | items: [line, %{line | amount: %{amount: "1", currency: "EUR"}}]}, :items},
+            {Map.put(base, :days_until_due, 5), :days_until_due},
+            {%{base | customer_id: "cs_1"}, :customer_id},
+            {%{base | items: [%{id: "prod_1"}]}, :items}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.create_invoice(attrs)
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :invoice_id}]}} =
+               MishkaPay.finalize_invoice("stripe", "cus_1")
+    end
+
     test "a refund is read again and listed by payment, as Stripe's spec answers" do
       assert {:ok, %Refund{provider: "stripe", id: "re_" <> _, amount: %Elixir.Money{}}} =
                MishkaPay.fetch_refund("stripe", "re_123", "site-a")
