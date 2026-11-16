@@ -28,7 +28,7 @@ defmodule ShopWeb.TestClocksComponent do
       plan: "pro-monthly",
       buyer: "Clock Failing",
       expect:
-        "Move a month: the renewal fails and it goes past_due; Stripe tries again over the next weeks, then it ends."
+        "Move a month: the renewal fails and it goes past_due; Stripe tries again, and after its last try (within weeks) it ends: move it on to see it canceled."
     },
     trial_then_paid: %{
       label: "14-day trial, then paid",
@@ -101,7 +101,9 @@ defmodule ShopWeb.TestClocksComponent do
     end
   end
 
-  def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
+  def handle_event("refresh", _params, socket) do
+    {:noreply, socket |> load() |> say(:info, "Refreshed.")}
+  end
 
   def handle_event("delete", %{"clock" => clock_id}, socket) do
     with :ok <- TestClock.delete(socket.assigns.tenant, clock_id),
@@ -198,6 +200,7 @@ defmodule ShopWeb.TestClocksComponent do
                 phx-value-clock={run.clock_id}
                 phx-value-days={days}
                 phx-target={@myself}
+                phx-disable-with="..."
                 disabled={MapSet.member?(@moving, run.clock_id)}
                 data-testid={"clock-advance-#{key}"}
               >
@@ -208,6 +211,7 @@ defmodule ShopWeb.TestClocksComponent do
                 phx-click="delete"
                 phx-value-clock={run.clock_id}
                 phx-target={@myself}
+                disabled={MapSet.member?(@moving, run.clock_id)}
                 data-confirm="Delete this clock with its customer and subscription at Stripe?"
                 data-testid="clock-delete"
               >

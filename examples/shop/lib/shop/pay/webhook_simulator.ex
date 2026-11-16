@@ -49,13 +49,13 @@ defmodule Shop.Pay.WebhookSimulator do
         do: System.system_time(:second) - 600,
         else: System.system_time(:second)
 
-    type = if situation == :listener_fails, do: Shop.Pay.FailingListener.type(), else: type
+    event_type = if situation == :listener_fails, do: Shop.Pay.FailingListener.type(), else: type
 
     body =
       JSON.encode!(%{
         "id" => event_id,
         "object" => "event",
-        "type" => type,
+        "type" => event_type,
         "created" => time,
         "livemode" => false,
         "api_version" => Stripe.version(),
