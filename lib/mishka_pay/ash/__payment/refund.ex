@@ -21,7 +21,9 @@ if Code.ensure_loaded?(Ash) do
     @impl true
     def change(changeset, opts, _context) do
       changeset
-      |> Ash.Changeset.before_transaction(&refund/1)
+      |> Ash.Changeset.before_transaction(
+        &MishkaPay.Ash.read(&1, fn changeset -> refund(changeset) end)
+      )
       |> Ash.Changeset.after_action(fn changeset, record ->
         {:ok, Ash.Resource.put_metadata(record, :refund, changeset.context[:mishka_pay_refund])}
       end)

@@ -23,6 +23,11 @@ defmodule MishkaPay.Payment do
     * `:failure_code`, `:failure_message`: why the last try failed, such as `"insufficient_funds"`.
     * `:disputed`: the buyer's bank has asked for it back (`MishkaPay.Dispute`).
     * `:refunds`: every `MishkaPay.Refund` made on it, newest first.
+    * `:checkout_id`, `:items`: the checkout that took it and what it sold, each a
+      `MishkaPay.Price` with its provider `:id`, `:product_id`, `:name`, unit `:amount` and
+      `:quantity`; what a shop delivers. Read by `MishkaPay.fetch_payment/3`; a payment made
+      outside a checkout (a subscription's renewal, a bill) has none, and `list_payments/3` leaves
+      them out.
     * `:created_at`: when the provider made it, a `DateTime`.
   """
 
@@ -51,6 +56,8 @@ defmodule MishkaPay.Payment do
     field :failure_message, String.t(), derives: "validate(string)"
     field :disputed, boolean(), default: false, derives: "validate(boolean)"
     field :refunds, list(), structs: MishkaPay.Refund, default: []
+    field :checkout_id, String.t(), derives: "validate(string)"
+    field :items, list(), structs: MishkaPay.Price, default: []
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 end

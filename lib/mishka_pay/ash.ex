@@ -70,6 +70,32 @@ if Code.ensure_loaded?(Ash) do
       end
     end
 
+    @doc false
+    # Runs `ask` (the provider call of a change) and keeps when it started in `:synced_at`: the
+    # moment the provider's word was read. A `:sync` upsert writes over a row only when its read is
+    # not older (`stale?/1`), so a slow read that ends after a newer one never wins.
+    @spec read(Ash.Changeset.t(), (Ash.Changeset.t() -> Ash.Changeset.t())) :: Ash.Changeset.t()
+    def read(changeset, ask) do
+      read_at = DateTime.utc_now()
+
+      case ask.(changeset) do
+        %{valid?: true} = changeset ->
+          Ash.Changeset.force_change_attribute(changeset, :synced_at, read_at)
+
+        refused ->
+          refused
+      end
+    end
+
+    @doc """
+    Whether a `:sync` was skipped because the row holds a newer read of the provider: the sync
+    succeeded in effect, since what it would write is already older than what is kept.
+    """
+    @spec stale?(term()) :: boolean()
+    def stale?(%{errors: errors}) when is_list(errors), do: Enum.any?(errors, &stale?/1)
+    def stale?(%Ash.Error.Changes.StaleRecord{}), do: true
+    def stale?(_error), do: false
+
     @doc "A `MishkaPay.Errors` error (or any Splode error) as Ash errors, one per inner error."
     @spec to_ash_error(Exception.t()) :: [Exception.t()]
     def to_ash_error(error) do

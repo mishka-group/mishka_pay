@@ -1061,6 +1061,49 @@ defmodule MishkaPay.Providers.StripeTest do
     end
   end
 
+  test "a payment made by a checkout brings the checkout and what it sold" do
+    session = %{
+      "id" => "cs_1",
+      "line_items" => %{
+        "data" => [
+          %{
+            "description" => "LiveView course",
+            "quantity" => 2,
+            "price" => %{
+              "id" => "price_course",
+              "product" => "prod_course",
+              "unit_amount" => 4900,
+              "currency" => "usd"
+            }
+          },
+          %{
+            "description" => "Pro plan",
+            "quantity" => 1,
+            "price" => %{
+              "id" => "price_pro",
+              "product" => %{"id" => "prod_pro"},
+              "unit_amount" => 900,
+              "currency" => "usd",
+              "recurring" => %{"interval" => "month", "interval_count" => 1}
+            }
+          }
+        ]
+      }
+    }
+
+    payment = struct(Payment, provider: "stripe", id: "pi_1")
+
+    assert %Payment{checkout_id: "cs_1", items: [course, pro]} =
+             Stripe.Mapper.with_checkout(payment, session)
+
+    assert {course.id, course.product_id, course.name, course.quantity} ==
+             {"price_course", "prod_course", "LiveView course", 2}
+
+    assert Elixir.Money.equal?(course.amount, Elixir.Money.new(:USD, "49.00"))
+    assert {pro.product_id, pro.interval} == {"prod_pro", :month}
+    assert %Payment{checkout_id: nil, items: []} = Stripe.Mapper.with_checkout(payment, nil)
+  end
+
   test "a payment brings its buyer, card, receipt, failure and every refund, and keeps the reference out of metadata" do
     intent = %{
       "id" => "pi_full",

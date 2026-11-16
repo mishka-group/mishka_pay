@@ -7,6 +7,9 @@ defmodule MishkaPay.Checkout do
   A checkout: what the buyer pays for and where they come back to, then the provider's answer. A
   guarded_struct; `MishkaPay.checkout/1` builds it from a map and hands it to the provider.
 
+  Read back with `MishkaPay.fetch_checkout/3`, `:items` are what the buyer bought, with their
+  provider price and product ids.
+
   What the caller gives:
 
     * `:provider` and `:tenant`: which provider, with whose keys (`MishkaPay.Credentials`).

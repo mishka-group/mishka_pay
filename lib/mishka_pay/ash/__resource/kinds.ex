@@ -112,7 +112,10 @@ if Code.ensure_loaded?(Ash) do
         {:card_last4, :string, public()},
         {:failure_code, :string, public()},
         {:failure_message, :string, public()},
-        {:disputed, :boolean, required(default: false)}
+        {:disputed, :boolean, required(default: false)},
+        {:checkout_id, :string, public()},
+        {:price_ids, {:array, :string}, required(default: [])},
+        {:product_ids, {:array, :string}, required(default: [])}
       ])
     end
 
@@ -381,10 +384,20 @@ if Code.ensure_loaded?(Ash) do
       {identity, _fields} = identity(kind)
 
       Keyword.merge(
-        [accept: [], upsert?: true, upsert_identity: identity, upsert_fields: synced ++ also],
+        [
+          accept: [],
+          upsert?: true,
+          upsert_identity: identity,
+          upsert_fields: synced ++ also,
+          upsert_condition: newer(kind)
+        ],
         opts
       )
     end
+
+    # A provider object is written over only by a read that is not older than the one kept.
+    defp newer(:inbox), do: nil
+    defp newer(_kind), do: Ash.Expr.expr(synced_at <= upsert_conflict(:synced_at))
 
     defp update(name, change, arguments, opts \\ []) do
       {name, :update,

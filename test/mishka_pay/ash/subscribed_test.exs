@@ -177,4 +177,40 @@ defmodule MishkaPay.Ash.SubscribedTest do
       assert {:ok, []} = Ash.read(MembersPost, actor: actor, tenant: site)
     end
   end
+
+  test "a slow read of the provider that ends after a newer one never overwrites it",
+       %{member: member} do
+    test_pid = self()
+
+    # The first read is held until the second has written; then it answers what it read before.
+    MishkaPay.Test.stub_http(fn conn ->
+      case Process.get(:slow) do
+        true ->
+          send(test_pid, {:reading, self()})
+          assert_receive :answer, 5_000
+          Req.Test.json(conn, subscription("sub_active_1", "active", member.id))
+
+        _fast ->
+          Req.Test.json(conn, subscription("sub_active_1", "canceled", member.id))
+      end
+    end)
+
+    slow =
+      Task.async(fn ->
+        Process.put(:slow, true)
+        sync("sub_active_1", "site-a")
+      end)
+
+    assert_receive {:reading, reader}, 5_000
+    assert {:ok, %{status: :canceled}} = sync("sub_active_1", "site-a")
+    send(reader, :answer)
+
+    assert {:error, error} = Task.await(slow)
+    assert MishkaPay.Ash.stale?(error)
+
+    assert [%{status: :canceled}] =
+             Ash.read!(SiteSubscription, tenant: "site-a", authorize?: false)
+
+    refute MishkaPay.Ash.subscribed?(SiteSubscription, member, tenant: "site-a")
+  end
 end

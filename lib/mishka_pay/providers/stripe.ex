@@ -194,7 +194,13 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def fetch_checkout(checkout_id, keys) do
     with :ok <- stripe_id(checkout_id, "cs_", :checkout_id),
-         {:ok, session} <- request(:get, "/v1/checkout/sessions/#{checkout_id}", [], keys) do
+         {:ok, session} <-
+           request(
+             :get,
+             "/v1/checkout/sessions/#{checkout_id}",
+             [{"expand[]", "line_items"}],
+             keys
+           ) do
       {:ok, Mapper.checkout(session)}
     end
   end
@@ -210,6 +216,24 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def fetch_payment(payment_id, keys) do
+    with {:ok, payment} <- read_payment(payment_id, keys),
+         {:ok, %{"data" => sessions}} <-
+           request(
+             :get,
+             "/v1/checkout/sessions",
+             [
+               {"payment_intent", payment_id},
+               {"limit", "1"},
+               {"expand[]", "data.line_items"}
+             ],
+             keys
+           ) do
+      {:ok, Mapper.with_checkout(payment, List.first(sessions))}
+    end
+  end
+
+  # The PaymentIntent alone, with its charge, refunds and customer: what a refund checks against.
+  defp read_payment(payment_id, keys) do
     with :ok <- stripe_id(payment_id, "pi_", :payment_id),
          {:ok, intent} <-
            request(
@@ -231,7 +255,7 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- stripe_id(refund.payment_id, "pi_", :payment_id),
          :ok <- currencies([refund]),
          {:ok, key} <- ProviderKit.refund_key(refund, keys),
-         {:ok, payment} <- fetch_payment(refund.payment_id, keys),
+         {:ok, payment} <- read_payment(refund.payment_id, keys),
          :ok <- ProviderKit.refundable(refund, payment, keys),
          {:ok, answer} <-
            request(:post, "/v1/refunds", Mapper.refund_params(refund), keys, key: key) do

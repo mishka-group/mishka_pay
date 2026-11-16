@@ -52,8 +52,14 @@ if Code.ensure_loaded?(Ash) do
              args,
              [action: :sync] ++ MishkaPay.Ash.Tenant.opts(resource, args.tenant)
            ) do
-        {:ok, _subscription} -> state
-        {:error, error} -> %{state | failed: MishkaPay.Ash.message(error)}
+        {:ok, _subscription} ->
+          state
+
+        {:error, error} ->
+          case MishkaPay.Ash.stale?(error) do
+            true -> state
+            false -> %{state | failed: MishkaPay.Ash.message(error)}
+          end
       end
     end
   end

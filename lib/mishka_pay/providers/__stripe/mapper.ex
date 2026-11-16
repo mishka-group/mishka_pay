@@ -192,7 +192,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     read_back =
       struct(Checkout,
         provider: "stripe",
-        items: [],
+        items: sold(session["line_items"]),
         reference: session["client_reference_id"],
         customer: buyer(get_in(session, ["customer_details", "email"]))
       )
@@ -1014,6 +1014,40 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> PaymentLink.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  @doc """
+  What a checkout sold, from its line items (asked for with `expand[]=line_items`): each a
+  `MishkaPay.Price` with its price and product ids, name, unit amount and quantity.
+  """
+  @spec sold(map() | nil) :: [Price.t()]
+  def sold(%{"data" => items}) do
+    for %{"price" => %{} = price} = item <- items,
+        {:ok, sold} <- [sold_item(item, price)],
+        do: sold
+  end
+
+  def sold(_not_expanded), do: []
+
+  defp sold_item(item, price) do
+    %{
+      id: price["id"],
+      product_id: id_of(price["product"]),
+      name: item["description"],
+      amount: money(price["unit_amount"], price["currency"]),
+      quantity: item["quantity"] || 1,
+      interval: interval(get_in(price, ["recurring", "interval"])),
+      interval_count: get_in(price, ["recurring", "interval_count"])
+    }
+    |> Price.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "The payment with the checkout that took it and what it sold, from Stripe's list of sessions."
+  @spec with_checkout(Payment.t(), map() | nil) :: Payment.t()
+  def with_checkout(%Payment{} = payment, %{} = session),
+    do: %{payment | checkout_id: session["id"], items: sold(session["line_items"])}
+
+  def with_checkout(%Payment{} = payment, nil), do: payment
 
   # Stripe lists a link's line items only when asked (`expand[]=line_items`).
   defp link_items(%{"data" => items}) do

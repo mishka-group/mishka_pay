@@ -18,7 +18,9 @@ if Code.ensure_loaded?(Ash) do
     @impl true
     def change(changeset, opts, _context) do
       changeset
-      |> Ash.Changeset.before_transaction(&fetch/1)
+      |> Ash.Changeset.before_transaction(
+        &MishkaPay.Ash.read(&1, fn changeset -> fetch(changeset) end)
+      )
       |> MishkaPay.Ash.announce(opts, &announce/2)
     end
 
@@ -59,10 +61,16 @@ if Code.ensure_loaded?(Ash) do
         failure_code: payment.failure_code,
         failure_message: payment.failure_message,
         disputed: payment.disputed,
+        checkout_id: payment.checkout_id,
+        price_ids: ids(payment.items, :id),
+        product_ids: ids(payment.items, :product_id),
         provider_created_at: payment.created_at,
         synced_at: DateTime.utc_now()
       }
     end
+
+    defp ids(items, field),
+      do: items |> Enum.map(&Map.get(&1, field)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     # The answer of the listeners does not change the sync: it already happened.
     @doc false

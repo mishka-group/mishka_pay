@@ -530,14 +530,22 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Price{id: ^price_id}]}} =
              MishkaPay.list_prices("stripe", nil, lookup_key: "live-#{run}")
 
-    assert {:ok, %Checkout{status: :open, amount_total: total}} =
+    assert {:ok, %Checkout{id: checkout_id, status: :open, amount_total: total}} =
              MishkaPay.checkout(%{
                provider: "stripe",
-               items: [%{id: price_id}],
+               items: [%{id: price_id, quantity: 2}],
                success_url: "https://shop.test/thanks",
                cancel_url: "https://shop.test/cart",
                reference: "live-price-#{run}"
              })
+
+    assert {:ok, %Checkout{items: [%MishkaPay.Price{} = sold]}} =
+             MishkaPay.fetch_checkout("stripe", checkout_id)
+
+    assert {sold.id, sold.product_id, sold.quantity, sold.name} ==
+             {price_id, product_id, 2, "Live ebook #{run}"}
+
+    assert Money.equal?(sold.amount, Money.new(:USD, "12.00"))
 
     assert Money.compare(total, Money.new(:USD, "12.00")) in [:eq, :gt]
 
