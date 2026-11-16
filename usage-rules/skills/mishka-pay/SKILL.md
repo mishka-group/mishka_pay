@@ -13,7 +13,8 @@ announced as mishka_installer events.
 ## Steps for a payment feature
 
 1. **Keys.** Make sure the project has a keys plugin (`use MishkaPay.Credentials`) answering the
-   provider and tenant, and supervises `MishkaPay.Providers.Stripe`.
+   provider and tenant; Mishka Pay's application starts the providers (outside Mishka CMS the
+   project lists `MishkaPay.Registry` first).
 2. **Checkout.** Call `MishkaPay.checkout/1` with `provider`, `tenant`, `items` (money as
    `%{amount: "19.99", currency: "USD"}`), `success_url` carrying `{CHECKOUT_SESSION_ID}`,
    `cancel_url` and the host's own `reference`. Redirect to `checkout.url`.

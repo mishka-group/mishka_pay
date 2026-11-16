@@ -42,13 +42,13 @@ By hand:
 {:ash, "~> 3.37"}, {:ash_postgres, "~> 2.15"}, {:ash_oban, "~> 0.10.3"}
 ```
 
-Supervise mishka_installer's registry first (it starts only what nothing else started), then the
-provider and the host's keys plugin (both are plugins):
+Mishka Pay's application starts the providers itself (`config :mishka_pay, providers: [...]`,
+all by default). Outside Mishka CMS, supervise mishka_installer's registry first (it starts only
+what nothing else started), then the host's keys plugin:
 
 ```elixir
 # lib/my_app/application.ex, children
 MishkaPay.Registry,
-MishkaPay.Providers.Stripe,
 MyApp.Pay.Keys
 ```
 
