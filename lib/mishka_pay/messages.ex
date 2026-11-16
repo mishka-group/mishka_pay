@@ -50,6 +50,19 @@ defmodule MishkaPay.Messages do
           | :expires_past
           | :expires_range
           | :plain_id
+          | :link_reference
+          | :change_nothing
+          | :quantity_range
+          | :proration_date
+          | :managed_payments_invoice
+          | :tax_code_missing
+          | :one_time_only
+          | :recurring_only
+          | :rejected_param
+          | :change_item
+          | :pause_behavior
+          | :link_items
+          | :invoice_mode
           | :rejected_missing
           | :rejected_exists
           | :keys_answer
@@ -224,6 +237,93 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:rejected_exists),
     do: dgettext_noop("mishka_pay", "%{provider} already has one with that code or id")
+
+  defp msgid(:proration_date),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A proration date goes only with prorations, and not with a new billing period starting now"
+      )
+
+  defp msgid(:managed_payments_invoice),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A merchant of record always makes an invoice: turn merchant of record off to sell without one"
+      )
+
+  defp msgid(:tax_code_missing),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A merchant of record sells only products with a tax category: give the product one, or turn merchant of record off"
+      )
+
+  defp msgid(:one_time_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} goes only with one-time prices: a plan's subscription makes its own customer and invoices"
+      )
+
+  defp msgid(:recurring_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} goes only with a plan, a price charged on a schedule"
+      )
+
+  defp msgid(:quantity_range),
+    do: dgettext_noop("mishka_pay", "The smallest quantity must be less than the largest")
+
+  defp msgid(:rejected_param),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} did not accept the value given for %{param}: check it and try again"
+      )
+
+  defp msgid(:change_nothing),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A subscription change needs a new plan, a new quantity or a new billing period"
+      )
+
+  defp msgid(:change_item),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "This subscription has more than one item: say which one changes"
+      )
+
+  defp msgid(:pause_behavior),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A pause keeps its invoices as void, keep_as_draft or mark_uncollectible"
+      )
+
+  defp msgid(:link_reference),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A payment link's reference may hold only letters, digits, underscores and dashes, at most 200"
+      )
+
+  defp msgid(:link_items),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A payment link sells catalog prices: give at least one, each by its price id"
+      )
+
+  defp msgid(:invoice_mode),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "An invoice is asked for only in a one-time checkout: a subscription makes its own"
+      )
 
   defp msgid(:plain_id),
     do:

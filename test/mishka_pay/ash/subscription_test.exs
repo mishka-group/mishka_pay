@@ -12,7 +12,9 @@ defmodule MishkaPay.Ash.SubscriptionTest do
 
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.{Subscription, Webhook}
-  alias MishkaPay.Support.{Inbox, StripeMock, SubscriptionSync, SubscriptionWatcher}
+  alias MishkaPay.Support.{StripeMock, SubscriptionWatcher}
+  alias MishkaPay.Support.Subscription.MishkaPayListener, as: SubscriptionSync
+  alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
 
   @moduletag :stripe_mock
 
@@ -68,6 +70,38 @@ defmodule MishkaPay.Ash.SubscriptionTest do
              row
              |> Ash.Changeset.for_update(:cancel, %{at: :tomorrow})
              |> Ash.update(authorize?: false)
+  end
+
+  test "change, pause and resume collection go through Stripe and write its answer" do
+    {:ok, row} = sync()
+    MishkaPay.Test.start_plugin!(SubscriptionWatcher)
+
+    for {action, args} <- [
+          change: %{
+            item_id: "si_123",
+            price_id: "price_123",
+            quantity: 2,
+            proration: :always_invoice
+          },
+          pause: %{
+            behavior: :keep_as_draft,
+            resumes_at: DateTime.add(DateTime.utc_now(), 7, :day)
+          },
+          resume_collection: %{}
+        ] do
+      assert {:ok, %{synced_at: _}} =
+               row |> Ash.Changeset.for_update(action, args) |> Ash.update(authorize?: false)
+
+      assert_received {:subscription_changed, %Subscription{}, _record}
+    end
+
+    assert {:error, %Ash.Error.Invalid{}} =
+             row
+             |> Ash.Changeset.for_update(:change, %{proration: :sometimes})
+             |> Ash.update(authorize?: false)
+
+    assert {:error, %Ash.Error.Invalid{}} =
+             row |> Ash.Changeset.for_update(:change, %{}) |> Ash.update(authorize?: false)
   end
 
   test "a subscription Stripe cannot give is an error, and nothing is written" do

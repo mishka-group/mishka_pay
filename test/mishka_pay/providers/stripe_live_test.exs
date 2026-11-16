@@ -253,6 +253,137 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
   end
 
+  @tag timeout: 300_000
+  test "a plan change and a quantity change bill what their preview said, on a test clock", %{
+    key: key
+  } do
+    {:ok, %TestClock{id: clock, frozen_time: start}} = TestClock.create(nil, name: "live change")
+
+    try do
+      {200, %{"id" => customer}} =
+        stripe(key, :post, "/v1/customers", %{
+          "test_clock" => clock,
+          "email" => "change@example.com"
+        })
+
+      {200, %{"id" => card}} =
+        stripe(key, :post, "/v1/payment_methods/pm_card_mastercard/attach", %{
+          "customer" => customer
+        })
+
+      {200, _customer} =
+        stripe(key, :post, "/v1/customers/#{customer}", %{
+          "invoice_settings" => %{"default_payment_method" => card}
+        })
+
+      {:ok, %MishkaPay.Product{id: product}} =
+        MishkaPay.create_product(%{provider: "stripe", name: "Plans #{clock}"})
+
+      {:ok, %MishkaPay.Price{id: pro}} =
+        MishkaPay.create_price(%{
+          provider: "stripe",
+          product_id: product,
+          amount: %{amount: "9.00", currency: "USD"},
+          interval: :month
+        })
+
+      {:ok, %MishkaPay.Price{id: team}} =
+        MishkaPay.create_price(%{
+          provider: "stripe",
+          product_id: product,
+          amount: %{amount: "29.00", currency: "USD"},
+          interval: :month
+        })
+
+      {200, %{"id" => id}} =
+        stripe(key, :post, "/v1/subscriptions", %{
+          "customer" => customer,
+          "items" => [%{"price" => pro}]
+        })
+
+      {:ok, %TestClock{}} = TestClock.advance(nil, clock, DateTime.add(start, 10, :day))
+      :ready = clock_ready(clock, 60)
+      {:ok, %TestClock{frozen_time: day_ten}} = TestClock.fetch(nil, clock)
+
+      for change <- [
+            %{price_id: team, proration: :always_invoice},
+            %{quantity: 3, proration: :always_invoice}
+          ] do
+        change =
+          Map.merge(change, %{provider: "stripe", subscription_id: id, proration_date: day_ten})
+
+        assert {:ok, %Invoice{amount_due: due, lines: lines}} =
+                 MishkaPay.preview_subscription_change(change)
+
+        assert Enum.any?(lines, & &1.proration)
+        assert Enum.any?(lines, &Decimal.negative?(&1.amount.amount))
+
+        assert {:ok, %Subscription{latest_invoice_id: invoice_id, items: [item]}} =
+                 MishkaPay.change_subscription(change)
+
+        assert item.id == team
+
+        assert {:ok, %Invoice{amount_due: billed, status: :paid}} =
+                 MishkaPay.fetch_invoice("stripe", invoice_id)
+
+        assert Money.equal?(billed, due)
+      end
+
+      assert {:ok, %Subscription{items: [%{quantity: 3}]}} =
+               MishkaPay.fetch_subscription("stripe", id)
+
+      later = DateTime.add(day_ten, 40, :day)
+
+      assert {:ok, %Subscription{pause_behavior: :keep_as_draft, resumes_at: ^later}} =
+               MishkaPay.pause_collection("stripe", id, nil,
+                 behavior: :keep_as_draft,
+                 resumes_at: later
+               )
+
+      assert {:ok, %Subscription{pause_behavior: nil}} = MishkaPay.resume_collection("stripe", id)
+    after
+      TestClock.delete(nil, clock)
+    end
+  end
+
+  test "a payment with Stripe's dispute card gets a dispute, which is read, answered and listed",
+       %{
+         key: key
+       } do
+    {200, %{"id" => payment_id, "status" => "succeeded"}} = pay(key, "pm_card_createDispute")
+
+    assert {:ok, %MishkaPay.Dispute{id: id, payment_id: ^payment_id, status: status}} =
+             first_dispute(payment_id, 30)
+
+    assert status in [:needs_response, :warning_needs_response]
+
+    assert {:ok, %Payment{disputed: true}} = MishkaPay.fetch_payment("stripe", payment_id)
+
+    assert {:ok, %MishkaPay.Dispute{has_evidence: true}} =
+             MishkaPay.update_dispute(%{
+               provider: "stripe",
+               dispute_id: id,
+               evidence: %{"uncategorized_text" => "winning_evidence"},
+               submit: false
+             })
+
+    assert {:ok, %MishkaPay.Dispute{id: ^id}} = MishkaPay.fetch_dispute("stripe", id)
+  end
+
+  # Stripe opens the test card's dispute a moment after the payment; ask until it is there.
+  defp first_dispute(_payment_id, 0), do: :timeout
+
+  defp first_dispute(payment_id, tries) do
+    case MishkaPay.list_disputes("stripe", nil, payment_id: payment_id) do
+      {:ok, %MishkaPay.Page{items: [dispute | _]}} ->
+        {:ok, dispute}
+
+      {:ok, %MishkaPay.Page{items: []}} ->
+        Process.sleep(1_000)
+        first_dispute(payment_id, tries - 1)
+    end
+  end
+
   defp clock_ready(_clock, 0), do: :timeout
 
   defp clock_ready(clock, tries) do
@@ -414,6 +545,100 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
 
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
+  end
+
+  test "a one-time payment link, a checkout with its invoice, and prices that hold or add the tax" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Product{id: product_id}} =
+      MishkaPay.create_product(%{
+        provider: "stripe",
+        id: "live-link-#{run}",
+        name: "Live link #{run}",
+        tax_code: "txcd_10302000"
+      })
+
+    on_exit(fn -> MishkaPay.archive_product("stripe", product_id) end)
+
+    assert {:ok, %MishkaPay.Price{id: price_id, tax_behavior: :exclusive}} =
+             MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: product_id,
+               amount: %{amount: "15.00", currency: "USD"},
+               tax_behavior: :exclusive
+             })
+
+    assert {:ok,
+            %MishkaPay.PaymentLink{
+              id: "plink_" <> _ = link_id,
+              url: "https://buy.stripe.com/" <> _,
+              active: true,
+              max_purchases: 1,
+              purchases: 0,
+              inactive_message: "Sold out",
+              invoice: true
+            } = link} =
+             MishkaPay.create_payment_link(%{
+               provider: "stripe",
+               items: [%{id: price_id, quantity: 1}],
+               success_url: "https://shop.test/thanks",
+               max_purchases: 1,
+               inactive_message: "Sold out",
+               quantity_max: 3,
+               invoice: true,
+               customer_creation: :always
+             })
+
+    assert MishkaPay.PaymentLink.url(link, reference: "order-#{run}") =~
+             "client_reference_id=order-"
+
+    assert {:ok,
+            %MishkaPay.PaymentLink{
+              items: [%MishkaPay.Price{id: ^price_id}],
+              quantity_min: nil,
+              quantity_max: 3
+            }} = MishkaPay.fetch_payment_link("stripe", link_id)
+
+    assert {:ok, %MishkaPay.PaymentLink{active: false, max_purchases: 5}} =
+             MishkaPay.update_payment_link(%{
+               provider: "stripe",
+               id: link_id,
+               active: false,
+               max_purchases: 5
+             })
+
+    assert {:ok, %Checkout{status: :open, invoice: true}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{id: price_id}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-invoice-#{run}",
+               invoice: true
+             })
+
+    MishkaPay.Test.put_keys("stripe", %{
+      secret_key: System.fetch_env!("STRIPE_SECRET_KEY"),
+      automatic_tax: true
+    })
+
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [
+                 %{
+                   name: "Tax included",
+                   amount: %{amount: "20.00", currency: "EUR"},
+                   tax_code: "txcd_10302000",
+                   tax_behavior: :inclusive
+                 }
+               ],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-inclusive-#{run}"
+             })
+
+    MishkaPay.archive_price("stripe", price_id)
   end
 
   test "a payment that does not exist is a rejection" do

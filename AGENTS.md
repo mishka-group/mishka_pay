@@ -20,7 +20,7 @@ changing this repository. An agent *using* Mishka Pay in another project reads t
 | `lib/mishka_pay.ex` | the calls (`checkout/1`, `fetch_payment/3`, `refund/1`, subscriptions) |
 | `lib/mishka_pay/provider.ex`, `provider_kit.ex` | the provider contract and the rules every provider shares |
 | `lib/mishka_pay/providers/` | Stripe and PayPal adapters; `__<id>/mapper.ex` maps their answers |
-| `lib/mishka_pay/ash/` | the optional Ash layer: inbox, payment and subscription fragments, listeners |
+| `lib/mishka_pay/ash/` | the optional Ash layer: the `MishkaPay.Ash.Resource` extension (`mishka_pay do kind ... end`), its changes and listeners |
 | `lib/mishka_pay/webhook.ex` | the webhook Plug |
 | `lib/mishka_pay/test.ex`, `provider_case.ex` | the test kit hosts use |
 | `test/support/` | test-only code: stand-ins, Ash resources, `mix ci` checks |
@@ -32,7 +32,10 @@ changing this repository. An agent *using* Mishka Pay in another project reads t
   `docker run -d --name mp-postgres -p 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD=postgres -v mp-postgres-data:/var/lib/postgresql/data postgres:17`
   and `docker run -d --name mp-stripe-mock -p 127.0.0.1:12111:12111 stripe/stripe-mock:latest`,
   then `POSTGRES_PORT=5433 mix test`.
-- After changing an Ash fragment: `MIX_ENV=test POSTGRES_PORT=5433 mix ash.codegen <name>` (the
+- After changing the `mishka_pay` DSL (`ash/resource.ex`): `mix spark.formatter --extensions
+  MishkaPay.Ash.Resource` and `mix spark.cheat_sheets --extensions MishkaPay.Ash.Resource`
+  (`mix ci` checks both are current).
+- After changing what a kind adds (`ash/__resource/kinds.ex`): `MIX_ENV=test POSTGRES_PORT=5433 mix ash.codegen <name>` (the
   generated migrations are gitignored here; the demo keeps its own).
 - Live sandbox tests: `STRIPE_SECRET_KEY=sk_test_... mix test --only stripe_live` (test keys only).
 - The full gate is `mix ci`: compile with warnings as errors, format, credo, Credence, the usage

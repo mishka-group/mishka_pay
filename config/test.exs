@@ -15,6 +15,9 @@ config :logger, level: :warning
 # Every provider call of a test is answered by `MishkaPay.Test.stub_http/1`.
 config :mishka_pay, req_options: [plug: {Req.Test, MishkaPay.Client}]
 
+# Each test starts the providers it uses (MishkaPay.Test.start_plugin!/1).
+config :mishka_pay, providers: []
+
 # The Ash layer's tests keep their resources in Postgres, as a host does; POSTGRES_PORT lets a
 # local run use a database of its own.
 config :mishka_pay, MishkaPay.Support.Repo,

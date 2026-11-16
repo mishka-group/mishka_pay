@@ -23,10 +23,12 @@ defmodule MishkaPay.ProviderTest do
              :payment_list,
              :refund,
              :subscription,
+             :subscription_change,
              :customer,
              :portal,
              :discount,
-             :catalog
+             :catalog,
+             :payment_link
            ]
   end
 

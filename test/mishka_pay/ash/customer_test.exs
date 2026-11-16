@@ -11,7 +11,9 @@ defmodule MishkaPay.Ash.CustomerTest do
 
   alias MishkaPay.{Customer, PortalSession, Webhook}
   alias MishkaPay.Providers.Stripe
-  alias MishkaPay.Support.{Acme, CustomerSync, CustomerWatcher, Inbox, StripeMock}
+  alias MishkaPay.Support.{Acme, CustomerWatcher, StripeMock}
+  alias MishkaPay.Support.Customer.MishkaPayListener, as: CustomerSync
+  alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
 
   @customer MishkaPay.Support.Customer
   @event "test/fixtures/stripe/event.json" |> File.read!() |> JSON.decode!()

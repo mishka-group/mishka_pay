@@ -104,6 +104,150 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.list_payments("stripe", "site-a", customer_id: "cus_123")
     end
 
+    test "payment links are made, read, listed and changed as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.PaymentLink{id: "plink_" <> _ = id, url: "https://" <> _}} =
+               MishkaPay.create_payment_link(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 items: [%{id: "price_123", quantity: 1}],
+                 success_url: "https://shop.test/thanks",
+                 max_purchases: 1,
+                 inactive_message: "Sold out",
+                 quantity_min: 1,
+                 quantity_max: 3,
+                 allow_promotion_codes: true,
+                 automatic_tax: true,
+                 invoice: true,
+                 customer_creation: :always,
+                 billing_address: :required,
+                 tax_id_collection: true
+               })
+
+      assert {:ok, %MishkaPay.PaymentLink{}} =
+               MishkaPay.fetch_payment_link("stripe", id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentLink{} | _]}} =
+               MishkaPay.list_payment_links("stripe", "site-a", active: true)
+
+      assert {:ok, %MishkaPay.PaymentLink{}} =
+               MishkaPay.update_payment_link(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: id,
+                 active: false,
+                 max_purchases: 10,
+                 inactive_message: "Back soon"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :items}]}} =
+               MishkaPay.create_payment_link(%{provider: "stripe", items: [%{id: "prod_1"}]})
+    end
+
+    test "a one-time checkout asks for its invoice, and prices carry their tax behavior" do
+      inclusive = [
+        %{
+          name: "Ebook",
+          amount: %{amount: "20", currency: "EUR"},
+          tax_code: "txcd_10302000",
+          tax_behavior: :inclusive
+        }
+      ]
+
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(Map.merge(@checkout, %{items: inclusive, invoice: true}))
+
+      params =
+        Stripe.Mapper.checkout_params(%{
+          params_checkout()
+          | invoice: true,
+            items: [
+              %MishkaPay.Price{
+                name: "E",
+                amount: Money.new(:EUR, "20"),
+                quantity: 1,
+                tax_behavior: :inclusive
+              }
+            ]
+        })
+
+      assert params["invoice_creation"] == %{"enabled" => true}
+
+      assert get_in(params, ["line_items", Access.at(0), "price_data", "tax_behavior"]) ==
+               "inclusive"
+
+      refute Map.has_key?(Stripe.Mapper.checkout_params(params_checkout()), "invoice_creation")
+
+      assert {:ok, %MishkaPay.Price{}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 product_id: "prod_123",
+                 amount: %{amount: "9", currency: "USD"},
+                 tax_behavior: :exclusive
+               })
+    end
+
+    test "the site's automatic tax applies when a checkout or link does not say, and theirs wins" do
+      on = %{automatic_tax: true}
+
+      assert Stripe.Mapper.checkout_params(params_checkout(), on)["automatic_tax"] == %{
+               "enabled" => true
+             }
+
+      refute Map.has_key?(Stripe.Mapper.checkout_params(params_checkout(), %{}), "automatic_tax")
+
+      assert Stripe.Mapper.checkout_params(%{params_checkout() | automatic_tax: false}, on)[
+               "automatic_tax"
+             ] == %{"enabled" => false}
+
+      link = %MishkaPay.PaymentLink{items: [%MishkaPay.Price{id: "price_1", quantity: 1}]}
+      assert Stripe.Mapper.payment_link_params(link, on)["automatic_tax"] == %{"enabled" => true}
+
+      assert %{"restrictions" => %{"completed_sessions" => %{"limit" => 1}}} =
+               Stripe.Mapper.payment_link_params(%{link | max_purchases: 1})
+
+      assert %{"line_items" => [%{"adjustable_quantity" => %{"enabled" => true, "maximum" => 4}}]} =
+               Stripe.Mapper.payment_link_params(%{link | quantity_max: 4})
+
+      refute Map.has_key?(Stripe.Mapper.payment_link_params(link), "restrictions")
+
+      assert %{"invoice_creation" => %{"enabled" => false}} =
+               Stripe.Mapper.payment_link_params(%{link | invoice: false})
+
+      refute Map.has_key?(Stripe.Mapper.payment_link_params(link), "invoice_creation")
+
+      assert %{"managed_payments" => %{"enabled" => false}} =
+               Stripe.Mapper.payment_link_params(link, %{merchant_of_record: false})
+
+      assert %{"managed_payments" => %{"enabled" => true}} =
+               Stripe.Mapper.payment_link_params(%{link | merchant_of_record: true}, %{
+                 merchant_of_record: false
+               })
+    end
+
+    test "a refusal that names a field says which, never Stripe's own words" do
+      MishkaPay.Test.stub_http(fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{
+          "error" => %{
+            "type" => "invalid_request_error",
+            "param" => "subscription_data[trial_period_days]",
+            "message" => "Trials need a recurring price, plink secret xyz"
+          }
+        })
+      end)
+
+      assert {:error, %Errors.Rejected{param: "trial_days"} = error} =
+               MishkaPay.create_payment_link(%{
+                 provider: "stripe",
+                 items: [%{id: "price_1"}],
+                 trial_days: 7
+               })
+
+      assert Exception.message(error) ==
+               "stripe did not accept the value given for trial_days: check it and try again"
+    end
+
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do
       test = self()
 
@@ -161,6 +305,56 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(Map.put(@checkout, :discounts, [%{coupon_id: "NOPE"}]))
 
       assert Exception.message(missing) == "stripe has nothing with the id given"
+    end
+
+    test "a link Stripe refuses for a missing tax code or a one-time-only choice says which, plainly" do
+      answers = %{
+        "tax" =>
+          "Invalid line_items[0]: the product tax code is missing. Set the product's tax_code field to an eligible product tax code.",
+        "invoice" =>
+          "`invoice_creation` can only be used if the payment link does not contain any recurring prices.",
+        "trial" =>
+          "You must pass a recurring price in `line_items` to specify `subscription_data`."
+      }
+
+      MishkaPay.Test.stub_http(fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+
+        {message, param} =
+          cond do
+            params["invoice_creation[enabled]"] ->
+              {answers["invoice"], nil}
+
+            params["subscription_data[trial_period_days]"] ->
+              {answers["trial"], "subscription_data"}
+
+            true ->
+              {answers["tax"], nil}
+          end
+
+        error = %{"type" => "invalid_request_error", "message" => message, "param" => param}
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      link = %{provider: "stripe", items: [%{id: "price_1", quantity: 1}]}
+
+      assert {:error, %Errors.Rejected{code: "tax_code_missing", param: "tax_code"} = tax} =
+               MishkaPay.create_payment_link(link)
+
+      assert Exception.message(tax) =~ "give the product one, or turn merchant of record off"
+
+      assert {:error, %Errors.Rejected{code: "one_time_only", param: "invoice"} = invoice} =
+               MishkaPay.create_payment_link(Map.put(link, :invoice, true))
+
+      assert Exception.message(invoice) =~ "invoice goes only with one-time prices"
+
+      assert {:error, %Errors.Rejected{code: "recurring_only", param: "trial_days"} = trial} =
+               MishkaPay.create_payment_link(Map.put(link, :trial_days, 7))
+
+      assert Exception.message(trial) ==
+               "trial_days goes only with a plan, a price charged on a schedule"
     end
 
     test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
@@ -258,6 +452,87 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
                MishkaPay.fetch_subscription("stripe", "pi_123", "site-a")
+    end
+
+    test "disputes are read, listed, answered with evidence and accepted as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.Dispute{id: "dp_" <> _}} =
+               MishkaPay.fetch_dispute("stripe", "dp_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Dispute{} | _]}} =
+               MishkaPay.list_disputes("stripe", "site-a", payment_id: "pi_123")
+
+      assert {:ok, %MishkaPay.Dispute{}} =
+               MishkaPay.update_dispute(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 dispute_id: "dp_123",
+                 evidence: %{"uncategorized_text" => "The buyer downloaded the ebook twice."},
+                 submit: false
+               })
+
+      assert {:ok, %MishkaPay.Dispute{}} = MishkaPay.accept_dispute("stripe", "dp_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :dispute_id}]}} =
+               MishkaPay.fetch_dispute("stripe", "pi_123")
+    end
+
+    test "a subscription change, its preview, a pause and an invoice read go as Stripe's spec accepts" do
+      change = %{
+        provider: "stripe",
+        tenant: "site-a",
+        subscription_id: "sub_123",
+        item_id: "si_123",
+        price_id: "price_123",
+        quantity: 2,
+        proration: :always_invoice,
+        billing_cycle_anchor: :unchanged,
+        payment_behavior: :error_if_incomplete
+      }
+
+      assert {:ok, %Invoice{}} = MishkaPay.preview_subscription_change(change)
+      assert {:ok, %Subscription{}} = MishkaPay.change_subscription(change)
+
+      assert {:ok, %Subscription{}} =
+               MishkaPay.pause_collection("stripe", "sub_123", "site-a",
+                 behavior: :mark_uncollectible,
+                 resumes_at: DateTime.add(DateTime.utc_now(), 7, :day)
+               )
+
+      assert {:ok, %Subscription{}} = MishkaPay.resume_collection("stripe", "sub_123", "site-a")
+
+      assert {:ok, %Invoice{id: "in_" <> _}} =
+               MishkaPay.fetch_invoice("stripe", "in_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :price_id}]}} =
+               MishkaPay.change_subscription(%{change | price_id: "prod_123"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :item_id}]}} =
+               MishkaPay.change_subscription(%{change | item_id: "sub_1"})
+
+      params =
+        Stripe.Mapper.change_params(
+          struct!(
+            MishkaPay.SubscriptionChange,
+            Map.put(change, :proration_date, ~U[2026-11-16 00:00:00Z])
+          ),
+          "si_123"
+        )
+
+      assert params == %{
+               "items" => [%{"id" => "si_123", "price" => "price_123", "quantity" => 2}],
+               "proration_behavior" => "always_invoice",
+               "proration_date" => 1_794_787_200,
+               "billing_cycle_anchor" => %{"type" => "unchanged"},
+               "payment_behavior" => "error_if_incomplete"
+             }
+
+      assert %{"subscription" => "sub_123", "subscription_details" => details} =
+               Stripe.Mapper.preview_params(
+                 struct!(MishkaPay.SubscriptionChange, change),
+                 "si_123"
+               )
+
+      refute Map.has_key?(details, "payment_behavior")
     end
 
     test "a checkout is read back by its session id, and a bad id never reaches a path" do
@@ -950,6 +1225,90 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert %{"promotion" => %{"type" => "coupon", "coupon" => "Or6TT44r"}} =
              Stripe.Mapper.promotion_code_params(%MishkaPay.PromotionCode{coupon_id: "Or6TT44r"})
+  end
+
+  # One object of each kind Stripe sends in a handled event, as its API version names them.
+  @objects %{
+    "checkout.session" => %{
+      "object" => "checkout.session",
+      "id" => "cs_1",
+      "payment_intent" => "pi_1",
+      "subscription" => "sub_1"
+    },
+    "payment_intent" => %{"object" => "payment_intent", "id" => "pi_1"},
+    "charge" => %{"object" => "charge", "id" => "ch_1", "payment_intent" => "pi_1"},
+    "refund" => %{"object" => "refund", "id" => "re_1", "payment_intent" => "pi_1"},
+    "charge.dispute" => %{"object" => "dispute", "id" => "dp_1", "payment_intent" => "pi_1"},
+    "invoice" => %{
+      "object" => "invoice",
+      "id" => "in_1",
+      "parent" => %{"subscription_details" => %{"subscription" => "sub_1"}}
+    },
+    "invoice_payment" => %{
+      "object" => "invoice_payment",
+      "id" => "inpay_1",
+      "payment" => %{"type" => "payment_intent", "payment_intent" => "pi_1"}
+    },
+    "customer.subscription" => %{"object" => "subscription", "id" => "sub_1"},
+    "customer" => %{"object" => "customer", "id" => "cus_1"}
+  }
+
+  test "every Stripe event Mishka Pay claims to handle names what it updates" do
+    for {type, updates} <- Stripe.handled_events() do
+      kind = type |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
+      object = Map.fetch!(@objects, kind)
+
+      assert {:ok, event} =
+               Stripe.Mapper.event(%{
+                 "id" => "evt_1",
+                 "type" => type,
+                 "created" => 1_794_825_000,
+                 "data" => %{"object" => object}
+               }),
+             type
+
+      for update <- updates do
+        assert named?(event, update), "#{type} does not name its #{update}"
+      end
+    end
+  end
+
+  defp named?(event, :payment), do: event.payment_id == "pi_1"
+  defp named?(event, :subscription), do: event.subscription_id == "sub_1"
+  defp named?(event, :dispute), do: event.dispute_id == "dp_1"
+  defp named?(event, :customer), do: {event.object_type, event.object_id} == {"customer", "cus_1"}
+
+  test "a dispute maps with its status, due date and evidence count" do
+    assert {:ok,
+            %MishkaPay.Dispute{
+              id: "dp_1",
+              payment_id: "pi_1",
+              status: :needs_response,
+              reason: "fraudulent",
+              has_evidence: false,
+              submission_count: 0,
+              refundable: false,
+              amount: amount
+            }} =
+             Stripe.Mapper.dispute(%{
+               "id" => "dp_1",
+               "object" => "dispute",
+               "amount" => 1999,
+               "currency" => "usd",
+               "payment_intent" => "pi_1",
+               "charge" => "ch_1",
+               "status" => "needs_response",
+               "reason" => "fraudulent",
+               "is_charge_refundable" => false,
+               "evidence_details" => %{
+                 "due_by" => 1_795_000_000,
+                 "has_evidence" => false,
+                 "submission_count" => 0
+               },
+               "created" => 1_794_825_000
+             })
+
+    assert Money.equal?(amount, Money.new(:USD, "19.99"))
   end
 
   test "Stripe's form encoding nests maps and lists and leaves out nil" do

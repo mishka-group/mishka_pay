@@ -40,6 +40,8 @@ defmodule MishkaPay.Checkout do
       (Stripe: 30 minutes to 24 hours from now). `MishkaPay.expire_checkout/3` ends it at once.
     * `:billing_address`: `:auto` (only when needed) or `:required`.
     * `:tax_id_collection`: `true` lets a business buyer give its tax id.
+    * `:invoice`: in a one-time checkout, `true` makes an invoice for the payment, which the
+      provider can email with the receipt; a subscription makes its own invoices.
 
   A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
   leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
@@ -51,6 +53,8 @@ defmodule MishkaPay.Checkout do
     * `:status`: `:open`, `:complete` or `:expired`.
     * `:payment_id`: the payment it made, once there is one (a one-time checkout).
     * `:subscription_id`: the subscription it started, once there is one.
+    * `:invoice_id`: the invoice it made, with `invoice: true`, once paid.
+    * `:payment_link_id`: the payment link the buyer came from (`MishkaPay.PaymentLink`).
     * `:amount_total`, `:amount_tax`, `:amount_discount`: what the buyer pays in all, the tax in
       it and the discount taken off, as `Money`, once the provider has counted them (the tax may
       change as the buyer fills in an address).
@@ -123,6 +127,9 @@ defmodule MishkaPay.Checkout do
       validator: {__MODULE__, :billing_address}
 
     field :tax_id_collection, boolean(), derives: "validate(boolean)"
+    field :invoice, boolean(), derives: "validate(boolean)"
+    field :invoice_id, String.t(), derives: "validate(string)"
+    field :payment_link_id, String.t(), derives: "validate(string)"
 
     field :payment_id, String.t(), derives: "validate(string)"
     field :subscription_id, String.t(), derives: "validate(string)"
@@ -163,17 +170,17 @@ defmodule MishkaPay.Checkout do
   def return_url(field, url), do: {:ok, field, url}
 
   @doc false
-  def metadata(:metadata, nil), do: {:ok, :metadata, nil}
+  def metadata(field, nil), do: {:ok, field, nil}
 
-  def metadata(:metadata, %{} = metadata) do
+  def metadata(field, %{} = metadata) do
     case Enum.all?(metadata, fn {key, value} -> is_binary(key) and is_binary(value) end) do
-      true -> {:ok, :metadata, metadata}
-      false -> {:error, :metadata, Messages.text(:metadata_strings)}
+      true -> {:ok, field, metadata}
+      false -> {:error, field, Messages.text(:metadata_strings)}
     end
   end
 
-  def metadata(:metadata, _other),
-    do: {:error, :metadata, Messages.text(:metadata_strings)}
+  def metadata(field, _other),
+    do: {:error, field, Messages.text(:metadata_strings)}
 
   # A mode from JSON or a form comes as a string.
   @doc false
@@ -192,6 +199,7 @@ defmodule MishkaPay.Checkout do
          {:ok, attrs} <- one_buyer(attrs),
          {:ok, attrs} <- one_discount_way(attrs),
          {:ok, attrs} <- customer_creation_mode(attrs),
+         {:ok, attrs} <- invoice_mode(attrs),
          do: fits_mode(attrs)
   end
 
@@ -203,6 +211,17 @@ defmodule MishkaPay.Checkout do
          %{field: :discounts, action: :discounts, message: Messages.text(:discounts_or_codes)}}
 
       _one_way ->
+        {:ok, attrs}
+    end
+  end
+
+  # A subscription bills itself with invoices; asking for one is a one-time checkout's choice.
+  defp invoice_mode(attrs) do
+    case {key(attrs, :invoice), key(attrs, :mode)} do
+      {true, mode} when mode in [:subscription, "subscription"] ->
+        {:error, %{field: :invoice, action: :mode, message: Messages.text(:invoice_mode)}}
+
+      _fits ->
         {:ok, attrs}
     end
   end

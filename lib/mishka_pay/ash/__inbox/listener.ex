@@ -6,15 +6,18 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Inbox.Listener do
     @moduledoc """
     Makes a module the `mishka_pay:webhook:received` listener that stores each checked event in an
-    inbox resource (`MishkaPay.Ash.Inbox`):
+    inbox resource (the `:inbox` kind of `MishkaPay.Ash.Resource`):
 
         defmodule MyApp.Pay.Inbox do
           use MishkaPay.Ash.Inbox.Listener, resource: MyApp.Pay.WebhookEvent
         end
 
-    Supervise it like any plugin. It answers the webhook as soon as the event is stored, so the
-    provider gets its 200 at once; an event it cannot store is answered as failed, so the provider
-    sends it again. `:priority` places it among the other listeners (50 by default).
+    `MishkaPay.Ash.Resource` makes one for each resource that listens (`listen? true`), as
+    `<Resource>.MishkaPayListener`; write one by hand with `listen? false`, such as to give it
+    another `:priority`. Supervise it like any plugin. It answers the webhook as soon as the
+    event is stored, so the provider gets its 200 at once; an event it cannot store is answered
+    as failed, so the provider sends it again. `:priority` places it among the other listeners
+    (50 by default).
     """
 
     @doc false
@@ -46,6 +49,7 @@ if Code.ensure_loaded?(Ash) do
         object_type: event.object_type,
         payment_id: event.payment_id,
         subscription_id: event.subscription_id,
+        dispute_id: event.dispute_id,
         livemode: event.livemode,
         account: event.account,
         provider_created_at: event.created_at

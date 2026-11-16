@@ -2,8 +2,9 @@
 
 Mishka Pay (`:mishka_pay`) takes payments in Elixir projects: checkouts, payments, refunds,
 subscriptions and verified webhooks, the same way for every provider. Stripe is the full provider;
-PayPal's adapter exists and waits for its sandbox run. An optional Ash layer stores events,
-payments and subscriptions in the host's own resources.
+PayPal's adapter exists and waits for its sandbox run. An optional Ash layer (the
+`MishkaPay.Ash.Resource` extension) stores events, payments, subscriptions, customers and disputes
+in the host's own resources.
 
 Read this file before writing any code that touches payments. Then load the sub-rule for the area
 you work in (list at the end). When something is not covered here, read the module's own docs
@@ -25,6 +26,15 @@ field or a function.
 
 ## Setup in a host project
 
+The installer does all of this in a Phoenix project, and never twice:
+
+```bash
+mix igniter.install mishka_pay            # provider, keys plugin, webhook plug, test config
+mix igniter.install mishka_pay --ash --pubsub   # plus the Ash resources and the PubSub plugin
+```
+
+By hand:
+
 ```elixir
 # mix.exs
 {:mishka_pay, "~> 0.0.1"}
@@ -32,11 +42,13 @@ field or a function.
 {:ash, "~> 3.37"}, {:ash_postgres, "~> 2.15"}, {:ash_oban, "~> 0.10.3"}
 ```
 
-Supervise the provider and the host's keys plugin (both are plugins):
+Mishka Pay's application starts the providers itself (`config :mishka_pay, providers: [...]`,
+all by default). Outside Mishka CMS, supervise mishka_installer's registry first (it starts only
+what nothing else started), then the host's keys plugin:
 
 ```elixir
 # lib/my_app/application.ex, children
-MishkaPay.Providers.Stripe,
+MishkaPay.Registry,
 MyApp.Pay.Keys
 ```
 
@@ -61,7 +73,8 @@ end
 
 Keys fields: `secret_key` (required), `publishable_key`, `webhook_secret`, `mode` (`:test`
 default, or `:live`), `merchant_of_record` (Stripe Managed Payments, `true`/`false`/absent),
-`refunds` (`:once` default, or `:many`), `extra` (a map). Answer `nil` for a tenant without keys.
+`refunds` (`:once` default, or `:many`), `automatic_tax` (`true` counts the tax of every checkout
+and payment link of this site with Stripe Tax; a checkout's own choice wins), `extra` (a map). Answer `nil` for a tenant without keys.
 
 Mount the webhook endpoint **before** `Plug.Parsers` in the endpoint (it needs the raw body):
 
@@ -84,6 +97,10 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
+| `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |
+| `MishkaPay.pause_collection(provider, id, tenant, behavior: ...)`, `resume_collection/3` | stops or starts charging without cancelling |
+| `MishkaPay.fetch_invoice(provider, invoice_id, tenant)` | `%MishkaPay.Invoice{}` with its `:lines` |
+| `MishkaPay.fetch_dispute/3`, `list_disputes/3`, `update_dispute(attrs)`, `accept_dispute/3` | `%MishkaPay.Dispute{}`: a chargeback, answered with evidence or accepted |
 | `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` (or `customer_id:`) | a `MishkaPay.Page` of `%MishkaPay.Invoice{}` |
 | `MishkaPay.list_payments(provider, tenant, customer_id: id)` | a `MishkaPay.Page` of `%MishkaPay.Payment{}` |
 | `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |
@@ -96,6 +113,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_promotion_code(attrs)`, `fetch_promotion_code/3`, `list_promotion_codes/3`, `update_promotion_code/1` | `%MishkaPay.PromotionCode{}` |
 | `MishkaPay.create_product(attrs)`, `fetch_product/3`, `update_product/1`, `archive_product/3`, `list_products/3` | `%MishkaPay.Product{}` |
 | `MishkaPay.create_price(attrs)`, `fetch_price/3`, `archive_price/3`, `list_prices/3` | `%MishkaPay.Price{}` |
+| `MishkaPay.create_payment_link(attrs)`, `fetch_payment_link/3`, `update_payment_link/1`, `list_payment_links/3` | `%MishkaPay.PaymentLink{url: url}` |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every
@@ -154,10 +172,13 @@ MishkaPay.checkout(%{
   # or: discounts: [%{promotion_code_id: code.id}]   # applied for them; one way, not both
   automatic_tax: true, locale: "de", billing_address: :required, tax_id_collection: true,
   customer_creation: :always,             # one-time checkouts only
+  invoice: true,                          # an invoice for a one-time payment (subscriptions make their own)
   expires_at: DateTime.add(DateTime.utc_now(), 3600)
 })
 ```
 
+- A price's `tax_behavior` is `:exclusive` (tax added on top) or `:inclusive` (the amount holds
+  the tax), on catalog prices and on checkout items alike.
 - A coupon takes `percent_off` (more than 0, at most 100) or `amount_off` (money), one of them;
   `duration: :repeating` needs `duration_in_months`.
 - A checkout read back has `amount_discount` beside `amount_total` and `amount_tax`.
@@ -182,6 +203,29 @@ MishkaPay.checkout(%{..., items: [%{id: price.id, quantity: 1}]})
 - `archive_product/3` takes a product off sale; a provider never deletes what sold.
 - `lookup_key` names a price for the host (`list_prices(p, t, lookup_key: "ebook")`), so code
   never keeps a `price_...` id by hand.
+
+## Payment links
+
+A page that sells catalog prices to anyone who opens it: made once, put on a page, an email or a
+QR code. Each buyer still gets their own checkout, so sales come in by the same webhooks.
+
+```elixir
+{:ok, link} =
+  MishkaPay.create_payment_link(%{provider: "stripe", tenant: site.id,
+                                  items: [%{id: price.id, quantity: 1}],
+                                  success_url: url(~p"/thanks"),
+                                  max_purchases: 100,           # left out: no limit; 1: one-time
+                                  inactive_message: "Sold out",
+                                  quantity_min: 1, quantity_max: 5,
+                                  invoice: true, allow_promotion_codes: true})
+
+MishkaPay.PaymentLink.url(link, reference: order.id, email: user.email)
+MishkaPay.update_payment_link(%{provider: "stripe", tenant: site.id, id: link.id, active: false})
+```
+
+- Every limit is the caller's choice; an option left out is the provider's default.
+- `url/2` fills one buyer's details; the `reference` comes back as the checkout's `:reference`.
+- A link cannot be deleted: turn it off. `:purchases` counts sales against `:max_purchases`.
 
 ## Customers and the portal
 
@@ -217,7 +261,7 @@ Match the error's struct. Show people plain words, never `inspect(error)`:
 |---|---|---|
 | `MishkaPay.Errors.Invalid` | bad input; `errors` has each field | show it on the field |
 | `MishkaPay.Errors.Declined` | the card or buyer was declined (`reason`) | ask for another payment method |
-| `MishkaPay.Errors.Rejected` | the provider refused the request (`status`, `code`) | log it (its `message` is the provider's own words, for the log only); often keys or ids |
+| `MishkaPay.Errors.Rejected` | the provider refused the request (`status`, `code`, `param`: the field, by Mishka Pay's name when it has one) | log it (its `message` is the provider's own words, for the log only); often keys or ids |
 | `MishkaPay.Errors.Refused` | the host's own checkout gate said no | show its reason |
 | `MishkaPay.Errors.Unsupported` | the provider cannot do it (`operation`) | pick another provider or path |
 | `MishkaPay.Errors.MissingCredentials` | no keys for that provider and tenant | the site must add keys |
@@ -239,15 +283,29 @@ MishkaPay.refund(%{provider: "stripe", tenant: site.id, payment_id: "pi_...",
 
 ## Real time
 
-Listen to Mishka Pay's events with a mishka_installer plugin and broadcast on your own PubSub:
+One line broadcasts every payment, subscription, customer and dispute change on your own PubSub:
 
 ```elixir
-defmodule MyApp.Pay.PaymentFeed do
-  use MishkaInstaller.Event.Hook, event: "mishka_pay:payment:changed"
+defmodule MyApp.Pay.Broadcast do
+  use MishkaPay.PubSub, pubsub: MyApp.PubSub    # kinds:, prefix:, priority: are options
+end
+# application children, after the PubSub: MyApp.Pay.Broadcast
+
+Phoenix.PubSub.subscribe(MyApp.PubSub, MishkaPay.PubSub.topic(:payment, site.id))
+def handle_info({:mishka_pay, :payment, %{payment: payment, record: row}}, socket), do: ...
+```
+
+Each change goes to the kind's topic (`"mishka_pay:payments"`) and its tenant's
+(`"mishka_pay:site-42:payments"`): in a multi-site project subscribe each site to its own. For
+other work (email, access rights) listen with your own mishka_installer plugin:
+
+```elixir
+defmodule MyApp.Pay.Access do
+  use MishkaInstaller.Event.Hook, event: "mishka_pay:dispute:changed"
 
   @impl true
-  def call(%{record: record} = state) do
-    Phoenix.PubSub.broadcast(MyApp.PubSub, "payments", {:payment_changed, record})
+  def call(%{dispute: dispute} = state) do
+    MyApp.Downloads.hold(dispute.payment_id, dispute.status)
     {:reply, state}
   end
 end
@@ -255,7 +313,7 @@ end
 
 The event names live in `MishkaPay.Events` (`checkout_before/0`, `credentials/0`,
 `webhook_received/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
-`customer_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
+`customer_changed/0`, `dispute_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
 nothing. Supervise every listener like any child.
 
 ## Rules for an agent writing payment code
@@ -266,7 +324,8 @@ nothing. Supervise every listener like any child.
   a webhook body alone is not proof of payment.
 - Keep amounts as strings or `Money`; let Mishka Pay check currencies and decimals.
 - Give access from the payment's or subscription's **status** (`:paid`, `:active`, `:trialing`),
-  and take it away on `:refunded`, `:canceled`, `:past_due`/`:unpaid` as the product decides.
+  and take it away on `:refunded`, `:canceled`, `:past_due`/`:unpaid`, or a payment `disputed`,
+  as the product decides.
 - Answer every listener with `{:reply, state}`; mark a failed webhook listener with
   `%{state | failed: "reason"}` so the provider sends the event again.
 - Test with `MishkaPay.Test` (`usage-rules/testing.md`); never call a live provider from tests.
@@ -279,7 +338,7 @@ nothing. Supervise every listener like any child.
 | `usage-rules/stripe.md` | anything Stripe: checkout, Managed Payments, ids, test cards, test clocks |
 | `usage-rules/subscriptions.md` | plans, trials, cancel and resume, invoices, renewals |
 | `usage-rules/webhooks.md` | the webhook endpoint, signatures, tenants, answers, listeners |
-| `usage-rules/ash.md` | storing events, payments or subscriptions in Ash resources |
+| `usage-rules/ash.md` | storing events, payments, subscriptions, customers or disputes in Ash resources |
 | `usage-rules/testing.md` | tests of code that takes payments |
 | `usage-rules/providers.md` | writing a new provider, or a capability for one |
 | `usage-rules/paypal.md` | PayPal (coming soon) |

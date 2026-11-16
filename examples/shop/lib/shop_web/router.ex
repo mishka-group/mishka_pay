@@ -18,6 +18,7 @@ defmodule ShopWeb.Router do
     pipe_through :browser
 
     live "/", ShopLive
+    live "/sell", SellLive
   end
 
   # Other scopes may use custom stacks.

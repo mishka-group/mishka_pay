@@ -24,7 +24,20 @@ defmodule MishkaPay.MixProject do
       docs: [
         main: "readme",
         source_ref: "v#{@version}",
-        extras: ["README.md", LICENSE: [title: "License"]],
+        extras: [
+          "README.md",
+          "guides/getting-started.md",
+          "guides/webhooks.md",
+          "guides/ash.md",
+          "guides/multi-tenant.md",
+          "guides/testing.md",
+          "guides/errors.md",
+          "guides/telemetry.md",
+          "guides/production.md",
+          "documentation/dsls/DSL-MishkaPay.Ash.Resource.md",
+          LICENSE: [title: "License"]
+        ],
+        groups_for_extras: [Guides: ~r/guides\//, DSLs: ~r/documentation\/dsls\//],
         source_url: @source_url
       ],
       # `test/support` is compiled in the test env, where `mix ci` runs dialyzer. It calls `Mix`,
@@ -45,7 +58,7 @@ defmodule MishkaPay.MixProject do
       licenses: ["Apache-2.0"],
       maintainers: ["Shahryar Tavakkoli"],
       files:
-        ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* usage-rules.md usage-rules),
+        ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* guides usage-rules.md usage-rules),
       links: %{
         "GitHub" => @source_url,
         "Sponsor" => "https://github.com/sponsors/mishka-group",
@@ -93,6 +106,9 @@ defmodule MishkaPay.MixProject do
       {:ash, "~> 3.37", optional: true},
       # The inbox processes each webhook event as an AshOban job, with retries.
       {:ash_oban, "~> 0.10.3", optional: true},
+      # `mix igniter.install mishka_pay` sets a host up (`Mix.Tasks.MishkaPay.Install`).
+      {:igniter, "~> 0.8", optional: true},
+      {:phx_new, "~> 1.8", only: :test, runtime: false},
       # The Ash layer's own tests keep their resources in Postgres, as a host does.
       {:ash_postgres, "~> 2.15", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -141,11 +157,20 @@ defmodule MishkaPay.MixProject do
     [
       # The Ash layer's tests run on a database made from the test resources (mix ash.codegen).
       test: ["ash.setup --quiet", "test"],
+      # The DSL page of `MishkaPay.Ash.Resource` is made from its schema, never by hand.
+      docs: [
+        "spark.formatter --extensions MishkaPay.Ash.Resource",
+        "spark.cheat_sheets --extensions MishkaPay.Ash.Resource",
+        "docs"
+      ],
       ci: [
         # First: after `compile` Mix has pruned the code path and the Hex archive's task is gone.
         "hex.audit",
         "compile --warnings-as-errors",
         "format --check-formatted",
+        # Spark makes the DSL's formatter list and its docs page; both must be current.
+        "spark.formatter --check --extensions MishkaPay.Ash.Resource",
+        "spark.cheat_sheets --check --extensions MishkaPay.Ash.Resource",
         "credo --strict",
         "mishka_pay.credence",
         # The rules an LLM agent reads name only what exists.

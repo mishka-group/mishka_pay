@@ -1,6 +1,6 @@
 # Mishka Pay demo shop
 
-A one-page Phoenix app that runs Mishka Pay against **your Stripe sandbox**. Buy a product, see
+A Phoenix app that runs Mishka Pay against **your Stripe sandbox**. Buy a product, see
 every payment, refund one, and change the site's payment settings while it runs.
 
 It lives in `examples/` and is not part of the `mishka_pay` package.
@@ -20,12 +20,19 @@ without leaning on text or layout.
 | **Payments**: totals, status filter, live | the stored rows with buyer, card and failure reason; webhook → inbox → job → sync → `mishka_pay:payment:changed` → the page |
 | **Details** of a payment | the stored row beside `MishkaPay.fetch_payment/3` live from Stripe: buyer, card, receipt, failure, description, metadata and every refund; its webhook events; sync; refund with an amount and a reason |
 | **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
-| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`MishkaPay.Ash.Subscription`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.invoices/3`); cancel at the period's end or now, keep it going, sync |
+| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`mishka_pay do kind :subscription end`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.list_invoices/3`); cancel at the period's end or now, keep it going, sync; a new plan or quantity with **Preview the bill** (`MishkaPay.preview_subscription_change/1`) then **Apply** (`:change`); pause and resume collection |
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
 | **Webhook simulator** | a Stripe event about a payment or subscription in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
 | **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |
 | **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job; every Mishka Pay call and HTTP request with its outcome and time |
-| **Site settings** | refund rule, merchant of record and shop open or closed, in the database, read on every call |
+| **Site settings** | refund rule, merchant of record, Stripe Tax and shop open or closed, in the database, read on every call |
+| **Sell a product with one link** (`/sell`, the top card) | one button runs `MishkaPay.create_product/1`, `create_price/1` and `create_payment_link/1` with every Stripe field, shows each call, and ends on the buyer's link; **Undo all of it** turns the link off and archives the price and product |
+| **Payment links** | `MishkaPay.create_payment_link/1` with a purchase limit (one-time, limited or none), quantity range, trial, invoice and tax choices; `PaymentLink.url/2` for one buyer; turn off or change it (`update_payment_link/1`); the list from `list_payment_links/3` |
+| **Catalog** | the shop's products beside their Stripe product and prices (`create_product/1`, `create_price/1`, `archive_price/3`) |
+| **Customers** | `Shop.Pay.Customer` rows: register, edit, sync, open Stripe's customer portal (`:portal`) |
+| **Coupons** and promotion codes | `MishkaPay.create_coupon/1` (percent or amount, once, repeating or forever, a use limit) and `create_promotion_code/1` (for one customer only, first order, a minimum, an end date, a use limit) |
+| **Disputes**, live | `Shop.Pay.Dispute` rows from `charge.dispute.*` webhooks or **Read disputes**; evidence (`:submit_evidence`) and **Accept the loss** (`:accept`). Pay with 4000 0000 0000 0259 to make one |
+| Every list, live in every tab | `Shop.Pay.Broadcast` (`use MishkaPay.PubSub`) sends each change to the site's topic, and every open page updates |
 
 ## Run it
 

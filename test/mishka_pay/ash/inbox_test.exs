@@ -11,7 +11,8 @@ defmodule MishkaPay.Ash.InboxTest do
 
   alias MishkaPay.{Event, Webhook}
   alias MishkaPay.Providers.Stripe
-  alias MishkaPay.Support.{EventWorker, Inbox, WebhookEvent}
+  alias MishkaPay.Support.{EventWorker, WebhookEvent}
+  alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
 
   @event "test/fixtures/stripe/event.json" |> File.read!() |> JSON.decode!()
   @secret "whsec_test_site_a"
@@ -51,7 +52,7 @@ defmodule MishkaPay.Ash.InboxTest do
     assert [%{event_id: "evt_once", provider: "stripe", tenant: "site-a", status: :pending}] =
              stored()
 
-    assert_enqueued(worker: MishkaPay.Ash.Inbox.Worker)
+    assert_enqueued(worker: WebhookEvent.MishkaPayWorker)
   end
 
   test "a job hands the stored event to the host and marks it processed" do

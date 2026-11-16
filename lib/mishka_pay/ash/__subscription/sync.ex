@@ -16,16 +16,16 @@ if Code.ensure_loaded?(Ash) do
     alias MishkaPay.Helpers.Plugins
 
     @impl true
-    def change(changeset, _opts, _context) do
+    def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&fetch/1)
-      |> Ash.Changeset.after_transaction(&announce/2)
+      |> MishkaPay.Ash.announce(opts, &announce/2)
     end
 
     defp fetch(changeset) do
       provider = Ash.Changeset.get_argument(changeset, :provider)
       subscription_id = Ash.Changeset.get_argument(changeset, :subscription_id)
-      tenant = Ash.Changeset.get_argument(changeset, :tenant)
+      tenant = MishkaPay.Ash.Tenant.of(changeset)
 
       changeset
       |> Ash.Changeset.force_change_attribute(:tenant, tenant)
@@ -57,6 +57,9 @@ if Code.ensure_loaded?(Ash) do
         currency: first.amount && to_string(first.amount.currency),
         interval: first.interval,
         interval_count: first.interval_count,
+        quantity: first.quantity,
+        pause_behavior: subscription.pause_behavior,
+        resumes_at: subscription.resumes_at,
         current_period_end: subscription.current_period_end,
         cancel_at_period_end: subscription.cancel_at_period_end,
         canceled_at: subscription.canceled_at,

@@ -385,6 +385,121 @@ defmodule MishkaPayTest do
     end
   end
 
+  describe "payment links, invoices and tax behavior" do
+    test "a link sells catalog prices with the limits the caller chose, and is turned off" do
+      assert {:ok,
+              %MishkaPay.PaymentLink{
+                id: "acme_link_1",
+                url: "https://pay.acme.test/l/1",
+                max_purchases: 1,
+                quantity_max: 5,
+                customer_creation: :always
+              } = link} =
+               MishkaPay.create_payment_link(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 items: [%{id: "price_1", quantity: 1}],
+                 success_url: "https://shop.test/thanks",
+                 max_purchases: 1,
+                 inactive_message: "Sold out",
+                 quantity_min: 1,
+                 quantity_max: 5,
+                 customer_creation: "always",
+                 invoice: true
+               })
+
+      assert MishkaPay.PaymentLink.url(link, reference: "order-42", email: "ava@example.com") ==
+               "https://pay.acme.test/l/1?client_reference_id=order-42&prefilled_email=ava%40example.com"
+
+      assert MishkaPay.PaymentLink.url(link) == "https://pay.acme.test/l/1"
+
+      assert_raise ArgumentError, ~r/reference/, fn ->
+        MishkaPay.PaymentLink.url(link, reference: "order 42")
+      end
+
+      assert {:ok, %MishkaPay.PaymentLink{active: false}} =
+               MishkaPay.update_payment_link(%{
+                 provider: "acme",
+                 id: "acme_link_1",
+                 active: false
+               })
+
+      assert {:ok, %MishkaPay.PaymentLink{purchases: 0}} =
+               MishkaPay.fetch_payment_link("acme", "acme_link_1", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [_, _]}} =
+               MishkaPay.list_payment_links("acme", "site-a")
+    end
+
+    test "a link needs catalog prices by id, and an update its id" do
+      for items <- [nil, [], [%{name: "Ebook", amount: %{amount: "1", currency: "USD"}}]] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :items} | _]}} =
+                 MishkaPay.create_payment_link(%{provider: "acme", items: items})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_payment_link(%{provider: "acme", active: false})
+
+      for {min, max} <- [{5, 2}, {2, 2}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :quantity_min}]}} =
+                 MishkaPay.create_payment_link(%{
+                   provider: "acme",
+                   items: [%{id: "price_1"}],
+                   quantity_min: min,
+                   quantity_max: max
+                 })
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :quantity_max}]}} =
+               MishkaPay.create_payment_link(%{
+                 provider: "acme",
+                 items: [%{id: "price_1"}],
+                 quantity_max: 1_000_000
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :success_url}]}} =
+               MishkaPay.create_payment_link(%{
+                 provider: "acme",
+                 items: [%{id: "price_1"}],
+                 success_url: "http://evil.test/"
+               })
+    end
+
+    test "an invoice is a one-time checkout's choice, and a price says how its tax counts" do
+      assert {:ok, %Checkout{invoice: true}} =
+               MishkaPay.checkout(Map.put(@checkout, :invoice, true))
+
+      plan = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :invoice}]}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{mode: :subscription, items: [plan], invoice: true})
+               )
+
+      assert {:ok, %Checkout{items: [%MishkaPay.Price{tax_behavior: :inclusive}]}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :items, [
+                   %{
+                     name: "Ebook",
+                     amount: %{amount: "20", currency: "EUR"},
+                     tax_behavior: "inclusive"
+                   }
+                 ])
+               )
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :items, [
+                   %{
+                     name: "Ebook",
+                     amount: %{amount: "20", currency: "EUR"},
+                     tax_behavior: "maybe"
+                   }
+                 ])
+               )
+    end
+  end
+
   describe "subscriptions" do
     test "are read, cancelled at the period's end or now, taken back, and their invoices listed" do
       assert {:ok, %MishkaPay.Subscription{id: "acme_sub_active", status: :active, items: [plan]}} =
@@ -410,6 +525,68 @@ defmodule MishkaPayTest do
       assert_raise ArgumentError, ~r/must be :now or :period_end/, fn ->
         MishkaPay.cancel_subscription("acme", "acme_sub_active", "site-a", at: :tomorrow)
       end
+    end
+
+    test "a plan or a quantity changes with the proration the caller chose, previewed first" do
+      change = %{
+        provider: "acme",
+        tenant: "site-a",
+        subscription_id: "acme_sub_active",
+        price_id: "acme_price_team",
+        quantity: 3,
+        proration: "always_invoice"
+      }
+
+      assert {:ok, %MishkaPay.Invoice{amount_due: due, lines: [credit, charge]} = preview} =
+               MishkaPay.preview_subscription_change(change)
+
+      assert Money.equal?(due, Money.new(:USD, "4.50"))
+      assert credit.proration and charge.proration
+      assert "acme_upcoming_" <> _ = preview.id
+
+      assert {:ok, %MishkaPay.Subscription{items: [%{id: "acme_price_team", quantity: 3}]}} =
+               MishkaPay.change_subscription(change)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :price_id}]}} =
+               MishkaPay.change_subscription(%{
+                 provider: "acme",
+                 subscription_id: "acme_sub_active"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :proration}]}} =
+               MishkaPay.change_subscription(Map.put(change, :proration, "sometimes"))
+
+      for with_date <- [%{proration: :none}, %{billing_cycle_anchor: :now}] do
+        attrs = change |> Map.merge(with_date) |> Map.put(:proration_date, DateTime.utc_now())
+
+        assert {:error, %Errors.Invalid{errors: [%{field: :proration_date}]}} =
+                 MishkaPay.change_subscription(attrs)
+
+        assert {:ok, %MishkaPay.Invoice{}} =
+                 MishkaPay.preview_subscription_change(Map.merge(change, with_date))
+      end
+    end
+
+    test "collection pauses with the behavior the caller chose, resumes, and an invoice is read" do
+      later = DateTime.add(DateTime.utc_now(), 30, :day)
+
+      assert {:ok, %MishkaPay.Subscription{pause_behavior: :keep_as_draft, resumes_at: ^later}} =
+               MishkaPay.pause_collection("acme", "acme_sub_active", "site-a",
+                 behavior: :keep_as_draft,
+                 resumes_at: later
+               )
+
+      assert {:ok, %MishkaPay.Subscription{pause_behavior: :void}} =
+               MishkaPay.pause_collection("acme", "acme_sub_active", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :behavior}]}} =
+               MishkaPay.pause_collection("acme", "acme_sub_active", "site-a", behavior: :forever)
+
+      assert {:ok, %MishkaPay.Subscription{pause_behavior: nil}} =
+               MishkaPay.resume_collection("acme", "acme_sub_active", "site-a")
+
+      assert {:ok, %MishkaPay.Invoice{lines: [%MishkaPay.InvoiceLine{description: "Pro plan"}]}} =
+               MishkaPay.fetch_invoice("acme", "acme_in_1", "site-a")
     end
 
     test "a provider without subscriptions refuses a subscription checkout and every call" do

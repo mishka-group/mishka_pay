@@ -4,13 +4,19 @@
 
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.StartCheckout do
-    @moduledoc "The `:start_checkout` action of `MishkaPay.Ash.Payment`: `MishkaPay.checkout/1` with Ash errors."
+    @moduledoc """
+    The `:start_checkout` action of the `:payment` kind (`MishkaPay.Ash.Resource`):
+    `MishkaPay.checkout/1` with Ash errors.
+    """
 
     use Ash.Resource.Actions.Implementation
 
     @impl true
     def run(input, _opts, _context) do
-      case MishkaPay.checkout(input.arguments.checkout) do
+      checkout =
+        MishkaPay.Ash.Tenant.into(input.arguments.checkout, MishkaPay.Ash.Tenant.of(input))
+
+      case MishkaPay.checkout(checkout) do
         {:ok, checkout} -> {:ok, checkout}
         {:error, error} -> {:error, MishkaPay.Ash.to_ash_error(error)}
       end

@@ -6,6 +6,8 @@ defmodule ShopWeb.PayComponents do
 
   use Phoenix.Component
 
+  alias Phoenix.LiveView.JS
+
   import ShopWeb.CoreComponents, only: [icon: 1]
 
   attr :icon, :string, required: true
@@ -24,7 +26,7 @@ defmodule ShopWeb.PayComponents do
 
   def hint(assigns) do
     ~H"""
-    <p class="text-xs opacity-60 mb-2" data-testid="code-hint">
+    <p class="text-xs opacity-60 mb-2 grow-0" data-testid="code-hint">
       <code>{render_slot(@inner_block)}</code>
     </p>
     """
@@ -86,6 +88,8 @@ defmodule ShopWeb.PayComponents do
             <dd data-testid="site-refunds">{@keys.refunds}</dd>
             <dt class="opacity-70">Merchant of record</dt>
             <dd data-testid="site-merchant">{on_off(@keys.merchant_of_record)}</dd>
+            <dt class="opacity-70">Stripe Tax</dt>
+            <dd data-testid="site-automatic-tax">{on_off(@keys.automatic_tax)}</dd>
             <dt class="opacity-70">Shop</dt>
             <dd data-testid="site-open">
               <span class={["badge badge-sm", (@setting.open && "badge-success") || "badge-error"]}>
@@ -105,15 +109,59 @@ defmodule ShopWeb.PayComponents do
           </h2>
           <.hint>mishka_pay:* events</.hint>
           <ul class="text-xs space-y-1">
-            <li :for={plugin <- @plugins} class="flex flex-wrap gap-1" data-testid="plugin">
-              <code class="opacity-70">{plugin.event}</code>
-              <span class="font-medium">{inspect(plugin.name)}</span>
-              <span class="badge badge-ghost badge-xs">{plugin.status}</span>
-            </li>
+            <.plugin_row :for={plugin <- Enum.take(@plugins, 4)} plugin={plugin} />
           </ul>
+          <ul
+            :if={Enum.drop(@plugins, 4) != []}
+            id="plugins-rest"
+            class="hidden text-xs space-y-1"
+            data-testid="plugins-rest"
+          >
+            <.plugin_row :for={plugin <- Enum.drop(@plugins, 4)} plugin={plugin} />
+          </ul>
+          <div :if={Enum.drop(@plugins, 4) != []}>
+            <button
+              id="plugins-more"
+              type="button"
+              class="btn btn-ghost btn-xs"
+              phx-click={
+                JS.show(to: "#plugins-rest")
+                |> JS.hide(to: "#plugins-more")
+                |> JS.show(to: "#plugins-less")
+              }
+              data-testid="plugins-more"
+            >
+              Read more
+            </button>
+            <button
+              id="plugins-less"
+              type="button"
+              class="btn btn-ghost btn-xs hidden"
+              phx-click={
+                JS.hide(to: "#plugins-rest")
+                |> JS.hide(to: "#plugins-less")
+                |> JS.show(to: "#plugins-more")
+              }
+              data-testid="plugins-less"
+            >
+              Show less
+            </button>
+          </div>
         </div>
       </div>
     </section>
+    """
+  end
+
+  attr :plugin, :map, required: true
+
+  defp plugin_row(assigns) do
+    ~H"""
+    <li class="flex flex-wrap gap-1" data-testid="plugin">
+      <code class="opacity-70">{@plugin.event}</code>
+      <span class="font-medium">{inspect(@plugin.name)}</span>
+      <span class="badge badge-ghost badge-xs">{@plugin.status}</span>
+    </li>
     """
   end
 
@@ -293,14 +341,22 @@ defmodule ShopWeb.PayComponents do
           </select>
         </label>
         <div class="fieldset gap-1">
+          <label class="fieldset">
+            <span class="fieldset-legend">Stripe Tax, this checkout</span>
+            <select name="automatic_tax" class="select select-sm" data-testid="option-automatic-tax">
+              <option value="">The site's setting</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
           <label class="label gap-2 text-sm">
             <input
               type="checkbox"
-              name="automatic_tax"
+              name="invoice"
               value="true"
               class="checkbox checkbox-sm"
-              data-testid="option-automatic-tax"
-            /> Stripe Tax counts the tax
+              data-testid="option-invoice"
+            /> Make an invoice (one-time only)
           </label>
           <label class="label gap-2 text-sm">
             <input
@@ -382,7 +438,8 @@ defmodule ShopWeb.PayComponents do
       {"4000 0000 0000 0002", "declined"},
       {"4000 0000 0000 9995", "declined, insufficient funds"},
       {"4000 0000 0000 0069", "declined, expired card"},
-      {"4000 0000 0000 0127", "declined, wrong CVC"}
+      {"4000 0000 0000 0127", "declined, wrong CVC"},
+      {"4000 0000 0000 0259", "pays, then the bank disputes it (see Disputes)"}
     ]
   end
 
@@ -516,6 +573,13 @@ defmodule ShopWeb.PayComponents do
             <td>{money(payment.amount_refunded, payment.currency)}</td>
             <td>
               <.status_badge status={payment.status} />
+              <span
+                :if={payment.disputed}
+                class="badge badge-sm badge-error ml-1"
+                data-testid="payment-disputed"
+              >
+                disputed
+              </span>
               <div :if={payment.failure_message} class="text-xs text-error max-w-48">
                 {payment.failure_message}
               </div>
@@ -818,6 +882,14 @@ defmodule ShopWeb.PayComponents do
       <dd data-testid="checkout-discount">
         {(@checkout.amount_discount && Money.to_string!(@checkout.amount_discount)) || "–"}
       </dd>
+      <dt :if={@checkout.invoice_id} class="opacity-70">Invoice</dt>
+      <dd :if={@checkout.invoice_id} class="font-mono text-xs" data-testid="checkout-invoice">
+        {@checkout.invoice_id}
+      </dd>
+      <dt :if={@checkout.payment_link_id} class="opacity-70">From payment link</dt>
+      <dd :if={@checkout.payment_link_id} class="font-mono text-xs" data-testid="checkout-link">
+        {@checkout.payment_link_id}
+      </dd>
       <dt :if={@checkout.expires_at} class="opacity-70">Expires</dt>
       <dd :if={@checkout.expires_at} class="text-xs" data-testid="checkout-expires">
         {Calendar.strftime(@checkout.expires_at, "%Y-%m-%d %H:%M")} UTC
@@ -1077,6 +1149,20 @@ defmodule ShopWeb.PayComponents do
               <option value="on" selected={@setting.merchant_of_record == true}>On</option>
               <option value="off" selected={@setting.merchant_of_record == false}>Off</option>
             </select>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Stripe Tax for every checkout</legend>
+            <label class="label">
+              <input
+                type="checkbox"
+                name="automatic_tax"
+                value="true"
+                class="checkbox checkbox-sm"
+                checked={@setting.automatic_tax}
+                data-testid="setting-automatic-tax"
+              /> Count the tax from the buyer's address
+            </label>
           </fieldset>
 
           <fieldset class="fieldset">

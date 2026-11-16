@@ -16,10 +16,10 @@ defmodule Shop.Pay.Setting do
     defaults [:read]
 
     create :save do
-      accept [:tenant, :refunds, :merchant_of_record, :open]
+      accept [:tenant, :refunds, :merchant_of_record, :automatic_tax, :open]
       upsert? true
       upsert_identity :tenant
-      upsert_fields [:refunds, :merchant_of_record, :open]
+      upsert_fields [:refunds, :merchant_of_record, :automatic_tax, :open]
     end
   end
 
@@ -34,6 +34,9 @@ defmodule Shop.Pay.Setting do
       public?: true
 
     attribute :merchant_of_record, :boolean, public?: true
+
+    # Stripe Tax for every checkout and payment link of the site, unless one says otherwise.
+    attribute :automatic_tax, :boolean, allow_nil?: false, default: false, public?: true
 
     # Read by `Shop.Pay.Gate` before every checkout: a closed shop refuses to sell.
     attribute :open, :boolean, allow_nil?: false, default: true, public?: true

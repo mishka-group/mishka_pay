@@ -16,16 +16,16 @@ if Code.ensure_loaded?(Ash) do
     alias MishkaPay.Helpers.Plugins
 
     @impl true
-    def change(changeset, _opts, _context) do
+    def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&fetch/1)
-      |> Ash.Changeset.after_transaction(&announce/2)
+      |> MishkaPay.Ash.announce(opts, &announce/2)
     end
 
     defp fetch(changeset) do
       provider = Ash.Changeset.get_argument(changeset, :provider)
       payment_id = Ash.Changeset.get_argument(changeset, :payment_id)
-      tenant = Ash.Changeset.get_argument(changeset, :tenant)
+      tenant = MishkaPay.Ash.Tenant.of(changeset)
 
       case MishkaPay.fetch_payment(provider, payment_id, tenant) do
         {:ok, %Payment{} = payment} ->
@@ -57,6 +57,7 @@ if Code.ensure_loaded?(Ash) do
         card_last4: payment.card_last4,
         failure_code: payment.failure_code,
         failure_message: payment.failure_message,
+        disputed: payment.disputed,
         provider_created_at: payment.created_at,
         synced_at: DateTime.utc_now()
       }

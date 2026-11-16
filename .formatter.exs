@@ -2,9 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Mishka Pay's own DSL entities, written without parentheses here and in a project that imports
-# this formatter. Empty until the Ash layer adds `pay do ... end`.
-spark_locals_without_parens = []
+# Mishka Pay's own DSL (`mishka_pay do ... end` of `MishkaPay.Ash.Resource`), written without
+# parentheses here and in a project that imports this formatter.
+spark_locals_without_parens = [
+  actions: 1,
+  announce?: 1,
+  belongs_to_user: 1,
+  code_interface?: 1,
+  kind: 1,
+  listen?: 1,
+  tenant_from: 1
+]
 
 [
   locals_without_parens: spark_locals_without_parens,

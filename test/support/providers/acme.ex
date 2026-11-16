@@ -23,10 +23,12 @@ defmodule MishkaPay.Support.Acme do
       :payment_list,
       :refund,
       :subscription,
+      :subscription_change,
       :customer,
       :portal,
       :discount,
-      :catalog
+      :catalog,
+      :payment_link
     ],
     priority: 10
 
@@ -38,6 +40,7 @@ defmodule MishkaPay.Support.Acme do
     Invoice,
     Page,
     Payment,
+    PaymentLink,
     PortalSession,
     Price,
     Product,
@@ -137,6 +140,64 @@ defmodule MishkaPay.Support.Acme do
        next: (more && Integer.to_string(from + length(taken))) || nil
      }}
   end
+
+  @impl MishkaPay.Provider
+  def fetch_invoice(id, %{secret_key: "sk_acme"}) do
+    Invoice.builder(%{
+      provider: "acme",
+      id: id,
+      status: :paid,
+      amount_due: Elixir.Money.new(:USD, "9.00"),
+      lines: [%{description: "Pro plan", amount: Elixir.Money.new(:USD, "9.00"), quantity: 1}]
+    })
+  end
+
+  @impl MishkaPay.Provider
+  def change_subscription(change, %{secret_key: "sk_acme"}) do
+    Subscription.builder(%{
+      provider: "acme",
+      id: change.subscription_id,
+      status: :active,
+      items: [
+        %{
+          id: change.price_id || "acme_price_pro",
+          item_id: "acme_si_1",
+          name: "Pro plan",
+          amount: Elixir.Money.new(:USD, "9.00"),
+          interval: :month,
+          quantity: change.quantity || 1
+        }
+      ]
+    })
+  end
+
+  @impl MishkaPay.Provider
+  def preview_subscription_change(change, %{secret_key: "sk_acme"}) do
+    Invoice.builder(%{
+      provider: "acme",
+      id: "acme_upcoming_#{change.proration_date && DateTime.to_unix(change.proration_date)}",
+      status: :draft,
+      amount_due: Elixir.Money.new(:USD, "4.50"),
+      lines: [
+        %{description: "Unused time", amount: Elixir.Money.new(:USD, "-4.50"), proration: true},
+        %{description: "Remaining time", amount: Elixir.Money.new(:USD, "9.00"), proration: true}
+      ]
+    })
+  end
+
+  @impl MishkaPay.Provider
+  def pause_collection(id, opts, %{secret_key: "sk_acme"}) do
+    Subscription.builder(%{
+      provider: "acme",
+      id: id,
+      status: :active,
+      pause_behavior: opts[:behavior],
+      resumes_at: opts[:resumes_at]
+    })
+  end
+
+  @impl MishkaPay.Provider
+  def resume_collection(id, %{secret_key: "sk_acme"}), do: subscription(id, :active, false)
 
   defp subscription(id, status, cancel_at_period_end) do
     Subscription.builder(%{
@@ -272,4 +333,29 @@ defmodule MishkaPay.Support.Acme do
     {:ok, price} = fetch_price("acme_price_1", keys)
     page([price], opts)
   end
+
+  @impl MishkaPay.Provider
+  def create_payment_link(%PaymentLink{} = link, %{secret_key: "sk_acme"}),
+    do: {:ok, %{link | id: "acme_link_1", url: "https://pay.acme.test/l/1", active: true}}
+
+  @impl MishkaPay.Provider
+  def fetch_payment_link(id, %{secret_key: "sk_acme"}),
+    do:
+      PaymentLink.builder(%{
+        provider: "acme",
+        id: id,
+        url: "https://pay.acme.test/l/1",
+        active: true,
+        max_purchases: 1,
+        purchases: 0
+      })
+
+  @impl MishkaPay.Provider
+  def list_payment_links(opts, %{secret_key: "sk_acme"} = keys) do
+    {:ok, link} = fetch_payment_link("acme_link_1", keys)
+    page(List.duplicate(link, 2), opts)
+  end
+
+  @impl MishkaPay.Provider
+  def update_payment_link(%PaymentLink{} = link, %{secret_key: "sk_acme"}), do: {:ok, link}
 end

@@ -65,6 +65,24 @@ defmodule MishkaPay.Money do
   def field(name, _other),
     do: {:error, name, Messages.text(:money_field, field: name)}
 
+  @doc """
+  Like `field/2`, for money that may be below zero: an invoice line that credits time not used.
+  The amount is checked as its size and keeps its sign.
+  """
+  @spec signed_field(atom(), term()) :: {:ok, atom(), Money.t()} | {:error, atom(), String.t()}
+  def signed_field(name, %Money{amount: amount} = money) do
+    case Decimal.negative?(amount) do
+      true ->
+        with {:ok, ^name, size} <- field(name, Money.abs(money)),
+             do: {:ok, name, Money.negate!(size)}
+
+      false ->
+        field(name, money)
+    end
+  end
+
+  def signed_field(name, other), do: field(name, other)
+
   defp checked(name, amount, currency) do
     case new(amount, currency) do
       {:ok, money} -> {:ok, name, money}
@@ -86,6 +104,18 @@ defmodule MishkaPay.Money do
       {:error, _reason} = error -> error
     end
   end
+
+  @doc """
+  Like `from_minor/2`, for an amount that may be below zero (an invoice's credit line); a
+  negative one keeps its sign. Payments and prices never take this.
+  """
+  @spec signed_from_minor(integer(), String.t() | atom()) ::
+          {:ok, Money.t()} | {:error, Splode.Error.t()}
+  def signed_from_minor(minor, currency) when is_integer(minor) and minor < 0 do
+    with {:ok, size} <- from_minor(-minor, currency), do: {:ok, Money.negate!(size)}
+  end
+
+  def signed_from_minor(minor, currency), do: from_minor(minor, currency)
 
   @doc "The amount in the currency's smallest unit, as a provider takes it: 19.99 dollars is 1999."
   @spec to_minor(Money.t()) :: integer()

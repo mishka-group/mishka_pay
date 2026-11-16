@@ -28,6 +28,25 @@ plug Plug.Parsers, ...
 An unknown tenant gets the same 400 as a bad signature, so strangers cannot tell which sites exist.
 A refused message is never stored.
 
+## The events that change anything
+
+`MishkaPay.Providers.Stripe.handled_events/0` is the list, each tested; subscribe the Stripe
+webhook endpoint to these:
+
+| Stripe events | Updates |
+|---|---|
+| `checkout.session.completed` | the payment, or the subscription it started |
+| `checkout.session.expired`, `.async_payment_succeeded`, `.async_payment_failed` | the payment |
+| `payment_intent.succeeded`, `.payment_failed`, `.canceled`, `.processing`, `.requires_action` | the payment |
+| `charge.succeeded`, `.failed`, `.refunded`; `refund.created`, `.updated`, `.failed` | the payment |
+| `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated` | the dispute and its payment |
+| `invoice.paid`, `.payment_failed`, `.finalized` | the subscription |
+| `invoice_payment.paid` | the payment |
+| `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`, `.trial_will_end` | the subscription |
+| `customer.created`, `.updated`, `.deleted` | the customer |
+
+Any other event is verified and stored, and changes nothing.
+
 ## Listeners
 
 A checked event goes to plugins on `mishka_pay:webhook:received` as `%{event: %MishkaPay.Event{},

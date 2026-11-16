@@ -1,6 +1,6 @@
 ---
 name: mishka-pay
-description: "Use this skill when a project takes payments with Mishka Pay (`:mishka_pay` in mix.exs, `MishkaPay.checkout`, `MishkaPay.refund`, `MishkaPay.fetch_payment`, `MishkaPay.Webhook`, `MishkaPay.Credentials`, `MishkaPay.Ash.Payment`, `MishkaPay.Errors.*`, `mishka_pay:payment:changed`): adding a checkout or a subscription plan, a refund, a webhook endpoint, per-site payment keys, the Ash payment tables, or tests of payment code."
+description: "Use this skill when a project takes payments with Mishka Pay (`:mishka_pay` in mix.exs, `MishkaPay.checkout`, `MishkaPay.refund`, `MishkaPay.fetch_payment`, `MishkaPay.Webhook`, `MishkaPay.Credentials`, `MishkaPay.Ash.Resource`, `MishkaPay.Errors.*`, `mishka_pay:payment:changed`): adding a checkout or a subscription plan, a refund, a webhook endpoint, per-site payment keys, the Ash payment tables, or tests of payment code."
 ---
 
 ## Overview
@@ -13,7 +13,8 @@ announced as mishka_installer events.
 ## Steps for a payment feature
 
 1. **Keys.** Make sure the project has a keys plugin (`use MishkaPay.Credentials`) answering the
-   provider and tenant, and supervises `MishkaPay.Providers.Stripe`.
+   provider and tenant; Mishka Pay's application starts the providers (outside Mishka CMS the
+   project lists `MishkaPay.Registry` first).
 2. **Checkout.** Call `MishkaPay.checkout/1` with `provider`, `tenant`, `items` (money as
    `%{amount: "19.99", currency: "USD"}`), `success_url` carrying `{CHECKOUT_SESSION_ID}`,
    `cancel_url` and the host's own `reference`. Redirect to `checkout.url`.

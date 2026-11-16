@@ -46,7 +46,32 @@ MishkaPay.checkout(%{
 - `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` lists its bills page by page,
   newest first (`customer_id:` lists a customer's), with `:hosted_url` and `:pdf_url` for the
   buyer. An `:open` invoice is not paid yet.
-- Changing a plan, quantities, proration and usage-based billing are not in Mishka Pay yet.
+
+## Changing a running subscription
+
+```elixir
+change = %{provider: "stripe", tenant: site.id, subscription_id: sub.id,
+           price_id: team_price.id,          # a new plan; left out, the plan stays
+           quantity: 5,                      # seats; left out, it stays
+           proration: :always_invoice}       # or :create_prorations (default) or :none
+
+{:ok, preview} = MishkaPay.preview_subscription_change(change)   # an Invoice with proration lines
+{:ok, sub} = MishkaPay.change_subscription(Map.put(change, :proration_date, preview_date))
+```
+
+- `preview_subscription_change/1` sets `:proration_date` to now when it is not given; pass the
+  same date to `change_subscription/1` so it bills exactly the preview's `amount_due`.
+- A `:proration_date` goes only with prorations: not with `proration: :none`, and not with
+  `billing_cycle_anchor: :now` (both are refused before the provider).
+- A subscription of several items needs `item_id:` (each item's `:item_id`).
+- `billing_cycle_anchor: :now` starts a new period at once; `payment_behavior:` says what happens
+  when charging the difference fails. Every option left out is the provider's default.
+- `MishkaPay.pause_collection(p, id, tenant, behavior: :void | :keep_as_draft |
+  :mark_uncollectible, resumes_at: datetime)` stops charging without cancelling;
+  `resume_collection/3` starts again.
+- `MishkaPay.fetch_invoice(p, invoice_id, tenant)` reads one bill with its `:lines`; a credit line
+  for unused time has a negative `:amount`.
+- Usage-based billing is not in Mishka Pay yet.
 
 ## Keep access right
 

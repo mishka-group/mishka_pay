@@ -3,15 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 defmodule MishkaPay.Support.WebhookEvent do
-  @moduledoc "A host's inbox resource, as `MishkaPay.Ash.Inbox` shows it."
+  @moduledoc "A host's inbox resource, as `MishkaPay.Ash.Resource` shows its `:inbox` kind."
 
   use Ash.Resource,
     domain: MishkaPay.Support.Domain,
     data_layer: AshPostgres.DataLayer,
-    fragments: [MishkaPay.Ash.Inbox]
+    extensions: [MishkaPay.Ash.Resource]
 
   postgres do
     table "pay_webhook_events"
     repo MishkaPay.Support.Repo
+  end
+
+  mishka_pay do
+    kind :inbox
   end
 end

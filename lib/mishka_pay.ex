@@ -7,7 +7,8 @@ defmodule MishkaPay do
   The calls a project makes to take money: open a checkout, read a payment, refund one; for a
   subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
   back and list its invoices; keep customers (create, read, update, list) and open their billing
-  portal; keep coupons and promotion codes; keep a catalog of products and prices; end an open
+  portal; keep coupons and promotion codes; keep a catalog of products and prices; make payment
+  links that sell them; end an open
   checkout; list payments, invoices, customers, coupons, codes, products and prices page by page
   (`MishkaPay.Page`).
 
@@ -41,16 +42,24 @@ defmodule MishkaPay do
 
   ## Telemetry
 
-  Each call is a span, `[:mishka_pay, operation, :start | :stop]`, the operation being
-  `:checkout`, `:checkout_read`, `:payment`, `:refund`, `:subscription`, `:subscription_cancel`,
-  `:subscription_resume`, `:invoices`, `:customer_create`, `:customer_update`, `:customer`,
-  `:customer_list`, `:portal`, `:checkout_expire`, `:coupon_create`, `:coupon`, `:coupon_list`,
-  `:coupon_delete`, `:promotion_code_create`, `:promotion_code`, `:promotion_code_list` or
-  `:promotion_code_update`, `:payment_list`, `:invoices`, `:product_create`, `:product`,
-  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update` or `:price_list`,
-  with
-  `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
-  `:provider`, `:unknown`). Never a key or a buyer's details.
+  Each call is a span, `[:mishka_pay, operation, :start | :stop]`, with `:provider` and `:tenant`
+  in its metadata and, on `:stop`, the `:outcome`: `:ok` or the error's class (`:invalid`,
+  `:provider`, `:unknown`). Never a key or a buyer's details. The operations:
+
+    * checkouts and payments: `:checkout`, `:checkout_read`, `:checkout_expire`, `:payment`,
+      `:payment_list`, `:refund`;
+    * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
+      `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
+      `:subscription_unpause`, `:invoices`, `:invoice`;
+    * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`, `:portal`;
+    * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
+      `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
+      `:promotion_code_update`;
+    * the catalog: `:product_create`, `:product`, `:product_update`, `:product_list`,
+      `:price_create`, `:price`, `:price_update`, `:price_list`;
+    * payment links: `:payment_link_create`, `:payment_link`, `:payment_link_update`,
+      `:payment_link_list`;
+    * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`.
   """
 
   alias MishkaPay.{
@@ -62,6 +71,7 @@ defmodule MishkaPay do
     Events,
     Messages,
     Page,
+    PaymentLink,
     PortalSession,
     Price,
     Product,
@@ -393,6 +403,111 @@ defmodule MishkaPay do
     capable(:catalog, :price_list, provider, tenant, & &1.list_prices(limited(opts), &2))
   end
 
+  @doc """
+  Makes a payment link from `attrs` (see `MishkaPay.PaymentLink`): catalog prices by id, sold to
+  anyone who opens its `:url`.
+  """
+  @spec create_payment_link(map()) :: {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def create_payment_link(attrs) when is_map(attrs) do
+    made(
+      :payment_link_create,
+      :payment_link,
+      attrs,
+      PaymentLink,
+      [:provider, :items],
+      :create_payment_link
+    )
+  end
+
+  @doc "Reads payment link `payment_link_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_payment_link(String.t(), String.t(), term()) ::
+          {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def fetch_payment_link(provider, payment_link_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_link_id) do
+    capable(
+      :payment_link,
+      :payment_link,
+      provider,
+      tenant,
+      & &1.fetch_payment_link(payment_link_id, &2)
+    )
+  end
+
+  @doc """
+  Changes payment link `attrs.id` at `attrs.provider`: `active: false` turns it off and `true` on
+  again, and any other option given (`:max_purchases`, `:inactive_message`, `:success_url`,
+  `:allow_promotion_codes`...) is changed too; its prices and trial stay as made. A link cannot be
+  deleted; a turned-off one refuses buyers.
+  """
+  @spec update_payment_link(map()) :: {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def update_payment_link(attrs) when is_map(attrs) do
+    made(
+      :payment_link_update,
+      :payment_link,
+      attrs,
+      PaymentLink,
+      [:provider, :id],
+      :update_payment_link
+    )
+  end
+
+  @doc """
+  One page of payment links at `provider`, newest first (`MishkaPay.Page`): `active:` only those
+  on (or off), plus `limit:` and `after:`.
+  """
+  @spec list_payment_links(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_payment_links(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :payment_link,
+      :payment_link_list,
+      provider,
+      tenant,
+      & &1.list_payment_links(limited(opts), &2)
+    )
+  end
+
+  @doc "Reads dispute `dispute_id` from `provider`, with `tenant`'s keys."
+  @spec fetch_dispute(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def fetch_dispute(provider, dispute_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(dispute_id) do
+    capable(:dispute, :dispute, provider, tenant, & &1.fetch_dispute(dispute_id, &2))
+  end
+
+  @doc """
+  One page of disputes at `provider`, newest first (`MishkaPay.Page`): `payment_id:` only one
+  payment's, plus `limit:` and `after:`.
+  """
+  @spec list_disputes(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_disputes(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:dispute, :dispute_list, provider, tenant, & &1.list_disputes(limited(opts), &2))
+  end
+
+  @doc """
+  Answers a dispute with evidence (see `MishkaPay.DisputeEvidence`): kept to add more, or sent to
+  the bank with `submit: true`. Answers the dispute after.
+  """
+  @spec update_dispute(map()) :: {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def update_dispute(attrs) when is_map(attrs) do
+    span(:dispute_update, attrs, fn ->
+      with {:ok, evidence} <- Errors.from_builder(MishkaPay.DisputeEvidence.builder(attrs)),
+           {:ok, module} <- Provider.capable(evidence.provider, :dispute),
+           {:ok, keys} <- Credentials.fetch(evidence.provider, evidence.tenant) do
+        module.update_dispute(evidence, keys)
+      end
+    end)
+  end
+
+  @doc "Accepts dispute `dispute_id`: the seller does not contest it, and it closes as lost."
+  @spec accept_dispute(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def accept_dispute(provider, dispute_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(dispute_id) do
+    capable(:dispute, :dispute_accept, provider, tenant, & &1.accept_dispute(dispute_id, &2))
+  end
+
   # A struct built from the caller's map and handed to the provider's `callback`.
   defp made(operation, capability, attrs, struct_module, needed, callback) do
     span(operation, attrs, fn ->
@@ -473,6 +588,92 @@ defmodule MishkaPay do
           {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_invoices(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     subscription(:invoices, provider, tenant, & &1.list_invoices(limited(opts), &2))
+  end
+
+  @doc "Reads invoice `invoice_id` from `provider`, with its lines, bill page and PDF."
+  @spec fetch_invoice(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def fetch_invoice(provider, invoice_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(invoice_id) do
+    subscription(:invoice, provider, tenant, & &1.fetch_invoice(invoice_id, &2))
+  end
+
+  @doc """
+  Changes a running subscription (see `MishkaPay.SubscriptionChange`): a new plan
+  (`:price_id`), a new quantity, or both, billed the way `:proration` says. Answers the
+  subscription after. Preview it first with `preview_subscription_change/1`.
+  """
+  @spec change_subscription(map()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def change_subscription(attrs) when is_map(attrs) do
+    changed(:subscription_change, attrs, :change_subscription)
+  end
+
+  @doc """
+  The invoice `change_subscription/1` would make with the same `attrs`, with its proration lines,
+  without changing anything. When the change prorates and `attrs` has no `:proration_date`, it
+  counts from now: give the same `:proration_date` to both calls to bill exactly the preview.
+  """
+  @spec preview_subscription_change(map()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def preview_subscription_change(attrs) when is_map(attrs) do
+    attrs =
+      case MishkaPay.SubscriptionChange.prorates?(attrs) do
+        true -> Map.put_new_lazy(attrs, :proration_date, &DateTime.utc_now/0)
+        false -> attrs
+      end
+
+    changed(:subscription_preview, attrs, :preview_subscription_change)
+  end
+
+  @doc """
+  Pauses collecting subscription `subscription_id`'s payments; the subscription stays. `behavior:`
+  `:void` (the default: its invoices are voided), `:keep_as_draft` or `:mark_uncollectible`;
+  `resumes_at:` when collection starts again by itself.
+  """
+  @spec pause_collection(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def pause_collection(provider, subscription_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(subscription_id) do
+    behavior = Keyword.get(opts, :behavior, :void)
+
+    case behavior in [:void, :keep_as_draft, :mark_uncollectible] do
+      true ->
+        capable(
+          :subscription_change,
+          :subscription_pause,
+          provider,
+          tenant,
+          & &1.pause_collection(subscription_id, Keyword.put(opts, :behavior, behavior), &2)
+        )
+
+      false ->
+        MishkaPay.ProviderKit.invalid(:behavior, Messages.text(:pause_behavior))
+    end
+  end
+
+  @doc "Collects paused subscription `subscription_id`'s payments again."
+  @spec resume_collection(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def resume_collection(provider, subscription_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(subscription_id) do
+    capable(
+      :subscription_change,
+      :subscription_unpause,
+      provider,
+      tenant,
+      & &1.resume_collection(subscription_id, &2)
+    )
+  end
+
+  defp changed(operation, attrs, callback) do
+    span(operation, attrs, fn ->
+      with {:ok, change} <- Errors.from_builder(MishkaPay.SubscriptionChange.builder(attrs)),
+           {:ok, module} <- Provider.capable(change.provider, :subscription_change),
+           {:ok, keys} <- Credentials.fetch(change.provider, change.tenant) do
+        apply(module, callback, [change, keys])
+      end
+    end)
   end
 
   defp subscription(operation, provider, tenant, call) do

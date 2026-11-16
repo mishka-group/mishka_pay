@@ -47,12 +47,18 @@ defmodule MishkaPay.Provider do
     * `:expire`: `expire_checkout/2`;
     * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
-    * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
-      `list_invoices/2` (a subscription starts with a checkout in `mode: :subscription`);
+    * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
+      `list_invoices/2` and `fetch_invoice/2` (a subscription starts with a checkout in
+      `mode: :subscription`);
+    * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
+      `pause_collection/3`, `resume_collection/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
     * `:portal`: `portal_session/2`;
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
     * `:catalog`: products and prices (`create_product/2` and the rest);
+    * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
+      `update_payment_link/2`;
+    * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
     * `:webhook`: `verify_webhook/3`.
 
   Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
@@ -74,10 +80,13 @@ defmodule MishkaPay.Provider do
     :payment_list,
     :refund,
     :subscription,
+    :subscription_change,
     :customer,
     :portal,
     :discount,
     :catalog,
+    :payment_link,
+    :dispute,
     :webhook,
     :return_verify
   ]
@@ -90,10 +99,14 @@ defmodule MishkaPay.Provider do
     * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
     * `:subscription`: charges again on a schedule.
+    * `:subscription_change`: changes a running subscription's plan or quantity with proration,
+      previews what that bills, and pauses or resumes its collection.
     * `:customer`: keeps buyers (create, read, update, list).
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
+    * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
+    * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
     * `:webhook`: sends signed messages when something changes.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
@@ -103,10 +116,13 @@ defmodule MishkaPay.Provider do
           | :expire
           | :refund
           | :subscription
+          | :subscription_change
           | :customer
           | :portal
           | :discount
           | :catalog
+          | :payment_link
+          | :dispute
           | :payment_list
           | :webhook
           | :return_verify
@@ -177,6 +193,40 @@ defmodule MishkaPay.Provider do
   """
   @callback list_invoices(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription`. Reads one invoice, with its lines."
+  @callback fetch_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_change`. Changes a subscription's plan or quantity as the change says,
+  bills the difference its way, and answers the subscription after.
+  """
+  @callback change_subscription(MishkaPay.SubscriptionChange.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_change`. The invoice the change would make, with its proration lines,
+  without changing anything.
+  """
+  @callback preview_subscription_change(
+              MishkaPay.SubscriptionChange.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_change`. Pauses collecting a subscription's payments: `:behavior` says
+  what happens to its invoices meanwhile, `:resumes_at` when collection starts again by itself.
+  """
+  @callback pause_collection(
+              subscription_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription_change`. Collects a paused subscription's payments again."
+  @callback resume_collection(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:payment_list`. One page of payments, newest first; only `:customer_id`'s when given."
   @callback list_payments(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -268,6 +318,38 @@ defmodule MishkaPay.Provider do
   @callback list_prices(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:dispute`. Reads one dispute."
+  @callback fetch_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:dispute`. One page of disputes, newest first; only `:payment_id`'s when given."
+  @callback list_disputes(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:dispute`. Adds evidence to a dispute, and sends it with `:submit`."
+  @callback update_dispute(MishkaPay.DisputeEvidence.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:dispute`. Accepts the loss: the dispute closes as lost."
+  @callback accept_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. Makes a payment link and answers it with its `:id` and `:url`."
+  @callback create_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. Reads one payment link again."
+  @callback fetch_payment_link(payment_link_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. One page of payment links, newest first; only `:active` ones when given."
+  @callback list_payment_links(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. Changes the options set on a link (`:active` and the rest); its prices stay."
+  @callback update_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:discount`. Turns a promotion code off or on again (`:active`), and its metadata."
   @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
@@ -294,6 +376,11 @@ defmodule MishkaPay.Provider do
                       cancel_subscription: 3,
                       resume_subscription: 2,
                       list_invoices: 2,
+                      fetch_invoice: 2,
+                      change_subscription: 2,
+                      preview_subscription_change: 2,
+                      pause_collection: 3,
+                      resume_collection: 2,
                       create_customer: 2,
                       fetch_customer: 2,
                       update_customer: 2,
@@ -316,6 +403,14 @@ defmodule MishkaPay.Provider do
                       fetch_price: 2,
                       update_price: 2,
                       list_prices: 2,
+                      fetch_dispute: 2,
+                      list_disputes: 2,
+                      update_dispute: 2,
+                      accept_dispute: 2,
+                      create_payment_link: 2,
+                      fetch_payment_link: 2,
+                      list_payment_links: 2,
+                      update_payment_link: 2,
                       verify_webhook: 3
 
   @operations %{
@@ -327,7 +422,14 @@ defmodule MishkaPay.Provider do
       fetch_subscription: 2,
       cancel_subscription: 3,
       resume_subscription: 2,
-      list_invoices: 2
+      list_invoices: 2,
+      fetch_invoice: 2
+    ],
+    subscription_change: [
+      change_subscription: 2,
+      preview_subscription_change: 2,
+      pause_collection: 3,
+      resume_collection: 2
     ],
     customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
     portal: [portal_session: 2],
@@ -350,6 +452,13 @@ defmodule MishkaPay.Provider do
       fetch_price: 2,
       update_price: 2,
       list_prices: 2
+    ],
+    dispute: [fetch_dispute: 2, list_disputes: 2, update_dispute: 2, accept_dispute: 2],
+    payment_link: [
+      create_payment_link: 2,
+      fetch_payment_link: 2,
+      list_payment_links: 2,
+      update_payment_link: 2
     ],
     webhook: [verify_webhook: 3]
   }

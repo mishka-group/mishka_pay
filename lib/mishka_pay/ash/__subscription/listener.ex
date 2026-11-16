@@ -6,14 +6,17 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Subscription.Listener do
     @moduledoc """
     Makes a module the `mishka_pay:event:process` listener that syncs the subscription an event
-    concerns into a subscription resource (`MishkaPay.Ash.Subscription`):
+    concerns into a subscription resource (the `:subscription` kind of `MishkaPay.Ash.Resource`):
 
         defmodule MyApp.Pay.SubscriptionSync do
           use MishkaPay.Ash.Subscription.Listener, resource: MyApp.Pay.Subscription
         end
 
-    Supervise it like any plugin. An event about no subscription is left alone; a subscription the
-    provider cannot give fails the event, so the inbox tries it again later.
+    `MishkaPay.Ash.Resource` makes one for each resource that listens (`listen? true`), as
+    `<Resource>.MishkaPayListener`; write one by hand with `listen? false`, such as to give it
+    another `:priority`. Supervise it like any plugin. An event about no subscription is left
+    alone; a subscription the provider cannot give fails the event, so the inbox tries it again
+    later.
     """
 
     @doc false
@@ -44,7 +47,11 @@ if Code.ensure_loaded?(Ash) do
         tenant: event.tenant && to_string(event.tenant)
       }
 
-      case Ash.create(resource, args, action: :sync, authorize?: false) do
+      case Ash.create(
+             resource,
+             args,
+             [action: :sync] ++ MishkaPay.Ash.Tenant.opts(resource, args.tenant)
+           ) do
         {:ok, _subscription} -> state
         {:error, error} -> %{state | failed: MishkaPay.Ash.message(error)}
       end

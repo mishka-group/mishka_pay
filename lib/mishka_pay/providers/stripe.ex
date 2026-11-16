@@ -68,9 +68,12 @@ defmodule MishkaPay.Providers.Stripe do
       :checkout,
       :payment_list,
       :catalog,
+      :payment_link,
+      :dispute,
       :expire,
       :refund,
       :subscription,
+      :subscription_change,
       :customer,
       :portal,
       :discount,
@@ -85,6 +88,7 @@ defmodule MishkaPay.Providers.Stripe do
     Errors,
     Messages,
     Page,
+    PaymentLink,
     Price,
     Product,
     PromotionCode,
@@ -98,6 +102,51 @@ defmodule MishkaPay.Providers.Stripe do
   @base_url "https://api.stripe.com"
   @odd_currencies ~w(HUF TWD ISK UGX MGA)a
   @three_decimal ~w(BHD JOD KWD OMR TND)a
+
+  @handled %{
+    "checkout.session.completed" => [:payment, :subscription],
+    "checkout.session.expired" => [:payment],
+    "checkout.session.async_payment_succeeded" => [:payment],
+    "checkout.session.async_payment_failed" => [:payment],
+    "payment_intent.succeeded" => [:payment],
+    "payment_intent.payment_failed" => [:payment],
+    "payment_intent.canceled" => [:payment],
+    "payment_intent.processing" => [:payment],
+    "payment_intent.requires_action" => [:payment],
+    "charge.succeeded" => [:payment],
+    "charge.failed" => [:payment],
+    "charge.refunded" => [:payment],
+    "refund.created" => [:payment],
+    "refund.updated" => [:payment],
+    "refund.failed" => [:payment],
+    "charge.dispute.created" => [:payment, :dispute],
+    "charge.dispute.updated" => [:payment, :dispute],
+    "charge.dispute.closed" => [:payment, :dispute],
+    "charge.dispute.funds_withdrawn" => [:payment, :dispute],
+    "charge.dispute.funds_reinstated" => [:payment, :dispute],
+    "invoice.paid" => [:subscription],
+    "invoice.payment_failed" => [:subscription],
+    "invoice.finalized" => [:subscription],
+    "invoice_payment.paid" => [:payment],
+    "customer.subscription.created" => [:subscription],
+    "customer.subscription.updated" => [:subscription],
+    "customer.subscription.deleted" => [:subscription],
+    "customer.subscription.paused" => [:subscription],
+    "customer.subscription.resumed" => [:subscription],
+    "customer.subscription.trial_will_end" => [:subscription],
+    "customer.created" => [:customer],
+    "customer.updated" => [:customer],
+    "customer.deleted" => [:customer]
+  }
+
+  @doc """
+  The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
+  (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer` or `:dispute`. Each is mapped to its
+  ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
+  nothing. Send these to the webhook endpoint in the Stripe Dashboard.
+  """
+  @spec handled_events() :: %{String.t() => [atom()]}
+  def handled_events, do: @handled
 
   @doc "The Stripe API version every request is pinned to."
   @spec version() :: String.t()
@@ -218,6 +267,94 @@ defmodule MishkaPay.Providers.Stripe do
     case Enum.find(results, &match?({:error, _}, &1)) do
       nil -> {:ok, Enum.map(results, fn {:ok, item} -> item end)}
       error -> error
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_invoice(invoice_id, keys) do
+    with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
+         {:ok, invoice} <- request(:get, "/v1/invoices/#{invoice_id}", [], keys) do
+      Mapper.invoice(invoice)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def change_subscription(change, keys) do
+    with {:ok, item_id} <- item_of(change, keys),
+         {:ok, _changed} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{change.subscription_id}",
+             Mapper.change_params(change, item_id),
+             keys
+           ) do
+      fetch_subscription(change.subscription_id, keys)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def preview_subscription_change(change, keys) do
+    with {:ok, item_id} <- item_of(change, keys),
+         {:ok, invoice} <-
+           request(
+             :post,
+             "/v1/invoices/create_preview",
+             Mapper.preview_params(change, item_id),
+             keys
+           ) do
+      Mapper.invoice(invoice)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def pause_collection(subscription_id, opts, keys) do
+    pause = %{
+      "behavior" => Atom.to_string(opts[:behavior]),
+      "resumes_at" => opts[:resumes_at] && DateTime.to_unix(opts[:resumes_at])
+    }
+
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, _paused} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{subscription_id}",
+             %{"pause_collection" => pause},
+             keys
+           ) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  # Stripe takes an empty `pause_collection` as "collect again".
+  @impl MishkaPay.Provider
+  def resume_collection(subscription_id, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, _resumed} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{subscription_id}",
+             %{"pause_collection" => ""},
+             keys
+           ) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  # The item a change names, or the subscription's only one; one of several must be named.
+  defp item_of(%{item_id: item_id} = change, _keys) when is_binary(item_id) do
+    with :ok <- stripe_id(change.subscription_id, "sub_", :subscription_id),
+         :ok <- stripe_id(item_id, "si_", :item_id),
+         :ok <- maybe_id(change.price_id, "price_", :price_id),
+         do: {:ok, item_id}
+  end
+
+  defp item_of(change, keys) do
+    with :ok <- maybe_id(change.price_id, "price_", :price_id),
+         {:ok, subscription} <- fetch_subscription(change.subscription_id, keys) do
+      case subscription.items do
+        [%{item_id: item_id}] when is_binary(item_id) -> {:ok, item_id}
+        _many_or_none -> ProviderKit.invalid(:item_id, Messages.text(:change_item))
+      end
     end
   end
 
@@ -435,6 +572,107 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  @impl MishkaPay.Provider
+  def fetch_dispute(dispute_id, keys) do
+    with :ok <- dispute_id(dispute_id),
+         {:ok, answer} <- request(:get, "/v1/disputes/#{dispute_id}", [], keys) do
+      Mapper.dispute(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_disputes(opts, keys) do
+    with :ok <- maybe_id(opts[:payment_id], "pi_", :payment_id) do
+      page("/v1/disputes", [payment_intent: opts[:payment_id]], opts, keys, &Mapper.dispute/1)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_dispute(evidence, keys) do
+    with :ok <- dispute_id(evidence.dispute_id),
+         :ok <- metadata(evidence.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/disputes/#{evidence.dispute_id}",
+             %{
+               "evidence" => evidence.evidence,
+               "submit" => evidence.submit,
+               "metadata" => evidence.metadata
+             },
+             keys
+           ) do
+      Mapper.dispute(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def accept_dispute(dispute_id, keys) do
+    with :ok <- dispute_id(dispute_id),
+         {:ok, answer} <- request(:post, "/v1/disputes/#{dispute_id}/close", %{}, keys) do
+      Mapper.dispute(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_payment_link(%PaymentLink{} = link, keys) do
+    with :ok <- metadata(link.metadata),
+         :ok <- link_prices(link.items),
+         {:ok, answer} <-
+           request(:post, "/v1/payment_links", Mapper.payment_link_params(link, keys), keys) do
+      Mapper.payment_link(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payment_link(payment_link_id, keys) do
+    with :ok <- stripe_id(payment_link_id, "plink_", :payment_link_id),
+         {:ok, answer} <-
+           request(
+             :get,
+             "/v1/payment_links/#{payment_link_id}",
+             [{"expand[]", "line_items"}],
+             keys
+           ) do
+      Mapper.payment_link(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_payment_links(opts, keys),
+    do:
+      page(
+        "/v1/payment_links",
+        [active: opts[:active], "expand[]": "data.line_items"],
+        opts,
+        keys,
+        &Mapper.payment_link/1
+      )
+
+  @impl MishkaPay.Provider
+  def update_payment_link(%PaymentLink{id: id} = link, keys) do
+    with :ok <- stripe_id(id, "plink_", :id),
+         :ok <- metadata(link.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/payment_links/#{id}",
+             Mapper.payment_link_update_params(link),
+             keys
+           ) do
+      Mapper.payment_link(answer)
+    end
+  end
+
+  defp link_prices(items) do
+    case Enum.find(items, &(not stripe_price?(&1.id))) do
+      nil -> :ok
+      _bad -> stripe_id("not a price", "price_", :items)
+    end
+  end
+
+  defp stripe_price?(id), do: stripe_id(id, "price_", :items) == :ok
+
   # One page of a Stripe list: the list options as Stripe's `limit` and `starting_after`, the
   # filters set, each item mapped; the next cursor is the last item's id when Stripe has more.
   defp page(path, filters, opts, keys, map) do
@@ -452,6 +690,10 @@ defmodule MishkaPay.Providers.Stripe do
        struct(Page, items: items, has_more: more, next: (more && List.last(data)["id"]) || nil)}
     end
   end
+
+  # Stripe's dispute ids start with `du_` now and `dp_` on older disputes.
+  defp dispute_id("du_" <> _ = id), do: stripe_id(id, "du_", :dispute_id)
+  defp dispute_id(id), do: stripe_id(id, "dp_", :dispute_id)
 
   # A filter id is checked only when it is given: by its prefix, or as a plain id with no prefix.
   defp maybe_id(nil, _prefix, _field), do: :ok
@@ -601,6 +843,7 @@ defmodule MishkaPay.Providers.Stripe do
        provider: "stripe",
        status: status,
        code: code_of(error),
+       param: field_of(error["param"] || param_in(error["message"])),
        message: error["message"]
      )}
   end
@@ -610,16 +853,60 @@ defmodule MishkaPay.Providers.Stripe do
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
 
+  # Stripe's names of the fields Mishka Pay calls otherwise; any other is kept as Stripe says it.
+  @fields [
+    {"subscription_data", "trial_days"},
+    {"restrictions", "max_purchases"},
+    {"proration_behavior", "proration"},
+    {"invoice_creation", "invoice"},
+    {"managed_payments", "merchant_of_record"},
+    {"after_completion", "success_url"}
+  ]
+
+  defp field_of(nil), do: nil
+
+  defp field_of(param) do
+    cond do
+      param =~ "adjustable_quantity][minimum]" ->
+        "quantity_min"
+
+      param =~ "adjustable_quantity][maximum]" ->
+        "quantity_max"
+
+      true ->
+        Enum.find_value(@fields, param, fn {stripe, ours} ->
+          String.starts_with?(param, stripe) && ours
+        end)
+    end
+  end
+
+  # Some refusals name their field only in their words: "`invoice_creation` can only be used...",
+  # or a product without the tax code Managed Payments needs.
+  defp param_in(message) when is_binary(message) do
+    cond do
+      String.contains?(message, "product tax code is missing") -> "tax_code"
+      match = Regex.run(~r/\A`(\w+)` can only be used/, message) -> List.last(match)
+      true -> nil
+    end
+  end
+
+  defp param_in(_no_message), do: nil
+
   # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
-  # its words.
+  # its words; so is an invoice turned off where Managed Payments must make one, a product without
+  # the tax code it needs, and a choice that belongs only to one-time or only to recurring prices.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
 
   defp code_of(%{"code" => code}) when is_binary(code), do: code
 
   defp code_of(%{"message" => message}) when is_binary(message) do
-    case String.contains?(message, "already exists") do
-      true -> "already_exists"
-      false -> nil
+    cond do
+      String.contains?(message, "already exists") -> "already_exists"
+      String.contains?(message, "when Managed Payments is enabled") -> "managed_payments_invoice"
+      String.contains?(message, "product tax code is missing") -> "tax_code_missing"
+      String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
+      String.contains?(message, "must pass a recurring price") -> "recurring_only"
+      true -> nil
     end
   end
 

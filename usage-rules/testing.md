@@ -6,6 +6,7 @@ process and needs no sleeps.
 ```elixir
 # test/test_helper.exs
 MishkaPay.Test.setup!()
+MishkaPay.Test.await_plugin!(MishkaPay.Providers.Stripe)  # the provider the app starts
 ExUnit.start()
 
 # config/test.exs
@@ -31,6 +32,13 @@ end
   (`docker run -p 12111:12111 stripe/stripe-mock`) and forward to it from `stub_http/1`.
 - Wait on messages or telemetry (`:telemetry_test.attach_event_handlers/2`, `assert_receive`),
   never on `Process.sleep`.
+- Test your webhook code without a provider: `MishkaPay.Test.deliver_event(tenant, type, object,
+  webhook_secret)` posts a Stripe event signed the way Stripe signs it through
+  `MishkaPay.Webhook`; `signed_event/4` gives the `{body, headers}` for your own request, and
+  `stripe_object(kind, overrides)` one object of each kind (`:payment_intent`, `:checkout_session`,
+  `:charge`, `:refund`, `:dispute`, `:invoice`, `:subscription`, `:customer`).
+- `mix mishka_pay.stripe.clean_clocks --tenant site --older-than 2` deletes old Stripe test clocks
+  (with their customers and subscriptions); `--dry-run` lists them. Test keys only.
 - A provider you write: `use MishkaPay.ProviderCase, provider: MyApp.Pay.Acme` runs the contract
   tests every provider must pass.
 - Live sandbox tests go behind a tag excluded unless the sandbox key is set, and accept only test

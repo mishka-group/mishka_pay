@@ -17,6 +17,9 @@ defmodule MishkaPay.Price do
       its own tax code there, so this one is not sent with it.
     * `:id`: the provider's own id of a price it already knows (`price_...` at Stripe). With it,
       the provider's price is used and `:name` and `:amount` may be left out.
+    * `:tax_behavior`: `:exclusive` (tax is added on top, as in the US) or `:inclusive` (the
+      amount already holds the tax, as in much of Europe); what a provider counting the tax
+      (Stripe Tax, Managed Payments) does with the amount.
     * `:interval`, `:interval_count`: a price charged again on a schedule, for a subscription:
       every `:interval_count` (1 by default) `:day`, `:week`, `:month` or `:year`. Left out, the
       price is paid once.
@@ -31,6 +34,9 @@ defmodule MishkaPay.Price do
       price that was used).
     * `:metadata`: extra pairs, string keys to string values.
     * `:created_at`: filled in by the provider.
+
+  On a subscription's item (`MishkaPay.Subscription`), `:item_id` is the provider's id of that
+  line (`si_...` at Stripe).
   """
 
   use GuardedStruct
@@ -51,6 +57,10 @@ defmodule MishkaPay.Price do
 
     field :interval_count, pos_integer(), derives: "validate(integer, min_len=1)"
 
+    field :tax_behavior, :inclusive | :exclusive,
+      derives: "validate(enum=Atom[inclusive::exclusive])",
+      validator: {__MODULE__, :tax_behavior}
+
     field :quantity, pos_integer(),
       default: 1,
       derives: "validate(not_nil_value, integer, min_len=1)"
@@ -63,6 +73,7 @@ defmodule MishkaPay.Price do
     field :active, boolean(), derives: "validate(boolean)"
     dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
     field :created_at, DateTime.t(), derives: "validate(struct)"
+    field :item_id, String.t(), derives: "validate(string)"
   end
 
   # An interval from JSON or a form comes as a string.
@@ -71,6 +82,10 @@ defmodule MishkaPay.Price do
     do: {:ok, :interval, String.to_existing_atom(interval)}
 
   def interval(:interval, interval), do: {:ok, :interval, interval}
+
+  @doc false
+  def tax_behavior(field, value),
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inclusive exclusive))
 
   @doc false
   def named_or_known(%{id: id} = attrs) when is_binary(id), do: {:ok, attrs}

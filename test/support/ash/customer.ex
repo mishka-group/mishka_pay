@@ -3,15 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 defmodule MishkaPay.Support.Customer do
-  @moduledoc "A host's customer resource, as `MishkaPay.Ash.Customer` shows it."
+  @moduledoc "A host's customer resource, as `MishkaPay.Ash.Resource` shows its `:customer` kind."
 
   use Ash.Resource,
     domain: MishkaPay.Support.Domain,
     data_layer: AshPostgres.DataLayer,
-    fragments: [MishkaPay.Ash.Customer]
+    extensions: [MishkaPay.Ash.Resource]
 
   postgres do
     table "pay_customers"
     repo MishkaPay.Support.Repo
+  end
+
+  mishka_pay do
+    kind :customer
   end
 end

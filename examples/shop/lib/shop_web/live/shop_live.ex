@@ -13,6 +13,10 @@ defmodule ShopWeb.ShopLive do
       and buy as that customer;
     * the catalog: the shop's products published to Stripe as products and prices, sold by price
       id, and every Stripe list read page by page;
+    * payment links for catalog prices, with every limit a developer can choose, and one buyer's
+      address; invoices for one-time checkouts; the site's Stripe Tax setting;
+    * disputes: read from Stripe or by webhook, answered with evidence or accepted; every change
+      reaches the page through Mishka Pay's own PubSub plugin (`Shop.Pay.Broadcast`);
     * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
@@ -28,7 +32,6 @@ defmodule ShopWeb.ShopLive do
   import ShopWeb.PayComponents
 
   alias Shop.Pay.{
-    LiveFeed,
     Payment,
     Setting,
     Stats,
@@ -52,11 +55,12 @@ defmodule ShopWeb.ShopLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Shop.PubSub, LiveFeed.topic())
+      # Mishka Pay's own PubSub plugin (Shop.Pay.Broadcast): this site's changes only.
+      for kind <- MishkaPay.PubSub.kinds(),
+          do: Phoenix.PubSub.subscribe(Shop.PubSub, MishkaPay.PubSub.topic(kind, @tenant))
+
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
-      Phoenix.PubSub.subscribe(Shop.PubSub, Shop.Pay.SubscriptionFeed.topic())
-      Phoenix.PubSub.subscribe(Shop.PubSub, Shop.Pay.CustomerFeed.topic())
       ShopWeb.Endpoint.subscribe("pay:inbox")
     end
 
@@ -261,6 +265,7 @@ defmodule ShopWeb.ShopLive do
       tenant: @tenant,
       refunds: params["refunds"],
       merchant_of_record: on_off(params["merchant_of_record"]),
+      automatic_tax: params["automatic_tax"] == "true",
       open: params["open"] == "true"
     }
 
@@ -279,7 +284,7 @@ defmodule ShopWeb.ShopLive do
   end
 
   @impl true
-  def handle_info({:payment_changed, record}, socket) do
+  def handle_info({:mishka_pay, :payment, %{record: record}}, socket) do
     {:noreply,
      socket
      |> put_payment(record)
@@ -289,15 +294,20 @@ defmodule ShopWeb.ShopLive do
 
   def handle_info(:settings_changed, socket), do: {:noreply, assign_status(socket)}
 
-  def handle_info({:subscription_changed, record}, socket) do
+  def handle_info({:mishka_pay, :subscription, %{record: record}}, socket) do
     send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", changed: record)
     {:noreply, socket}
   end
 
   # A message from the subscriptions part, shown like the page's own.
-  def handle_info({:customer_changed, record}, socket) do
+  def handle_info({:mishka_pay, :customer, %{record: record}}, socket) do
     send_update(ShopWeb.CustomersComponent, id: "customers", changed: record)
     {:noreply, assign(socket, buyer: same_buyer(socket.assigns.buyer, record))}
+  end
+
+  def handle_info({:mishka_pay, :dispute, %{record: record}}, socket) do
+    send_update(ShopWeb.DisputesComponent, id: "disputes", changed: record)
+    {:noreply, socket}
   end
 
   def handle_info({:buyer, customer}, socket) do
@@ -325,6 +335,23 @@ defmodule ShopWeb.ShopLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash}>
+      <.link
+        navigate={~p"/sell"}
+        class="card bg-primary/10 border border-primary/40 hover:bg-primary/20 mb-6"
+        data-testid="sell-page-link"
+      >
+        <div class="card-body flex-row items-center gap-4 py-4">
+          <.icon name="hero-bolt" class="size-8 text-primary" />
+          <div class="flex-1">
+            <div class="font-semibold">Sell a product with one link</div>
+            <div class="text-sm opacity-70">
+              Fill in a product, press one button: Mishka Pay makes it, its price and a payment link
+              at Stripe, shows each step, and gives you the link buyers pay with. Undo takes it all back.
+            </div>
+          </div>
+          <.icon name="hero-arrow-right" class="size-5" />
+        </div>
+      </.link>
       <.status
         providers={@providers}
         keys={@keys}
@@ -398,7 +425,11 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.DiscountsComponent} id="discounts" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.DisputesComponent} id="disputes" tenant={@tenant} />
+
       <.live_component module={ShopWeb.CatalogComponent} id="catalog" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.PaymentLinksComponent} id="payment-links" tenant={@tenant} />
 
       <.live_component module={ShopWeb.StripeListsComponent} id="stripe-lists" tenant={@tenant} />
 
@@ -545,7 +576,8 @@ defmodule ShopWeb.ShopLive do
     %{
       discounts: discounts(params["discount_mode"], blank_nil(params["discount_id"])),
       allow_promotion_codes: (params["discount_mode"] == "typed" && true) || nil,
-      automatic_tax: (params["automatic_tax"] == "true" && true) || nil,
+      automatic_tax: on_off(params["automatic_tax"]),
+      invoice: (params["invoice"] == "true" && true) || nil,
       tax_id_collection: (params["tax_id_collection"] == "true" && true) || nil,
       locale: blank_nil(params["locale"]),
       billing_address: blank_nil(params["billing_address"]),

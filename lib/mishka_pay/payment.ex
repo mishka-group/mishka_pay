@@ -20,6 +20,7 @@ defmodule MishkaPay.Payment do
       and `:card_last4`.
     * `:receipt_url`: the provider's receipt page for the buyer, once paid.
     * `:failure_code`, `:failure_message`: why the last try failed, such as `"insufficient_funds"`.
+    * `:disputed`: the buyer's bank has asked for it back (`MishkaPay.Dispute`).
     * `:refunds`: every `MishkaPay.Refund` made on it, newest first.
     * `:created_at`: when the provider made it, a `DateTime`.
   """
@@ -46,6 +47,7 @@ defmodule MishkaPay.Payment do
     field :receipt_url, String.t(), derives: "validate(string)"
     field :failure_code, String.t(), derives: "validate(string)"
     field :failure_message, String.t(), derives: "validate(string)"
+    field :disputed, boolean(), default: false, derives: "validate(boolean)"
     field :refunds, list(), structs: MishkaPay.Refund, default: []
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end

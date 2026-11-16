@@ -3,15 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 defmodule MishkaPay.Support.Subscription do
-  @moduledoc "A host's subscription resource, as `MishkaPay.Ash.Subscription` shows it."
+  @moduledoc "A host's subscription resource, as `MishkaPay.Ash.Resource` shows its `:subscription` kind."
 
   use Ash.Resource,
     domain: MishkaPay.Support.Domain,
     data_layer: AshPostgres.DataLayer,
-    fragments: [MishkaPay.Ash.Subscription]
+    extensions: [MishkaPay.Ash.Resource]
 
   postgres do
     table "pay_subscriptions"
     repo MishkaPay.Support.Repo
+  end
+
+  mishka_pay do
+    kind :subscription
   end
 end

@@ -1,10 +1,14 @@
 defmodule Shop.Pay.Subscription do
-  @moduledoc "One row per subscription, kept in sync with Stripe by `MishkaPay.Ash.Subscription`."
+  @moduledoc "One row per subscription, kept in sync with Stripe by Mishka Pay's `:subscription` kind."
 
   use Ash.Resource,
     domain: Shop.Pay,
     data_layer: AshPostgres.DataLayer,
-    fragments: [MishkaPay.Ash.Subscription]
+    extensions: [MishkaPay.Ash.Resource]
+
+  mishka_pay do
+    kind :subscription
+  end
 
   postgres do
     table "subscriptions"

@@ -5,7 +5,8 @@
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Customer.Sync do
     @moduledoc """
-    The `:register`, `:sync` and `:edit` actions of `MishkaPay.Ash.Customer`: asks the provider
+    The `:register`, `:sync` and `:edit` actions of the `:customer` kind
+    (`MishkaPay.Ash.Resource`): asks the provider
     before the action's transaction starts, writes the customer as the provider answered it, and
     fires `mishka_pay:customer:changed` after. A customer the provider cannot give is an error on
     the action, and nothing is written; one the provider deleted keeps its row with `:deleted_at`.
@@ -22,14 +23,15 @@ if Code.ensure_loaded?(Ash) do
     def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&ask(&1, opts[:operation]))
-      |> Ash.Changeset.after_transaction(&announce/2)
+      |> MishkaPay.Ash.announce(opts, &announce/2)
     end
 
     defp ask(changeset, :register) do
       attrs =
         changeset
-        |> arguments([:provider, :tenant | @fields])
+        |> arguments([:provider | @fields])
         |> Map.update(:metadata, nil, &stringify/1)
+        |> Map.put(:tenant, MishkaPay.Ash.Tenant.of(changeset))
 
       changeset
       |> Ash.Changeset.force_change_attribute(:tenant, attrs[:tenant])
@@ -37,8 +39,10 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp ask(changeset, :sync) do
-      [provider, id, tenant] =
-        Enum.map([:provider, :customer_id, :tenant], &Ash.Changeset.get_argument(changeset, &1))
+      [provider, id] =
+        Enum.map([:provider, :customer_id], &Ash.Changeset.get_argument(changeset, &1))
+
+      tenant = MishkaPay.Ash.Tenant.of(changeset)
 
       changeset
       |> Ash.Changeset.force_change_attributes(%{

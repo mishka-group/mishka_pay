@@ -46,6 +46,33 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
 
+## Disputes
+
+- Dispute ids start with `du_` (older ones `dp_`); both are taken.
+- `pm_card_createDispute` (card 4000 0000 0000 0259) pays and opens a dispute a moment later;
+  evidence text `"winning_evidence"` wins it and `"losing_evidence"` loses it in test mode.
+- `update_dispute/1`'s `evidence` uses Stripe's own field names (`"product_description"`,
+  `"customer_email_address"`, `"uncategorized_text"`...); files need their upload id.
+
+## Subscription changes
+
+- A preview is `POST /v1/invoices/create_preview`; its id starts with `upcoming_in_` and it is
+  never stored. Pass its `proration_date` to the change to bill the same amount.
+- In this API version `billing_cycle_anchor` is an object (`billing_cycle_anchor[type]`);
+  Mishka Pay sends it so.
+- Test a change on a test clock: advance it, preview with the clock's `frozen_time` as
+  `proration_date`, change, and compare the new invoice's `amount_due` with the preview's.
+
+## Payment links, invoices and tax
+
+- A payment link's `max_purchases` is Stripe's `restrictions.completed_sessions.limit`; once
+  reached, the link turns itself off and shows `inactive_message`.
+- `invoice: true` is Stripe's `invoice_creation`: an invoice for a one-time payment. Whether
+  Stripe emails receipts and invoices is a Dashboard setting (Customer emails), not code.
+- Stripe Tax must be turned on in the Dashboard (origin address, registrations) before
+  `automatic_tax` counts anything. A price's `tax_behavior` can be set once on a price that had
+  none; otherwise make a new price.
+
 ## Catalog and lists
 
 - A product may take the host's own `id` (`"ebook"`): letters, digits, `_` and `-`.
