@@ -52,8 +52,13 @@ defmodule ShopWeb.UsageComponent do
   def handle_event("deactivate", %{"id" => id}, socket) do
     case MishkaPay.deactivate_meter("stripe", id, socket.assigns.tenant) do
       {:ok, meter} ->
+        # Stripe's list can lag a moment behind: the row takes the meter Stripe answered.
         {:noreply,
-         socket |> list_meters() |> done("Meter #{meter.id} is off: it takes no more usage.")}
+         socket
+         |> update(:meters, fn meters ->
+           Enum.map(meters || [], &if(&1.id == meter.id, do: meter, else: &1))
+         end)
+         |> done("Meter #{meter.id} is off: it takes no more usage.")}
 
       {:error, error} ->
         {:noreply, failed(socket, error)}

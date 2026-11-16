@@ -150,6 +150,10 @@ defmodule ShopWeb.CurrenciesComponent do
 
   defp same?(_made), do: false
 
-  defp money(%Money{} = money), do: Money.to_string!(money)
+  # The exact amount kept, not a formatted one: money formatting rounds HUF to whole forints, as
+  # cash is paid, and this part shows that nothing is lost.
+  defp money(%Money{amount: amount, currency: currency}),
+    do: "#{currency} #{Decimal.to_string(amount, :normal)}"
+
   defp money(_none), do: "–"
 end

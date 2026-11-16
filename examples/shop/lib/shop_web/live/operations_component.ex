@@ -26,6 +26,7 @@ defmodule ShopWeb.OperationsComponent do
        endpoint: nil,
        events: nil,
        replayed: nil,
+       replaying: false,
        versions: nil,
        notice: nil,
        error: nil
@@ -72,19 +73,16 @@ defmodule ShopWeb.OperationsComponent do
     end
   end
 
-  def handle_event("replay", %{"window" => window}, socket) do
-    since = DateTime.add(DateTime.utc_now(), -Map.get(@windows, window, 3600), :second)
+  # Replaying an hour of events can take a while: it runs in its own task, so the page stays live.
+  def handle_event("replay", params, socket) do
+    seconds = Map.get(@windows, params["window"], 3600)
+    since = DateTime.add(DateTime.utc_now(), -seconds, :second)
+    tenant = socket.assigns.tenant
 
-    case MishkaPay.replay_events("stripe", socket.assigns.tenant, since: since) do
-      {:ok, replayed} ->
-        {:noreply,
-         socket
-         |> assign(replayed: replayed)
-         |> done("Delivered #{replayed.delivered} again, #{length(replayed.failed)} failed.")}
-
-      {:error, error} ->
-        {:noreply, socket |> assign(replayed: nil) |> failed(error)}
-    end
+    {:noreply,
+     socket
+     |> assign(replayed: nil, replaying: true, notice: nil, error: nil)
+     |> start_async(:replay, fn -> MishkaPay.replay_events("stripe", tenant, since: since) end)}
   end
 
   def handle_event("version", _params, socket) do
@@ -95,6 +93,27 @@ defmodule ShopWeb.OperationsComponent do
       {:error, error} ->
         {:noreply, socket |> assign(versions: nil) |> failed(error)}
     end
+  end
+
+  @impl true
+  def handle_async(:replay, {:ok, {:ok, replayed}}, socket) do
+    {:noreply,
+     socket
+     |> assign(replayed: replayed, replaying: false)
+     |> done("Delivered #{replayed.delivered} again, #{length(replayed.failed)} failed.")}
+  end
+
+  def handle_async(:replay, {:ok, {:error, error}}, socket),
+    do: {:noreply, socket |> assign(replayed: nil, replaying: false) |> failed(error)}
+
+  def handle_async(:replay, {:exit, _reason}, socket) do
+    {:noreply,
+     assign(socket,
+       replayed: nil,
+       replaying: false,
+       notice: nil,
+       error: "The replay stopped before it ended. Try a shorter window."
+     )}
   end
 
   defp check(socket, url) do
@@ -270,11 +289,15 @@ defmodule ShopWeb.OperationsComponent do
               <button
                 class="btn btn-sm join-item"
                 phx-disable-with="Delivering..."
+                disabled={@replaying}
                 data-testid="operations-replay"
               >
                 Replay since
               </button>
             </form>
+            <p :if={@replaying} class="text-sm" data-testid="replay-running">
+              Delivering the events again…
+            </p>
             <p :if={@replayed} class="text-sm" data-testid="operations-replayed">
               <span data-testid="replay-delivered">{@replayed.delivered}</span>
               delivered, <span data-testid="replay-failed">{length(@replayed.failed)}</span>

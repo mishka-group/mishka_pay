@@ -301,7 +301,7 @@ defmodule ShopWeb.BalanceComponent do
               data-change-id={change.id}
             >
               <span class="font-medium">{money(change.amount)}</span>
-              then {money(change.ending_balance)}
+              · balance after: {money(change.ending_balance)}
               <span :if={change.description} class="opacity-70">· {change.description}</span>
             </li>
           </ul>

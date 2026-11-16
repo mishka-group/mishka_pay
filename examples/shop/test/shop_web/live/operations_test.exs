@@ -105,8 +105,17 @@ defmodule ShopWeb.OperationsTest do
     |> form("[data-testid=operations-replay-form]", %{window: "1h"})
     |> render_submit()
 
+    render_async(view)
     assert has_element?(view, "[data-testid=replay-delivered]", "1")
     assert has_element?(view, "[data-testid=replay-failed]", "0")
+
+    # A window the form does not offer falls back to an hour instead of stopping the page.
+    view
+    |> element("[data-testid=operations-replay-form]")
+    |> render_submit(%{"window" => "hour"})
+
+    render_async(view)
+    assert has_element?(view, "[data-testid=replay-delivered]", "1")
   end
 
   test "compares the pinned Stripe API version with the newest", %{conn: conn} do
