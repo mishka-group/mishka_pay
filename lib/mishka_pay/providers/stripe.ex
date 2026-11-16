@@ -141,7 +141,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @doc """
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
-  (`MishkaPay.Ash.Payment`), `:subscription`, `:customer` or `:dispute`. Each is mapped to its
+  (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer` or `:dispute`. Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -640,7 +640,14 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def list_payment_links(opts, keys),
-    do: page("/v1/payment_links", [active: opts[:active]], opts, keys, &Mapper.payment_link/1)
+    do:
+      page(
+        "/v1/payment_links",
+        [active: opts[:active], "expand[]": "data.line_items"],
+        opts,
+        keys,
+        &Mapper.payment_link/1
+      )
 
   @impl MishkaPay.Provider
   def update_payment_link(%PaymentLink{id: id} = link, keys) do

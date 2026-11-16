@@ -861,6 +861,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       url: link["url"],
       active: link["active"],
       items: link_items(link["line_items"]),
+      quantity_min: link_quantity(link["line_items"], "minimum"),
+      quantity_max: link_quantity(link["line_items"], "maximum"),
       success_url: get_in(link, ["after_completion", "redirect", "url"]),
       allow_promotion_codes: link["allow_promotion_codes"],
       automatic_tax: get_in(link, ["automatic_tax", "enabled"]),
@@ -887,6 +889,20 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   defp link_items(_not_expanded), do: nil
+
+  # The quantity range the buyer may pick is kept on each line item; Mishka Pay sets one for all.
+  # Stripe answers a minimum of 0 when none was given: that is its default, not a choice.
+  defp link_quantity(%{"data" => items}, bound) do
+    Enum.find_value(items, fn
+      %{"adjustable_quantity" => %{"enabled" => true} = range} -> positive(range[bound])
+      _fixed -> nil
+    end)
+  end
+
+  defp link_quantity(_not_expanded, _bound), do: nil
+
+  defp positive(number) when is_integer(number) and number > 0, do: number
+  defp positive(_none), do: nil
 
   defp blank(""), do: nil
   defp blank(text), do: text

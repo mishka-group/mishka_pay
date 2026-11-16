@@ -245,7 +245,7 @@ defmodule MishkaPay.Providers.StripeTest do
                })
 
       assert Exception.message(error) ==
-               "stripe refused the value of trial_days (HTTP 400)"
+               "stripe did not accept the value given for trial_days: check it and try again"
     end
 
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do

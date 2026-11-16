@@ -20,7 +20,7 @@ without leaning on text or layout.
 | **Payments**: totals, status filter, live | the stored rows with buyer, card and failure reason; webhook → inbox → job → sync → `mishka_pay:payment:changed` → the page |
 | **Details** of a payment | the stored row beside `MishkaPay.fetch_payment/3` live from Stripe: buyer, card, receipt, failure, description, metadata and every refund; its webhook events; sync; refund with an amount and a reason |
 | **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
-| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`MishkaPay.Ash.Subscription`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.invoices/3`); cancel at the period's end or now, keep it going, sync |
+| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`mishka_pay do kind :subscription end`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.invoices/3`); cancel at the period's end or now, keep it going, sync |
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
 | **Webhook simulator** | a Stripe event about a payment or subscription in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
 | **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |

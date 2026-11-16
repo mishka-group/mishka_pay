@@ -328,7 +328,7 @@ msgstr ""
 
 #: lib/mishka_pay/messages.ex:257
 #, elixir-autogen, elixir-format, fuzzy
-msgid "%{provider} refused the value of %{param} (HTTP %{status})"
+msgid "%{provider} did not accept the value given for %{param}: check it and try again"
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:247

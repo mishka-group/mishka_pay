@@ -35,9 +35,8 @@ defmodule MishkaPay.Errors.Rejected do
   def message(%{provider: provider, code: "already_exists"}),
     do: Messages.text(:rejected_exists, provider: provider)
 
-  def message(%{provider: provider, status: status, code: nil, param: param})
-      when is_binary(param),
-      do: Messages.text(:rejected_param, provider: provider, param: param, status: status)
+  def message(%{provider: provider, code: nil, param: param}) when is_binary(param),
+    do: Messages.text(:rejected_param, provider: provider, param: param)
 
   def message(%{provider: provider, status: status, code: nil}),
     do: Messages.text(:rejected, provider: provider, status: status)

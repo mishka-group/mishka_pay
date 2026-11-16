@@ -519,7 +519,11 @@ defmodule ShopWeb.SubscriptionsComponent do
               </span>
             </li>
           </ul>
-          <p :if={@preview.amount_tax} class="text-sm flex gap-2" data-testid="change-tax">
+          <p
+            :if={@preview.amount_tax && !Money.zero?(@preview.amount_tax)}
+            class="text-sm flex gap-2"
+            data-testid="change-tax"
+          >
             <span class="flex-1 opacity-70">Tax</span>
             <span class="font-mono">{money(@preview.amount_tax)}</span>
           </p>

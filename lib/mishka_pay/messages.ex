@@ -256,7 +256,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "%{provider} refused the value of %{param} (HTTP %{status})"
+        "%{provider} did not accept the value given for %{param}: check it and try again"
       )
 
   defp msgid(:change_nothing),

@@ -592,8 +592,12 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert MishkaPay.PaymentLink.url(link, reference: "order-#{run}") =~
              "client_reference_id=order-"
 
-    assert {:ok, %MishkaPay.PaymentLink{items: [%MishkaPay.Price{id: ^price_id}]}} =
-             MishkaPay.fetch_payment_link("stripe", link_id)
+    assert {:ok,
+            %MishkaPay.PaymentLink{
+              items: [%MishkaPay.Price{id: ^price_id}],
+              quantity_min: nil,
+              quantity_max: 3
+            }} = MishkaPay.fetch_payment_link("stripe", link_id)
 
     assert {:ok, %MishkaPay.PaymentLink{active: false, max_purchases: 5}} =
              MishkaPay.update_payment_link(%{
