@@ -843,7 +843,7 @@ defmodule MishkaPay.Providers.Stripe do
        provider: "stripe",
        status: status,
        code: code_of(error),
-       param: field_of(error["param"]),
+       param: field_of(error["param"] || param_in(error["message"])),
        message: error["message"]
      )}
   end
@@ -880,8 +880,21 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # Some refusals name their field only in their words: "`invoice_creation` can only be used...",
+  # or a product without the tax code Managed Payments needs.
+  defp param_in(message) when is_binary(message) do
+    cond do
+      String.contains?(message, "product tax code is missing") -> "tax_code"
+      match = Regex.run(~r/\A`(\w+)` can only be used/, message) -> List.last(match)
+      true -> nil
+    end
+  end
+
+  defp param_in(_no_message), do: nil
+
   # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
-  # its words; so is an invoice turned off where Managed Payments must make one.
+  # its words; so is an invoice turned off where Managed Payments must make one, a product without
+  # the tax code it needs, and a choice that belongs only to one-time or only to recurring prices.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
 
   defp code_of(%{"code" => code}) when is_binary(code), do: code
@@ -890,6 +903,9 @@ defmodule MishkaPay.Providers.Stripe do
     cond do
       String.contains?(message, "already exists") -> "already_exists"
       String.contains?(message, "when Managed Payments is enabled") -> "managed_payments_invoice"
+      String.contains?(message, "product tax code is missing") -> "tax_code_missing"
+      String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
+      String.contains?(message, "must pass a recurring price") -> "recurring_only"
       true -> nil
     end
   end

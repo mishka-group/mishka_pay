@@ -55,6 +55,9 @@ defmodule MishkaPay.Messages do
           | :quantity_range
           | :proration_date
           | :managed_payments_invoice
+          | :tax_code_missing
+          | :one_time_only
+          | :recurring_only
           | :rejected_param
           | :change_item
           | :pause_behavior
@@ -247,6 +250,27 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "A merchant of record always makes an invoice: turn merchant of record off to sell without one"
+      )
+
+  defp msgid(:tax_code_missing),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A merchant of record sells only products with a tax category: give the product one, or turn merchant of record off"
+      )
+
+  defp msgid(:one_time_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} goes only with one-time prices: a plan's subscription makes its own customer and invoices"
+      )
+
+  defp msgid(:recurring_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} goes only with a plan, a price charged on a schedule"
       )
 
   defp msgid(:quantity_range),

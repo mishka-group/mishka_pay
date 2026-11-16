@@ -307,6 +307,56 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Exception.message(missing) == "stripe has nothing with the id given"
     end
 
+    test "a link Stripe refuses for a missing tax code or a one-time-only choice says which, plainly" do
+      answers = %{
+        "tax" =>
+          "Invalid line_items[0]: the product tax code is missing. Set the product's tax_code field to an eligible product tax code.",
+        "invoice" =>
+          "`invoice_creation` can only be used if the payment link does not contain any recurring prices.",
+        "trial" =>
+          "You must pass a recurring price in `line_items` to specify `subscription_data`."
+      }
+
+      MishkaPay.Test.stub_http(fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+
+        {message, param} =
+          cond do
+            params["invoice_creation[enabled]"] ->
+              {answers["invoice"], nil}
+
+            params["subscription_data[trial_period_days]"] ->
+              {answers["trial"], "subscription_data"}
+
+            true ->
+              {answers["tax"], nil}
+          end
+
+        error = %{"type" => "invalid_request_error", "message" => message, "param" => param}
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      link = %{provider: "stripe", items: [%{id: "price_1", quantity: 1}]}
+
+      assert {:error, %Errors.Rejected{code: "tax_code_missing", param: "tax_code"} = tax} =
+               MishkaPay.create_payment_link(link)
+
+      assert Exception.message(tax) =~ "give the product one, or turn merchant of record off"
+
+      assert {:error, %Errors.Rejected{code: "one_time_only", param: "invoice"} = invoice} =
+               MishkaPay.create_payment_link(Map.put(link, :invoice, true))
+
+      assert Exception.message(invoice) =~ "invoice goes only with one-time prices"
+
+      assert {:error, %Errors.Rejected{code: "recurring_only", param: "trial_days"} = trial} =
+               MishkaPay.create_payment_link(Map.put(link, :trial_days, 7))
+
+      assert Exception.message(trial) ==
+               "trial_days goes only with a plan, a price charged on a schedule"
+    end
+
     test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id}} =
                MishkaPay.create_customer(%{
