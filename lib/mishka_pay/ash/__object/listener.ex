@@ -14,8 +14,10 @@ if Code.ensure_loaded?(Ash) do
         end
 
     `MishkaPay.Ash.Resource` makes one for each resource that listens (`listen? true`), as
-    `<Resource>.MishkaPayListener`. An event about another object is left alone; an object the
-    provider cannot give fails the event, so the inbox tries it again later.
+    `<Resource>.MishkaPayListener`. An event about another object is left alone, and so is one from
+    a provider that cannot read this kind at all (a PayPal `CATALOG.PRODUCT.CREATED`: Mishka Pay has
+    no PayPal catalog); an object the provider fails to give fails the event, so the inbox tries it
+    again later.
     """
 
     @doc false
@@ -24,6 +26,7 @@ if Code.ensure_loaded?(Ash) do
       kind = Keyword.fetch!(opts, :kind)
       priority = Keyword.get(opts, :priority, 50)
       object = MishkaPay.Ash.Object.Spec.object(kind)
+      capability = MishkaPay.Ash.Object.Spec.capability(kind)
 
       quote do
         use MishkaInstaller.Event.Hook,
@@ -37,8 +40,12 @@ if Code.ensure_loaded?(Ash) do
                 failed: nil
               } = state
             )
-            when is_binary(id),
-            do:
+            when is_binary(id) do
+          case MishkaPay.Provider.capable(event.provider, unquote(capability)) do
+            {:error, %MishkaPay.Errors.Unsupported{}} ->
+              {:reply, state}
+
+            _capable_or_unknown ->
               {:reply,
                MishkaPay.Ash.sync_event(
                  unquote(resource),
@@ -47,6 +54,8 @@ if Code.ensure_loaded?(Ash) do
                  event,
                  state
                )}
+          end
+        end
 
         def call(state), do: {:reply, state}
       end
