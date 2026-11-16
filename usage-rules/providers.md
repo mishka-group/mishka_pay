@@ -39,6 +39,11 @@ end
     `update_payment_link/2`;
   - `:catalog`: `create_product/2`, `fetch_product/2`, `update_product/2`, `list_products/2`,
     `create_price/2`, `fetch_price/2`, `update_price/2`, `list_prices/2`;
+  - `:usage`: `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2`,
+    `usage_summary/3`;
+  - `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
+  - `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
+  - `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

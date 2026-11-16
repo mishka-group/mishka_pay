@@ -44,6 +44,7 @@ webhook endpoint to these:
 | `invoice_payment.paid` | the payment |
 | `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`, `.trial_will_end` | the subscription |
 | `customer.created`, `.updated`, `.deleted` | the customer |
+| `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed (`:object_type` is `"customer"`) |
 
 Any other event is verified and stored, and changes nothing.
 

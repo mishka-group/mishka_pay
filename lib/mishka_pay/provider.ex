@@ -63,6 +63,11 @@ defmodule MishkaPay.Provider do
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
       `update_payment_link/2`;
     * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
+    * `:usage`: `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2`,
+      `usage_summary/3`;
+    * `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
+    * `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
+    * `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
     * `:webhook`: `verify_webhook/3`;
     * `:event_list`: `list_events/2`.
 
@@ -94,6 +99,10 @@ defmodule MishkaPay.Provider do
     :catalog,
     :payment_link,
     :dispute,
+    :usage,
+    :entitlement,
+    :balance,
+    :customer_balance,
     :webhook,
     :event_list,
     :return_verify
@@ -117,6 +126,10 @@ defmodule MishkaPay.Provider do
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
+    * `:usage`: counts what customers use on meters, for prices billed by usage.
+    * `:entitlement`: attaches features to products and tells which ones a customer may use.
+    * `:balance`: reads the seller's balance and the movements that made it.
+    * `:customer_balance`: keeps a customer's store credit, taken off their next bills.
     * `:webhook`: sends signed messages when something changes.
     * `:event_list`: lists the messages it sent, to deliver again those a site missed.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
@@ -136,6 +149,10 @@ defmodule MishkaPay.Provider do
           | :catalog
           | :payment_link
           | :dispute
+          | :usage
+          | :entitlement
+          | :balance
+          | :customer_balance
           | :payment_list
           | :webhook
           | :event_list
@@ -422,6 +439,65 @@ defmodule MishkaPay.Provider do
   @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:usage`. Makes a meter that counts usage reported under its event name."
+  @callback create_meter(MishkaPay.Meter.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. One page of meters; only those of `:status` (`:active`, `:inactive`) when given."
+  @callback list_meters(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. Turns a meter off: it takes no more usage and no new price."
+  @callback deactivate_meter(meter_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. Reports one use by a customer, once for each reference."
+  @callback report_usage(MishkaPay.Usage.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Usage.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:usage`. What a meter counted for `:customer_id` from `:from` to `:to` (both
+  `DateTime`, `:to` after `:from`).
+  """
+  @callback usage_summary(meter_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:entitlement`. Makes a feature a product can give."
+  @callback create_feature(MishkaPay.Feature.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:entitlement`. Attaches a feature to a catalog product, and answers the feature."
+  @callback attach_feature(
+              product_id :: String.t(),
+              feature_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:entitlement`. One page of the features `:customer_id` may use now."
+  @callback list_entitlements(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:balance`. The seller's balance, available and pending, in each currency."
+  @callback fetch_balance(MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Balance.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:balance`. One page of the balance's movements, newest first; only those a `:payout_id`
+  paid out, or of `:type`, when given.
+  """
+  @callback list_balance_transactions(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:customer_balance`. Changes a customer's balance: below zero gives credit."
+  @callback adjust_customer_balance(
+              MishkaPay.CustomerBalanceTransaction.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:customer_balance`. One page of the changes to `:customer_id`'s balance, newest first."
+  @callback list_customer_balance(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
   the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
@@ -498,6 +574,18 @@ defmodule MishkaPay.Provider do
                       fetch_payment_link: 2,
                       list_payment_links: 2,
                       update_payment_link: 2,
+                      create_meter: 2,
+                      list_meters: 2,
+                      deactivate_meter: 2,
+                      report_usage: 2,
+                      usage_summary: 3,
+                      create_feature: 2,
+                      attach_feature: 3,
+                      list_entitlements: 2,
+                      fetch_balance: 1,
+                      list_balance_transactions: 2,
+                      adjust_customer_balance: 2,
+                      list_customer_balance: 2,
                       verify_webhook: 3
 
   @operations %{
@@ -565,6 +653,16 @@ defmodule MishkaPay.Provider do
       list_payment_links: 2,
       update_payment_link: 2
     ],
+    usage: [
+      create_meter: 2,
+      list_meters: 2,
+      deactivate_meter: 2,
+      report_usage: 2,
+      usage_summary: 3
+    ],
+    entitlement: [create_feature: 2, attach_feature: 3, list_entitlements: 2],
+    balance: [fetch_balance: 1, list_balance_transactions: 2],
+    customer_balance: [adjust_customer_balance: 2, list_customer_balance: 2],
     webhook: [verify_webhook: 3]
   }
 

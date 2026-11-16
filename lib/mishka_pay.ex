@@ -63,6 +63,11 @@ defmodule MishkaPay do
     * payment links: `:payment_link_create`, `:payment_link`, `:payment_link_update`,
       `:payment_link_list`;
     * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`;
+    * usage billing: `:meter_create`, `:meter_list`, `:meter_deactivate`, `:usage_report`,
+      `:usage_summary`;
+    * entitlements: `:feature_create`, `:feature_attach`, `:entitlement_list`;
+    * money views: `:balance`, `:balance_transaction_list`, `:customer_balance_adjust`,
+      `:customer_balance_list`;
     * events: `:event_list`.
   """
 
@@ -528,6 +533,179 @@ defmodule MishkaPay do
   def accept_dispute(provider, dispute_id, tenant \\ nil)
       when is_binary(provider) and is_binary(dispute_id) do
     capable(:dispute, :dispute_accept, provider, tenant, & &1.accept_dispute(dispute_id, &2))
+  end
+
+  @doc """
+  Makes a meter from `attrs` (see `MishkaPay.Meter`): its `:event_name`, a `:name`, and its
+  `:aggregation` (`:sum`, `:count` or `:last`). A price with its `:meter_id` and an `:interval`
+  bills what it counts.
+  """
+  @spec create_meter(map()) :: {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+  def create_meter(attrs) when is_map(attrs) do
+    made(:meter_create, :usage, attrs, MishkaPay.Meter, [:provider, :event_name], :create_meter)
+  end
+
+  @doc """
+  One page of meters at `provider` (`MishkaPay.Page`): `status:` only `:active` or `:inactive`
+  ones, plus `limit:` and `after:`.
+  """
+  @spec list_meters(String.t(), term(), keyword()) :: {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_meters(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:usage, :meter_list, provider, tenant, & &1.list_meters(limited(opts), &2))
+  end
+
+  @doc """
+  Turns meter `meter_id` off: it takes no more usage, and no new price can bill it. A provider
+  never deletes a meter.
+  """
+  @spec deactivate_meter(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+  def deactivate_meter(provider, meter_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(meter_id) do
+    capable(:usage, :meter_deactivate, provider, tenant, & &1.deactivate_meter(meter_id, &2))
+  end
+
+  @doc """
+  Reports what a customer used, from `attrs` (see `MishkaPay.Usage`): the meter's
+  `:event_name`, the `:customer_id`, a `:value`, when it happened (`:at`) and a `:reference`, so
+  the same use never counts twice.
+  """
+  @spec report_usage(map()) :: {:ok, MishkaPay.Usage.t()} | {:error, Splode.Error.t()}
+  def report_usage(attrs) when is_map(attrs) do
+    made(:usage_report, :usage, attrs, MishkaPay.Usage, [:provider], :report_usage)
+  end
+
+  @doc """
+  What meter `meter_id` counted for `customer_id` from `from` to `to` (`DateTime`s, `to` not
+  included), as one `MishkaPay.UsageSummary`. A use reported a moment ago may not be counted yet.
+  """
+  @spec usage_summary(String.t(), String.t(), String.t(), DateTime.t(), DateTime.t(), term()) ::
+          {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+  def usage_summary(provider, meter_id, customer_id, from, to, tenant \\ nil)
+      when is_binary(provider) and is_binary(meter_id) and is_binary(customer_id) and
+             is_struct(from, DateTime) and is_struct(to, DateTime) do
+    capable(:usage, :usage_summary, provider, tenant, fn module, keys ->
+      case DateTime.compare(from, to) do
+        :lt ->
+          module.usage_summary(meter_id, [customer_id: customer_id, from: from, to: to], keys)
+
+        _not_after ->
+          MishkaPay.ProviderKit.invalid(:to, Messages.text(:usage_window))
+      end
+    end)
+  end
+
+  @doc """
+  Makes a feature from `attrs` (see `MishkaPay.Feature`): a `:name` and the `:lookup_key` the
+  host checks access by.
+  """
+  @spec create_feature(map()) :: {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+  def create_feature(attrs) when is_map(attrs) do
+    needed = [:provider, :name, :lookup_key]
+    made(:feature_create, :entitlement, attrs, MishkaPay.Feature, needed, :create_feature)
+  end
+
+  @doc """
+  Attaches feature `feature_id` to catalog product `product_id`: a customer who buys the product
+  is entitled to the feature. Answers the feature.
+  """
+  @spec attach_feature(String.t(), String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+  def attach_feature(provider, product_id, feature_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(product_id) and is_binary(feature_id) do
+    capable(
+      :entitlement,
+      :feature_attach,
+      provider,
+      tenant,
+      & &1.attach_feature(product_id, feature_id, &2)
+    )
+  end
+
+  @doc """
+  One page of the features customer `customer_id` may use now (`MishkaPay.Page` of
+  `MishkaPay.Entitlement`), plus `limit:` and `after:`. Check access by their `:lookup_key`.
+  """
+  @spec list_entitlements(String.t(), String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_entitlements(provider, customer_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(customer_id) do
+    opts = opts |> limited() |> Keyword.put(:customer_id, customer_id)
+    capable(:entitlement, :entitlement_list, provider, tenant, & &1.list_entitlements(opts, &2))
+  end
+
+  @doc "The seller's balance at `provider` (`MishkaPay.Balance`): available and pending, per currency."
+  @spec fetch_balance(String.t(), term()) ::
+          {:ok, MishkaPay.Balance.t()} | {:error, Splode.Error.t()}
+  def fetch_balance(provider, tenant \\ nil) when is_binary(provider) do
+    capable(:balance, :balance, provider, tenant, fn module, keys ->
+      module.fetch_balance(keys)
+    end)
+  end
+
+  @doc """
+  One page of the movements of the seller's balance, newest first (`MishkaPay.Page` of
+  `MishkaPay.BalanceTransaction`): `payout_id:` those one payout paid out, `type:` only one kind
+  (the provider's name, such as `"charge"`), plus `limit:` and `after:`.
+  """
+  @spec list_balance_transactions(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_balance_transactions(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :balance,
+      :balance_transaction_list,
+      provider,
+      tenant,
+      & &1.list_balance_transactions(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Changes customer `customer_id`'s balance by `money` (a `Money`, or a map with `:amount` and
+  `:currency`): below zero gives credit taken off their next bills, above zero adds a debit.
+  `description:` says why; `reference:` makes it happen once. Answers the
+  `MishkaPay.CustomerBalanceTransaction` with the balance after.
+  """
+  @spec adjust_customer_balance(String.t(), String.t(), Money.t() | map(), term(), keyword()) ::
+          {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+  def adjust_customer_balance(provider, customer_id, money, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(customer_id) do
+    attrs = %{
+      provider: provider,
+      tenant: tenant,
+      customer_id: customer_id,
+      amount: money,
+      description: opts[:description],
+      reference: opts[:reference]
+    }
+
+    made(
+      :customer_balance_adjust,
+      :customer_balance,
+      attrs,
+      MishkaPay.CustomerBalanceTransaction,
+      [:provider],
+      :adjust_customer_balance
+    )
+  end
+
+  @doc """
+  One page of the changes to customer `customer_id`'s balance, newest first (`MishkaPay.Page` of
+  `MishkaPay.CustomerBalanceTransaction`), plus `limit:` and `after:`.
+  """
+  @spec list_customer_balance(String.t(), String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_customer_balance(provider, customer_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(customer_id) do
+    opts = opts |> limited() |> Keyword.put(:customer_id, customer_id)
+
+    capable(
+      :customer_balance,
+      :customer_balance_list,
+      provider,
+      tenant,
+      & &1.list_customer_balance(opts, &2)
+    )
   end
 
   # A struct built from the caller's map and handed to the provider's `callback`.

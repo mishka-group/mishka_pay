@@ -21,6 +21,7 @@ In Stripe's Dashboard, point each site's endpoint at
 | `invoice.paid`, `invoice.payment_failed`, `invoice.finalized`, `invoice.payment_action_required`, `invoice.voided`, `invoice.marked_uncollectible`, `invoice.overdue`, `invoice.upcoming` | the subscription |
 | `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.trial_will_end` | the subscription |
 | `customer.created`, `customer.updated`, `customer.deleted` | the customer |
+| `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed |
 
 Each listed event is tested to name what it updates. Any other event is verified and stored, and
 changes nothing.

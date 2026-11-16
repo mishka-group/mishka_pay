@@ -38,6 +38,17 @@ defmodule MishkaPay.Providers.Stripe do
       portal is set up (Settings, Billing, Customer portal), in test mode too.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
+    * `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2` and
+      `usage_summary/3` use Billing Meters (`mtr_...`) and meter events, Stripe's basic usage
+      billing; a price with `:meter_id` is a metered price on one. A report's reference makes its
+      `identifier`; Stripe takes reports from the last 35 days and up to 5 minutes ahead, and
+      counts summaries from and to whole minutes.
+    * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
+      (`feat_...`) on products, and the active entitlements of a customer.
+    * `fetch_balance/1` reads the payments balance, and `list_balance_transactions/2` its
+      balance transactions (`txn_...`), by payout (`po_...`) or type.
+    * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
+      (`cbtxn_...`): below zero is credit.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
@@ -80,6 +91,10 @@ defmodule MishkaPay.Providers.Stripe do
       :customer,
       :portal,
       :discount,
+      :usage,
+      :entitlement,
+      :balance,
+      :customer_balance,
       :webhook,
       :event_list
     ]
@@ -145,7 +160,8 @@ defmodule MishkaPay.Providers.Stripe do
     "customer.subscription.trial_will_end" => [:subscription],
     "customer.created" => [:customer],
     "customer.updated" => [:customer],
-    "customer.deleted" => [:customer]
+    "customer.deleted" => [:customer],
+    "entitlements.active_entitlement_summary.updated" => [:customer]
   }
 
   @doc """
@@ -733,6 +749,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def create_price(%Price{} = price, keys) do
     with :ok <- plain_id(price.product_id, :product_id),
+         :ok <- maybe_id(price.meter_id, "mtr_", :meter_id),
          :ok <- currencies([price]),
          :ok <- metadata(price.metadata),
          {:ok, answer} <- request(:post, "/v1/prices", Mapper.price_params(price), keys) do
@@ -867,6 +884,157 @@ defmodule MishkaPay.Providers.Stripe do
              keys
            ) do
       Mapper.payment_link(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_meter(%MishkaPay.Meter{} = meter, keys) do
+    with {:ok, answer} <- request(:post, "/v1/billing/meters", Mapper.meter_params(meter), keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_meters(opts, keys),
+    do: page("/v1/billing/meters", [status: opts[:status]], opts, keys, &Mapper.meter/1)
+
+  @impl MishkaPay.Provider
+  def deactivate_meter(meter_id, keys) do
+    with :ok <- stripe_id(meter_id, "mtr_", :meter_id),
+         {:ok, answer} <-
+           request(:post, "/v1/billing/meters/#{meter_id}/deactivate", %{}, keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  # The reference makes the report's `identifier`, which Stripe never counts twice, and the
+  # request's idempotency key, so a report sent again after a lost answer gets the same answer.
+  @impl MishkaPay.Provider
+  def report_usage(%MishkaPay.Usage{} = usage, keys) do
+    identifier = ProviderKit.idempotency_key("usage", usage.tenant, usage.reference)
+
+    with :ok <- stripe_id(usage.customer_id, "cus_", :customer_id),
+         :ok <- usage_time(usage.at),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/billing/meter_events",
+             Mapper.usage_params(usage, identifier),
+             keys,
+             key: identifier
+           ) do
+      {:ok, Mapper.usage(answer, usage)}
+    end
+  end
+
+  # Stripe takes usage from the last 35 days, and up to 5 minutes ahead for clocks that drift.
+  defp usage_time(nil), do: :ok
+
+  defp usage_time(%DateTime{} = at) do
+    seconds = DateTime.diff(at, DateTime.utc_now())
+
+    case seconds >= -35 * 24 * 60 * 60 and seconds <= 5 * 60 do
+      true -> :ok
+      false -> invalid(:at, Messages.text(:stripe_usage_time))
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def usage_summary(meter_id, opts, keys) do
+    params = Mapper.usage_summary_params(opts[:customer_id], opts[:from], opts[:to])
+
+    with :ok <- stripe_id(meter_id, "mtr_", :meter_id),
+         :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id),
+         {:ok, answer} <-
+           request(:get, "/v1/billing/meters/#{meter_id}/event_summaries", params, keys) do
+      Mapper.usage_summary(answer, meter_id, opts[:customer_id], params)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_feature(%MishkaPay.Feature{} = feature, keys) do
+    with :ok <- metadata(feature.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/entitlements/features", Mapper.feature_params(feature), keys) do
+      Mapper.feature(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def attach_feature(product_id, feature_id, keys) do
+    with :ok <- plain_id(product_id, :product_id),
+         :ok <- stripe_id(feature_id, "feat_", :feature_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/products/#{product_id}/features",
+             %{"entitlement_feature" => feature_id},
+             keys
+           ) do
+      Mapper.feature(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_entitlements(opts, keys) do
+    with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
+      page(
+        "/v1/entitlements/active_entitlements",
+        [customer: opts[:customer_id]],
+        opts,
+        keys,
+        &Mapper.entitlement/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_balance(keys) do
+    with {:ok, answer} <- request(:get, "/v1/balance", [], keys), do: Mapper.balance(answer)
+  end
+
+  @impl MishkaPay.Provider
+  def list_balance_transactions(opts, keys) do
+    with :ok <- maybe_id(opts[:payout_id], "po_", :payout_id),
+         :ok <- maybe_id(opts[:type], "", :type) do
+      page(
+        "/v1/balance_transactions",
+        [payout: opts[:payout_id], type: opts[:type]],
+        opts,
+        keys,
+        &Mapper.balance_transaction/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def adjust_customer_balance(%MishkaPay.CustomerBalanceTransaction{} = txn, keys) do
+    with :ok <- stripe_id(txn.customer_id, "cus_", :customer_id),
+         :ok <- currencies([txn]),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/customers/#{txn.customer_id}/balance_transactions",
+             Mapper.customer_balance_params(txn),
+             keys,
+             key: ProviderKit.idempotency_key("customer-balance", txn.tenant, txn.reference)
+           ) do
+      Mapper.customer_balance_transaction(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_customer_balance(opts, keys) do
+    customer_id = opts[:customer_id]
+
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id) do
+      page(
+        "/v1/customers/#{customer_id}/balance_transactions",
+        [],
+        opts,
+        keys,
+        &Mapper.customer_balance_transaction/1
+      )
     end
   end
 
