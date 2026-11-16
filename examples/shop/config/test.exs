@@ -34,3 +34,6 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Every Mishka Pay HTTP call in a test is answered by its `MishkaPay.Test.stub_http/1`.
+config :mishka_pay, req_options: [plug: {Req.Test, MishkaPay.Client}]

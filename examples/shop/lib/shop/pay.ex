@@ -15,5 +15,12 @@ defmodule Shop.Pay do
     resource Shop.Pay.ClockRun
     resource Shop.Pay.Setting
     resource Shop.Catalog.Product
+    # What the site manages from its admin, each on its Mishka Pay kind.
+    resource Shop.Pay.CatalogProduct
+    resource Shop.Pay.CatalogPrice
+    resource Shop.Pay.Coupon
+    resource Shop.Pay.PromotionCode
+    resource Shop.Pay.PaymentLink
+    resource Shop.Pay.Invoice
   end
 end
