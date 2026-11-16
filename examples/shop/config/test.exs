@@ -21,6 +21,10 @@ config :shop, ShopWeb.Endpoint,
   secret_key_base: "PeSJLwP3OiIerezww1t5l/3MVCMNkQ8MgDD/peDxaJQzBZq+kjFQ4rhqsyP6Eai6",
   server: false
 
+# Every Mishka Pay HTTP call answers from the test's own stub (`MishkaPay.Test.stub_http/1`):
+# no test reaches Stripe, even with a key in `.env`.
+config :mishka_pay, req_options: [plug: {Req.Test, MishkaPay.Client}]
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

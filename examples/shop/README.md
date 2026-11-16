@@ -32,6 +32,12 @@ without leaning on text or layout.
 | **Customers** | `Shop.Pay.Customer` rows: register, edit, sync, open Stripe's customer portal (`:portal`) |
 | **Coupons** and promotion codes | `MishkaPay.create_coupon/1` (percent or amount, once, repeating or forever, a use limit) and `create_promotion_code/1` (for one customer only, first order, a minimum, an end date, a use limit) |
 | **Disputes**, live | `Shop.Pay.Dispute` rows from `charge.dispute.*` webhooks or **Read disputes**; evidence (`:submit_evidence`) and **Accept the loss** (`:accept`). Pay with 4000 0000 0000 0259 to make one |
+| **Members and access** | sign in by email (`Shop.Accounts.Member`, a demo with no password, kept in the session); a plan bought while signed in runs `:start_checkout` with the member as the actor, so the subscription belongs to them (`belongs_to_user`); the members-only post opens when `MishkaPay.Ash.subscribed?/3` says so; the member's rows with `active?`, `on_trial?` and `canceling?` |
+| **Refunds and held payments** | per payment row, **Refunds** runs the generic `:refunds` action; a pay-later payment (`:authorized`) is taken, all or part, with `MishkaPay.capture_payment/4` or let go with `cancel_payment/3`; one refund read by its id (`fetch_refund/3`) |
+| **Checkout options** | phone, terms, up to three questions (text, numbers, dropdown), description, card statement suffix (refused while merchant of record is on), the pay button's word, a trial without a card, shipping countries and an inline rate, pay later (`capture: :manual`); on Stripe's page or embedded in this one (`ui_mode: :embedded`, mounted by Stripe.js); **Read it back** shows the phone, answers, terms, shipping address and items sold |
+| **Saved cards and portal links** | a setup checkout (`mode: :setup`) saves a card without charging; the customer's cards (`list_payment_methods/3`), made default or taken off; Stripe's portal opened on one task (`portal_session/1` with `flow:`): update the card, cancel or change a subscription |
+| **One-off bills** | `MishkaPay.create_invoice/1` for a customer, then finalize, email, mark paid by other means, void, mark uncollectible or delete, with the status, number, page and PDF after each step |
+| **Find customers, preview bills** | `search_customers/3` by email, name or reference; a subscription's next bill (`:upcoming_invoice`) and a plan or quantity change's bill (`:preview_change`) |
 | Every list, live in every tab | `Shop.Pay.Broadcast` (`use MishkaPay.PubSub`) sends each change to the site's topic, and every open page updates |
 
 ## Run it
@@ -42,6 +48,8 @@ Put the key in `examples/shop/.env` (it is in `.gitignore`, so it never reaches 
 
 ```bash
 STRIPE_SECRET_KEY=sk_test_...
+# Only for the embedded checkout: the publishable key, which Stripe.js gets in the page.
+STRIPE_PUBLISHABLE_KEY=pk_test_...
 ```
 
 Then:

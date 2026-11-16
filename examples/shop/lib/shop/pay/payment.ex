@@ -8,6 +8,7 @@ defmodule Shop.Pay.Payment do
 
   mishka_pay do
     kind :payment
+    belongs_to_user Shop.Accounts.Member
   end
 
   postgres do
