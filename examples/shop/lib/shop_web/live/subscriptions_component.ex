@@ -421,7 +421,7 @@ defmodule ShopWeb.SubscriptionsComponent do
         </div>
 
         <.change_panel
-          :if={active?(@selected)}
+          :if={active?(@selected) and changes?(@selected)}
           selected={@selected}
           plans={@plans}
           preview={@preview}
@@ -715,6 +715,10 @@ defmodule ShopWeb.SubscriptionsComponent do
   defp done("sync"), do: "Subscription read again and saved."
 
   defp label(%{provider: provider}), do: MishkaPay.Provider.label_of(provider)
+
+  # A plan or quantity change is offered only by a provider that can make one (Stripe; not PayPal).
+  defp changes?(%{provider: provider}),
+    do: match?({:ok, _provider}, MishkaPay.Provider.capable(provider, :subscription_change))
 
   # A typed id names its provider: PayPal's subscriptions are `I-...`, Stripe's `sub_...`.
   defp provider_of("I-" <> _paypal), do: "paypal"
