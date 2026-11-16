@@ -40,6 +40,10 @@ defmodule Mix.Tasks.MishkaPay.Install.Docs do
         when the project has no such setting, and `:mishka_pay` in the formatter's `import_deps`
         (its DSL is written without parentheses). It needs ash_postgres and ash_oban
         (`mix igniter.install ash_postgres ash_oban`), then `mix ash.codegen mishka_pay`.
+      * `--admin`: with `--ash` (which it turns on), the provider objects a site manages from its
+        admin as resources too: products, prices, coupons, promotion codes, payment links and
+        bills, each synced by its webhooks (`MishkaPay.Ash.Object.Spec`). Run it again on a
+        project installed without it to add them.
       * `--pubsub`: `<App>.Pay.Broadcast`, Mishka Pay's PubSub plugin on the project's
         `<App>.PubSub`.
     """
@@ -65,13 +69,22 @@ if Code.ensure_loaded?(Igniter) do
       {"Dispute", :dispute, "pay_disputes"}
     ]
 
+    @admin_resources [
+      {"Product", :product, "pay_products"},
+      {"Price", :price, "pay_prices"},
+      {"Coupon", :coupon, "pay_coupons"},
+      {"PromotionCode", :promotion_code, "pay_promotion_codes"},
+      {"PaymentLink", :payment_link, "pay_payment_links"},
+      {"Invoice", :invoice, "pay_invoices"}
+    ]
+
     @impl Igniter.Mix.Task
     def info(_argv, _composing_task) do
       %Igniter.Mix.Task.Info{
         group: :mishka_pay,
         example: __MODULE__.Docs.example(),
-        schema: [ash: :boolean, pubsub: :boolean],
-        defaults: [ash: false, pubsub: false]
+        schema: [ash: :boolean, admin: :boolean, pubsub: :boolean],
+        defaults: [ash: false, admin: false, pubsub: false]
       }
     end
 
@@ -100,7 +113,9 @@ if Code.ensure_loaded?(Igniter) do
         [:auto_start_exchange_rate_service],
         false
       )
-      |> then(&if(options[:ash], do: ash(&1, app_name), else: &1))
+      |> then(
+        &if(options[:ash] or options[:admin], do: ash(&1, app_name, options[:admin]), else: &1)
+      )
       |> then(&if(options[:pubsub], do: pubsub(&1), else: &1))
       |> Igniter.add_notice("""
       Mishka Pay is set up.
@@ -256,7 +271,9 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
-    defp ash(igniter, app_name) do
+    defp ash(igniter, app_name, admin?) do
+      resources = @resources ++ ((admin? && @admin_resources) || [])
+
       domain = Igniter.Project.Module.module_name(igniter, "Pay")
       repo = Igniter.Project.Module.module_name(igniter, "Repo")
 
@@ -264,18 +281,19 @@ if Code.ensure_loaded?(Igniter) do
       igniter = Igniter.Project.Formatter.import_dep(igniter, :mishka_pay)
 
       igniter =
-        Enum.reduce(@resources, igniter, fn {name, kind, table}, igniter ->
+        Enum.reduce(resources, create_once(igniter, domain, domain_body()), fn {name, kind, table},
+                                                                               igniter ->
           resource = Module.concat(domain, name)
 
           igniter
           |> create_once(resource, resource_body(domain, kind, table, repo))
+          |> add_resource(domain, resource)
           |> Application.add_new_child(Module.concat(resource, MishkaPayListener),
             after: [MishkaPay.Registry]
           )
         end)
 
       igniter
-      |> create_once(domain, domain_body(domain))
       |> Config.configure_new("config.exs", app_name, [:ash_domains], [])
       |> Config.configure(
         "config.exs",
@@ -315,17 +333,33 @@ if Code.ensure_loaded?(Igniter) do
       """
     end
 
-    defp domain_body(domain) do
-      resources =
-        Enum.map_join(@resources, "\n", fn {name, _kind, _table} ->
-          "    resource #{inspect(Module.concat(domain, name))}"
-        end)
+    # The resource in the domain's `resources` block, unless it is there.
+    defp add_resource(igniter, domain, resource) do
+      Igniter.Project.Module.find_and_update_module!(igniter, domain, fn zipper ->
+        with {:ok, zipper} <-
+               Function.move_to_function_call_in_current_scope(zipper, :resources, 1),
+             {:ok, zipper} <- Common.move_to_do_block(zipper),
+             :error <-
+               Function.move_to_function_call_in_current_scope(
+                 zipper,
+                 :resource,
+                 [1, 2],
+                 &Function.argument_equals?(&1, 0, resource)
+               ) do
+          {:ok, Common.add_code(zipper, "resource #{inspect(resource)}")}
+        else
+          _there -> {:ok, zipper}
+        end
+      end)
+    end
 
+    # The domain alone: each resource is added to its `resources` block after, so a run with
+    # `--admin` on an installed project adds the new ones.
+    defp domain_body do
       """
       use Ash.Domain
 
       resources do
-      #{resources}
       end
       """
     end

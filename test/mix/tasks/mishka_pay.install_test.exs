@@ -92,4 +92,32 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
     assert payment =~ ~r/mishka_pay do\s+kind[( ]:payment\)?\s+end/
     refute Rewrite.has_source?(igniter.rewrite, "lib/test/pay/payment_sync.ex")
   end
+
+  test "--admin adds the site-managed kinds to the domain, also on a project installed without them" do
+    installed =
+      phx_test_project()
+      |> Igniter.compose_task("mishka_pay.install", ["--ash"])
+      |> apply_igniter!()
+
+    igniter =
+      installed
+      |> Igniter.compose_task("mishka_pay.install", ["--admin"])
+      |> assert_creates("lib/test/pay/product.ex")
+      |> assert_creates("lib/test/pay/invoice.ex")
+      |> assert_has_patch("lib/test/application.ex", """
+      + |      Test.Pay.Invoice.MishkaPayListener,
+      """)
+
+    assert igniter.issues == []
+
+    domain = igniter.rewrite |> Rewrite.source!("lib/test/pay.ex") |> Rewrite.Source.get(:content)
+
+    for name <- ~w(WebhookEvent Payment Product Price Coupon PromotionCode PaymentLink Invoice),
+        do: assert(domain =~ ~r/resource[( ]Test\.Pay\.#{name}\b/)
+
+    assert igniter
+           |> apply_igniter!()
+           |> Igniter.compose_task("mishka_pay.install", ["--admin"])
+           |> assert_unchanged()
+  end
 end
