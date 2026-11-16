@@ -17,6 +17,15 @@ defmodule MishkaPay.TestKitTest do
     :ok
   end
 
+  test "a plugin already running, as a host's application starts its provider, is only awaited" do
+    pid = Process.whereis(Stripe)
+    assert is_pid(pid)
+
+    assert :ok = MishkaPay.Test.start_plugin!(Stripe)
+    assert Process.whereis(Stripe) == pid
+    assert {:ok, Stripe} = MishkaPay.Provider.fetch("stripe")
+  end
+
   test "a signed event checks out with Stripe's own verification, and a wrong secret does not" do
     object = MishkaPay.Test.stripe_object(:dispute, %{"payment_intent" => "pi_9"})
     {body, headers} = MishkaPay.Test.signed_event("charge.dispute.created", object, @secret)

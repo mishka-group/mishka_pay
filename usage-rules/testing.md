@@ -36,6 +36,8 @@ end
   (Orders, captures, refunds, plans, subscriptions, webhook checks); `MishkaPay.Test.PayPal.order/3`
   and `subscription/3` put one in a state (`"APPROVED"`, `"ACTIVE"`...). A webhook message passes
   PayPal's check when its `paypal-transmission-sig` header is `"good"`.
+- `MishkaPay.Test.start_plugin!/1` only awaits a plugin the host's application already runs (a
+  host that starts its providers, as Mishka CMS does), so a test can name it either way.
 - Sandbox tests run only when the keys are in the environment (`.env` locally); without them the
   stand-ins answer, so CI needs no secrets.
 - Test your webhook code without a provider: `MishkaPay.Test.deliver_event(tenant, type, object,
