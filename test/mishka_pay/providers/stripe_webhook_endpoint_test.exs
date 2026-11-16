@@ -84,6 +84,17 @@ defmodule MishkaPay.Providers.StripeWebhookEndpointTest do
     end
   end
 
+  test "an address that is not an https URL is refused before any request" do
+    MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+    for url <- ["not a url", "ftp://shop.test/x", "http://shop.test/pay", ""] do
+      assert {:error, %MishkaPay.Errors.Invalid{errors: [%{field: :url}]}} =
+               WebhookEndpoint.check("site-a", url)
+
+      assert {:error, %MishkaPay.Errors.Invalid{}} = WebhookEndpoint.ensure("site-a", url)
+    end
+  end
+
   test "no endpoint at the URL is said, and a wrong id is refused before any request" do
     stripe([])
     assert {:ok, %{endpoint: nil, missing: missing}} = WebhookEndpoint.check("site-a", @url)

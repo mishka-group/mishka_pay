@@ -110,6 +110,7 @@ defmodule MishkaPay.Messages do
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
+          | :endpoint_url
           | :dropdown_options
           | :declined
           | :declined_reason
@@ -560,6 +561,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
+      )
+
+  defp msgid(:endpoint_url),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The webhook address must be an https URL, such as https://shop.example/pay/webhooks/stripe"
       )
 
   defp msgid(:subscription_of_another),
