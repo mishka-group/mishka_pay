@@ -37,6 +37,6 @@ defmodule MishkaPay.ErrorsTest do
 
   test "messages name the provider and its reason" do
     assert Exception.message(declined()) == "stripe declined the payment: card_declined"
-    assert Exception.message(unsupported()) == "acme cannot do refund"
+    assert Exception.message(unsupported()) == "Acme cannot do refund"
   end
 end
