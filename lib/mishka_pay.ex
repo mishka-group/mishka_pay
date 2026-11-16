@@ -606,12 +606,18 @@ defmodule MishkaPay do
 
   @doc """
   The invoice `change_subscription/1` would make with the same `attrs`, with its proration lines,
-  without changing anything. Pass its `:proration_date` to the change to bill exactly this.
+  without changing anything. When the change prorates and `attrs` has no `:proration_date`, it
+  counts from now: give the same `:proration_date` to both calls to bill exactly the preview.
   """
   @spec preview_subscription_change(map()) ::
           {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
   def preview_subscription_change(attrs) when is_map(attrs) do
-    attrs = Map.put_new_lazy(attrs, :proration_date, &DateTime.utc_now/0)
+    attrs =
+      case MishkaPay.SubscriptionChange.prorates?(attrs) do
+        true -> Map.put_new_lazy(attrs, :proration_date, &DateTime.utc_now/0)
+        false -> attrs
+      end
+
     changed(:subscription_preview, attrs, :preview_subscription_change)
   end
 

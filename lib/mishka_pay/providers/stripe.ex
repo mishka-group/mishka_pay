@@ -836,7 +836,7 @@ defmodule MishkaPay.Providers.Stripe do
        provider: "stripe",
        status: status,
        code: code_of(error),
-       param: error["param"],
+       param: field_of(error["param"]),
        message: error["message"]
      )}
   end
@@ -846,16 +846,44 @@ defmodule MishkaPay.Providers.Stripe do
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
 
+  # Stripe's names of the fields Mishka Pay calls otherwise; any other is kept as Stripe says it.
+  @fields [
+    {"subscription_data", "trial_days"},
+    {"restrictions", "max_purchases"},
+    {"proration_behavior", "proration"},
+    {"invoice_creation", "invoice"},
+    {"managed_payments", "merchant_of_record"},
+    {"after_completion", "success_url"}
+  ]
+
+  defp field_of(nil), do: nil
+
+  defp field_of(param) do
+    cond do
+      param =~ "adjustable_quantity][minimum]" ->
+        "quantity_min"
+
+      param =~ "adjustable_quantity][maximum]" ->
+        "quantity_max"
+
+      true ->
+        Enum.find_value(@fields, param, fn {stripe, ours} ->
+          String.starts_with?(param, stripe) && ours
+        end)
+    end
+  end
+
   # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
-  # its words.
+  # its words; so is an invoice turned off where Managed Payments must make one.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
 
   defp code_of(%{"code" => code}) when is_binary(code), do: code
 
   defp code_of(%{"message" => message}) when is_binary(message) do
-    case String.contains?(message, "already exists") do
-      true -> "already_exists"
-      false -> nil
+    cond do
+      String.contains?(message, "already exists") -> "already_exists"
+      String.contains?(message, "when Managed Payments is enabled") -> "managed_payments_invoice"
+      true -> nil
     end
   end
 

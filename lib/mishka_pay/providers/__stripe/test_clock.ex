@@ -36,6 +36,8 @@ defmodule MishkaPay.Providers.Stripe.TestClock do
 
     field :status, :ready | :advancing | :failed,
       derives: "validate(enum=Atom[ready::advancing::failed])"
+
+    field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 
   @doc "Makes a clock frozen at `:at` (now by default), with an optional `:name`."
@@ -104,7 +106,8 @@ defmodule MishkaPay.Providers.Stripe.TestClock do
       id: clock["id"],
       name: clock["name"],
       frozen_time: clock["frozen_time"] && DateTime.from_unix!(clock["frozen_time"]),
-      status: Map.get(@statuses, clock["status"])
+      status: Map.get(@statuses, clock["status"]),
+      created_at: clock["created"] && DateTime.from_unix!(clock["created"])
     }
   end
 

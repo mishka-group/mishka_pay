@@ -440,12 +440,21 @@ defmodule MishkaPayTest do
       assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
                MishkaPay.update_payment_link(%{provider: "acme", active: false})
 
-      assert {:error, %Errors.Invalid{errors: [%{field: :quantity_min}]}} =
+      for {min, max} <- [{5, 2}, {2, 2}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :quantity_min}]}} =
+                 MishkaPay.create_payment_link(%{
+                   provider: "acme",
+                   items: [%{id: "price_1"}],
+                   quantity_min: min,
+                   quantity_max: max
+                 })
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :quantity_max}]}} =
                MishkaPay.create_payment_link(%{
                  provider: "acme",
                  items: [%{id: "price_1"}],
-                 quantity_min: 5,
-                 quantity_max: 2
+                 quantity_max: 1_000_000
                })
 
       assert {:error, %Errors.Invalid{errors: [%{field: :success_url}]}} =
@@ -546,6 +555,16 @@ defmodule MishkaPayTest do
 
       assert {:error, %Errors.Invalid{errors: [%{field: :proration}]}} =
                MishkaPay.change_subscription(Map.put(change, :proration, "sometimes"))
+
+      for with_date <- [%{proration: :none}, %{billing_cycle_anchor: :now}] do
+        attrs = change |> Map.merge(with_date) |> Map.put(:proration_date, DateTime.utc_now())
+
+        assert {:error, %Errors.Invalid{errors: [%{field: :proration_date}]}} =
+                 MishkaPay.change_subscription(attrs)
+
+        assert {:ok, %MishkaPay.Invoice{}} =
+                 MishkaPay.preview_subscription_change(Map.merge(change, with_date))
+      end
     end
 
     test "collection pauses with the behavior the caller chose, resumes, and an invoice is read" do

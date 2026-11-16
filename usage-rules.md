@@ -249,7 +249,7 @@ Match the error's struct. Show people plain words, never `inspect(error)`:
 |---|---|---|
 | `MishkaPay.Errors.Invalid` | bad input; `errors` has each field | show it on the field |
 | `MishkaPay.Errors.Declined` | the card or buyer was declined (`reason`) | ask for another payment method |
-| `MishkaPay.Errors.Rejected` | the provider refused the request (`status`, `code`) | log it (its `message` is the provider's own words, for the log only); often keys or ids |
+| `MishkaPay.Errors.Rejected` | the provider refused the request (`status`, `code`, `param`: the field, by Mishka Pay's name when it has one) | log it (its `message` is the provider's own words, for the log only); often keys or ids |
 | `MishkaPay.Errors.Refused` | the host's own checkout gate said no | show its reason |
 | `MishkaPay.Errors.Unsupported` | the provider cannot do it (`operation`) | pick another provider or path |
 | `MishkaPay.Errors.MissingCredentials` | no keys for that provider and tenant | the site must add keys |

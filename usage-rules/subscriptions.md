@@ -61,6 +61,8 @@ change = %{provider: "stripe", tenant: site.id, subscription_id: sub.id,
 
 - `preview_subscription_change/1` sets `:proration_date` to now when it is not given; pass the
   same date to `change_subscription/1` so it bills exactly the preview's `amount_due`.
+- A `:proration_date` goes only with prorations: not with `proration: :none`, and not with
+  `billing_cycle_anchor: :now` (both are refused before the provider).
 - A subscription of several items needs `item_id:` (each item's `:item_id`).
 - `billing_cycle_anchor: :now` starts a new period at once; `payment_behavior:` says what happens
   when charging the difference fails. Every option left out is the provider's default.

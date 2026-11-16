@@ -17,7 +17,8 @@ defmodule MishkaPay.SubscriptionChange do
       credit and charge wait for the next invoice), `:always_invoice` (bill it now) or `:none`
       (no credit, no charge until the next period).
     * `:proration_date`: the moment the difference is counted from; give the one a preview used,
-      so the change bills exactly what the preview showed.
+      so the change bills exactly what the preview showed. It goes only with prorations, and not
+      with `billing_cycle_anchor: :now` (a new period has nothing to prorate from).
     * `:billing_cycle_anchor`: `:now` starts a new period at once; `:unchanged` (the default)
       keeps the dates.
     * `:payment_behavior`: what happens when charging the difference fails:
@@ -86,10 +87,30 @@ defmodule MishkaPay.SubscriptionChange do
   def something(attrs) do
     case Enum.any?([:price_id, :quantity, :billing_cycle_anchor], &(attrs[&1] not in [nil, ""])) do
       true ->
-        {:ok, attrs}
+        dated(attrs)
 
       false ->
         {:error, %{field: :price_id, action: :change, message: Messages.text(:change_nothing)}}
     end
+  end
+
+  # A proration date dates prorations: none with no proration, none with a new period now.
+  defp dated(%{proration_date: %DateTime{}} = attrs) do
+    case prorates?(attrs) do
+      true ->
+        {:ok, attrs}
+
+      false ->
+        {:error,
+         %{field: :proration_date, action: :change, message: Messages.text(:proration_date)}}
+    end
+  end
+
+  defp dated(attrs), do: {:ok, attrs}
+
+  @doc false
+  # Whether the change has prorations a date can count from.
+  def prorates?(attrs) do
+    attrs[:proration] not in [:none, "none"] and attrs[:billing_cycle_anchor] not in [:now, "now"]
   end
 end

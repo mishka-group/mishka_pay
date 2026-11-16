@@ -237,7 +237,7 @@ defmodule MishkaPay.Providers.StripeTest do
         })
       end)
 
-      assert {:error, %Errors.Rejected{param: "subscription_data[trial_period_days]"} = error} =
+      assert {:error, %Errors.Rejected{param: "trial_days"} = error} =
                MishkaPay.create_payment_link(%{
                  provider: "stripe",
                  items: [%{id: "price_1"}],
@@ -245,7 +245,7 @@ defmodule MishkaPay.Providers.StripeTest do
                })
 
       assert Exception.message(error) ==
-               "stripe refused the value of subscription_data[trial_period_days] (HTTP 400)"
+               "stripe refused the value of trial_days (HTTP 400)"
     end
 
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do

@@ -66,8 +66,8 @@ defmodule MishkaPay.PaymentLink do
     field :inactive_message, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=500)"
 
-    field :quantity_min, pos_integer(), derives: "validate(integer, min_len=1)"
-    field :quantity_max, pos_integer(), derives: "validate(integer, min_len=1)"
+    field :quantity_min, pos_integer(), derives: "validate(integer, min_len=1, max_len=999999)"
+    field :quantity_max, pos_integer(), derives: "validate(integer, min_len=1, max_len=999999)"
 
     field :customer_creation, :always | :if_required,
       derives: "validate(enum=Atom[always::if_required])",
@@ -100,7 +100,7 @@ defmodule MishkaPay.PaymentLink do
   def catalog_items(attrs), do: quantity_range(attrs)
 
   defp quantity_range(%{quantity_min: min, quantity_max: max})
-       when is_integer(min) and is_integer(max) and min > max,
+       when is_integer(min) and is_integer(max) and min >= max,
        do:
          {:error,
           %{field: :quantity_min, action: :quantity, message: Messages.text(:quantity_range)}}

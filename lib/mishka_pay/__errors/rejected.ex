@@ -12,7 +12,10 @@ defmodule MishkaPay.Errors.Rejected do
     * `:code`: its own short code, such as `"resource_missing"`, when it gave one;
       `"idempotency_error"` when a reference was reused with other details, `"already_exists"`
       when a code or id is taken.
-    * `:param`: the field of the request it refused, when it named one.
+    * `:param`: the field it refused, when it named one: under Mishka Pay's own name when it has
+      one (`"trial_days"`, `"quantity_min"`), as the provider said it otherwise.
+      `code: "managed_payments_invoice"` is an invoice turned off where the provider, as merchant of
+      record, must make one.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
@@ -26,6 +29,8 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{provider: provider, code: "resource_missing"}),
     do: Messages.text(:rejected_missing, provider: provider)
+
+  def message(%{code: "managed_payments_invoice"}), do: Messages.text(:managed_payments_invoice)
 
   def message(%{provider: provider, code: "already_exists"}),
     do: Messages.text(:rejected_exists, provider: provider)

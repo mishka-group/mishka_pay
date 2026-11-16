@@ -20,6 +20,19 @@ defmodule MishkaPay.Test do
 
       config :mishka_pay, req_options: [plug: {Req.Test, MishkaPay.Client}]
 
+  ## Webhooks without a provider
+
+  `signed_event/4` makes a Stripe event, signed the way Stripe signs it, and `deliver_event/5`
+  posts it through `MishkaPay.Webhook` as a test request; `stripe_object/2` gives one object of
+  each kind Mishka Pay acts on, so a host tests its own listeners end to end:
+
+      conn =
+        MishkaPay.Test.deliver_event("site-a", "charge.dispute.created",
+          MishkaPay.Test.stripe_object(:dispute, %{"payment_intent" => "pi_1"}),
+          "whsec_test")
+
+      assert conn.status == 200
+
   ## In a test
 
       test "a checkout with Acme" do
@@ -158,5 +171,91 @@ defmodule MishkaPay.Test do
       true -> :ok
       false -> drain()
     end
+  end
+
+  @objects %{
+    payment_intent: %{
+      "object" => "payment_intent",
+      "id" => "pi_test",
+      "amount" => 1999,
+      "currency" => "usd",
+      "status" => "succeeded"
+    },
+    checkout_session: %{
+      "object" => "checkout.session",
+      "id" => "cs_test",
+      "payment_intent" => "pi_test",
+      "status" => "complete"
+    },
+    charge: %{"object" => "charge", "id" => "ch_test", "payment_intent" => "pi_test"},
+    refund: %{"object" => "refund", "id" => "re_test", "payment_intent" => "pi_test"},
+    dispute: %{
+      "object" => "dispute",
+      "id" => "du_test",
+      "payment_intent" => "pi_test",
+      "status" => "needs_response"
+    },
+    invoice: %{
+      "object" => "invoice",
+      "id" => "in_test",
+      "parent" => %{"subscription_details" => %{"subscription" => "sub_test"}}
+    },
+    subscription: %{"object" => "subscription", "id" => "sub_test", "status" => "active"},
+    customer: %{"object" => "customer", "id" => "cus_test", "email" => "buyer@example.com"}
+  }
+
+  @doc """
+  One Stripe object of `kind` (`:payment_intent`, `:checkout_session`, `:charge`, `:refund`,
+  `:dispute`, `:invoice`, `:subscription` or `:customer`), with the ids Mishka Pay reads from it,
+  and `overrides` merged on top.
+  """
+  @spec stripe_object(atom(), map()) :: map()
+  def stripe_object(kind, overrides \\ %{}) do
+    @objects |> Map.fetch!(kind) |> Map.merge(overrides)
+  end
+
+  @doc """
+  A Stripe event of `type` about `object`, signed with webhook `secret` the way Stripe signs it:
+  `{body, headers}`, ready to post. `opts`: `id:` (`"evt_test_..."` by default), `livemode:`
+  (`false`), `at:` the signing time (now).
+  """
+  @spec signed_event(String.t(), map(), String.t(), keyword()) ::
+          {binary(), [{String.t(), String.t()}]}
+  def signed_event(type, object, secret, opts \\ [])
+      when is_binary(type) and is_map(object) and is_binary(secret) do
+    at = Keyword.get_lazy(opts, :at, fn -> System.system_time(:second) end)
+
+    body =
+      JSON.encode!(%{
+        "id" =>
+          Keyword.get_lazy(opts, :id, fn -> "evt_test_#{System.unique_integer([:positive])}" end),
+        "object" => "event",
+        "type" => type,
+        "created" => at,
+        "livemode" => Keyword.get(opts, :livemode, false),
+        "data" => %{"object" => object}
+      })
+
+    signature = MishkaPay.Providers.Stripe.signature(body, at, secret)
+
+    {body,
+     [{"content-type", "application/json"}, {"stripe-signature", "t=#{at},v1=#{signature}"}]}
+  end
+
+  @doc """
+  Posts a signed Stripe event for `tenant` through `MishkaPay.Webhook` and answers the test
+  connection. `opts` also takes `at:` the webhook path (`"/pay/webhooks"`).
+  """
+  @spec deliver_event(term(), String.t(), map(), String.t(), keyword()) :: Plug.Conn.t()
+  def deliver_event(tenant, type, object, secret, opts \\ []) do
+    {body, headers} = signed_event(type, object, secret, opts)
+    at = Keyword.get(opts, :at, "/pay/webhooks")
+
+    headers
+    |> Enum.reduce(Plug.Test.conn(:post, "#{at}/stripe/#{tenant}", body), fn {name, value},
+                                                                             conn ->
+      Plug.Conn.put_req_header(conn, name, value)
+    end)
+    |> MishkaPay.Webhook.call(MishkaPay.Webhook.init(at: at))
   end
 end

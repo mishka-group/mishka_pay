@@ -175,7 +175,7 @@ defmodule MishkaPay.Support.Acme do
   def preview_subscription_change(change, %{secret_key: "sk_acme"}) do
     Invoice.builder(%{
       provider: "acme",
-      id: "acme_upcoming_#{DateTime.to_unix(change.proration_date)}",
+      id: "acme_upcoming_#{change.proration_date && DateTime.to_unix(change.proration_date)}",
       status: :draft,
       amount_due: Elixir.Money.new(:USD, "4.50"),
       lines: [

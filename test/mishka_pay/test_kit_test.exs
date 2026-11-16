@@ -3,61 +3,67 @@
 # SPDX-License-Identifier: Apache-2.0
 
 defmodule MishkaPay.TestKitTest do
-  # The kit's keys and HTTP stubs belong to each test, so these run side by side.
-  use ExUnit.Case, async: true
+  # Starts the Stripe plugin and a listener, which every test sees.
+  use ExUnit.Case, async: false
 
-  alias MishkaPay.{Client, Credentials, Errors, ProviderCase}
+  alias MishkaPay.Providers.Stripe
+  alias MishkaPay.Support.{EventListener, StripeMock}
 
-  test "put_keys answers this test's keys, for one tenant or for every tenant" do
-    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_any"})
-    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a"}, "site-a")
+  @secret "whsec_test_kit"
 
-    assert {:ok, %{secret_key: "sk_test_a"}} = Credentials.fetch("acme", "site-a")
-    assert {:ok, %{secret_key: "sk_test_any"}} = Credentials.fetch("acme", "site-b")
-    assert {:error, %Errors.MissingCredentials{}} = Credentials.fetch("other", "site-a")
+  setup do
+    MishkaPay.Test.start_plugin!(Stripe)
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_kit", webhook_secret: @secret})
+    :ok
   end
 
-  test "a task the test starts sees its keys, and a process it did not start does not" do
-    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_task"})
+  test "a signed event checks out with Stripe's own verification, and a wrong secret does not" do
+    object = MishkaPay.Test.stripe_object(:dispute, %{"payment_intent" => "pi_9"})
+    {body, headers} = MishkaPay.Test.signed_event("charge.dispute.created", object, @secret)
 
-    assert {:ok, %{secret_key: "sk_test_task"}} =
-             fn -> Credentials.fetch("acme") end |> Task.async() |> Task.await()
+    {:ok, keys} =
+      MishkaPay.Credentials.builder(%{
+        provider: "stripe",
+        secret_key: "sk",
+        webhook_secret: @secret
+      })
 
-    test = self()
-    # Monitored as it starts, so its exit is always reported as :normal.
-    {stranger, ref} = spawn_monitor(fn -> send(test, {:stranger, Credentials.fetch("acme")}) end)
+    assert {:ok, %MishkaPay.Event{dispute_id: "du_test", payment_id: "pi_9"}} =
+             Stripe.verify_webhook(body, headers, keys)
 
-    assert_receive {:stranger, {:error, %Errors.MissingCredentials{}}}
-    assert_receive {:DOWN, ^ref, :process, ^stranger, :normal}
+    assert {:error, %MishkaPay.Errors.BadSignature{}} =
+             Stripe.verify_webhook(body, headers, %{keys | webhook_secret: "whsec_other"})
   end
 
-  test "keys put by another test are never seen" do
-    other =
-      Task.async(fn ->
-        MishkaPay.Test.Keys.put(self(), "acme", :any, %{secret_key: "sk_test_other"})
-        :ok
-      end)
+  test "a delivered event reaches the host's listeners for its tenant" do
+    MishkaPay.Test.start_plugin!(EventListener)
 
-    Task.await(other)
-    assert {:error, %Errors.MissingCredentials{}} = Credentials.fetch("acme")
+    conn =
+      MishkaPay.Test.deliver_event(
+        "site-a",
+        "customer.subscription.updated",
+        MishkaPay.Test.stripe_object(:subscription),
+        @secret
+      )
+
+    assert conn.status == 200
+
+    assert_received {:webhook_event,
+                     %MishkaPay.Event{subscription_id: "sub_test", tenant: "site-a"}}
+
+    assert MishkaPay.Test.deliver_event("site-a", "x.y", %{}, "whsec_wrong").status == 400
   end
 
-  test "stub_http answers every client request of this test" do
-    MishkaPay.Test.stub_http(&Req.Test.json(&1, %{"id" => "ch_1"}))
+  @tag :stripe_mock
+  test "old test clocks are listed by a dry run and deleted by the task, test keys only" do
+    MishkaPay.Test.stub_http(&StripeMock.forward/1)
+    Mix.shell(Mix.Shell.Process)
+    on_exit(fn -> Mix.shell(Mix.Shell.IO) end)
 
-    assert {:ok, %Req.Response{status: 200, body: %{"id" => "ch_1"}}} =
-             Client.request(%{
-               provider: "acme",
-               base_url: "https://api.acme.test",
-               path: "/v1/charges"
-             })
-  end
+    Mix.Tasks.MishkaPay.Stripe.CleanClocks.run(["--older-than", "0", "--dry-run"])
+    assert_received {:mix_shell, :info, ["would delete clock_" <> _]}
 
-  test "the contract fails for a module that is not a provider, naming everything missing" do
-    error = assert_raise ExUnit.AssertionError, fn -> ProviderCase.assert_declaration(Enum) end
-    for callback <- ["id/0", "label/0", "capabilities/0"], do: assert(error.message =~ callback)
-
-    error = assert_raise ExUnit.AssertionError, fn -> ProviderCase.assert_installed(Enum) end
-    assert error.message =~ "is not a plugin"
+    Mix.Tasks.MishkaPay.Stripe.CleanClocks.run(["--older-than", "0"])
+    assert_received {:mix_shell, :info, ["deleted clock_" <> _]}
   end
 end

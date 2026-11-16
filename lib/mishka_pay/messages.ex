@@ -53,6 +53,8 @@ defmodule MishkaPay.Messages do
           | :link_reference
           | :change_nothing
           | :quantity_range
+          | :proration_date
+          | :managed_payments_invoice
           | :rejected_param
           | :change_item
           | :pause_behavior
@@ -233,8 +235,22 @@ defmodule MishkaPay.Messages do
   defp msgid(:rejected_exists),
     do: dgettext_noop("mishka_pay", "%{provider} already has one with that code or id")
 
+  defp msgid(:proration_date),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A proration date goes only with prorations, and not with a new billing period starting now"
+      )
+
+  defp msgid(:managed_payments_invoice),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A merchant of record always makes an invoice: turn merchant of record off to sell without one"
+      )
+
   defp msgid(:quantity_range),
-    do: dgettext_noop("mishka_pay", "The smallest quantity must not be more than the largest")
+    do: dgettext_noop("mishka_pay", "The smallest quantity must be less than the largest")
 
   defp msgid(:rejected_param),
     do:
