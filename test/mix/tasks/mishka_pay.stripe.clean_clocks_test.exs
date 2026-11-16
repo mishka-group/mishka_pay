@@ -6,8 +6,8 @@ defmodule Mix.Tasks.MishkaPay.Stripe.CleanClocksTest do
   # Starts the Stripe plugin, which changes the providers event every test sees.
   use ExUnit.Case, async: false
 
-  alias Mix.Tasks.MishkaPay.Stripe.CleanClocks
   alias MishkaPay.Providers.Stripe
+  alias Mix.Tasks.MishkaPay.Stripe.CleanClocks
 
   setup do
     MishkaPay.Test.start_plugin!(Stripe)
