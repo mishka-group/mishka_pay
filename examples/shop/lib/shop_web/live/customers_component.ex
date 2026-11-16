@@ -526,9 +526,10 @@ defmodule ShopWeb.CustomersComponent do
           <button
             :if={!deleted?(@selected)}
             class="btn btn-sm"
-            phx-click="buy_as"
-            phx-value-id={@selected.id}
-            phx-target={@myself}
+            phx-click={
+              JS.push("buy_as", value: %{id: @selected.id}, target: @myself)
+              |> JS.focus_first(to: "[data-testid=one-time-products]")
+            }
             disabled={buyer?(@selected, @buyer)}
             data-testid="customer-buy-as"
           >

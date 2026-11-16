@@ -288,7 +288,10 @@ defmodule ShopWeb.ShopLive do
     {:noreply,
      socket
      |> push_patch(to: ~p"/?buyer=#{customer.id}")
-     |> flash(:info, "The next checkout pays as #{customer.name || customer.email}.")}
+     |> flash(
+       :info,
+       "Buying as #{customer.name || customer.email}. Press Buy on a product or plan below to pay as them."
+     )}
   end
 
   def handle_info({:flash, kind, message}, socket), do: {:noreply, flash(socket, kind, message)}
