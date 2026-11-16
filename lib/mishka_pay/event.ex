@@ -11,7 +11,9 @@ defmodule MishkaPay.Event do
     * `:id`: the provider's event id (`evt_...` at Stripe). A provider may send one event more
       than once: a listener keeps what it did by this id.
     * `:type`: the provider's own name for what happened, such as `"checkout.session.completed"`.
-    * `:object_id`, `:object_type`: what it is about (`"pi_..."`, `"payment_intent"`).
+    * `:object_id`, `:object_type`: what it is about (`"pi_..."`, `"payment_intent"`). An event
+      about a saved payment method or a setup that names a customer is about that customer
+      (`"cus_..."`, `"customer"`), since the customer is what changes.
     * `:payment_id`: the payment it concerns, when it concerns one: the object itself for a
       payment, or the payment a checkout, charge, refund or dispute belongs to. The id
       `MishkaPay.fetch_payment/3` takes.

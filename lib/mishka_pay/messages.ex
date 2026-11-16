@@ -63,6 +63,9 @@ defmodule MishkaPay.Messages do
           | :pause_behavior
           | :link_items
           | :invoice_mode
+          | :setup_takes_no
+          | :setup_currency
+          | :currency_setup_only
           | :rejected_missing
           | :rejected_exists
           | :keys_answer
@@ -226,7 +229,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "Making a customer at checkout works only in a one-time checkout"
+        "Making a customer at checkout works only in a one-time or a setup checkout"
       )
 
   defp msgid(:expires_past),
@@ -330,6 +333,27 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "An invoice is asked for only in a one-time checkout: a subscription makes its own"
+      )
+
+  defp msgid(:setup_takes_no),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} does not go with a setup checkout: it saves a payment method and charges nothing"
+      )
+
+  defp msgid(:setup_currency),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A setup checkout needs a currency: it decides which payment methods the page offers"
+      )
+
+  defp msgid(:currency_setup_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The currency field goes only with a setup checkout: a sale takes its currency from its items"
       )
 
   defp msgid(:plain_id),

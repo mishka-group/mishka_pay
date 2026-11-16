@@ -6,7 +6,8 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Customer.Listener do
     @moduledoc """
     Makes a module the `mishka_pay:event:process` listener that syncs the customer an event is
-    about (`customer.created`, `customer.updated`, `customer.deleted` on Stripe) into a customer
+    about (`customer.created`, `customer.updated`, `customer.deleted` on Stripe, and the
+    `setup_intent.*` and `payment_method.*` events of the customer's saved cards) into a customer
     resource (the `:customer` kind of `MishkaPay.Ash.Resource`):
 
         defmodule MyApp.Pay.CustomerSync do

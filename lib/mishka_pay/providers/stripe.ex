@@ -36,6 +36,12 @@ defmodule MishkaPay.Providers.Stripe do
       Customers (`cus_...`), with the reference in their metadata; `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
+    * A checkout in `mode: :setup` opens a session in Stripe's `setup` mode that saves a card
+      without a charge, with Managed Payments off (Stripe takes no setup mode with it) and, without
+      a known customer, `customer_creation: always`. `list_payment_methods/2`,
+      `fetch_payment_method/2`, `detach_payment_method/2` and `set_default_payment_method/3` keep
+      a customer's PaymentMethods (`pm_...`); the default is the customer's
+      `invoice_settings.default_payment_method`.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
 
@@ -79,6 +85,7 @@ defmodule MishkaPay.Providers.Stripe do
       :invoice,
       :customer,
       :portal,
+      :payment_method,
       :discount,
       :webhook,
       :event_list
@@ -162,7 +169,13 @@ defmodule MishkaPay.Providers.Stripe do
     "payment_link.updated" => [:payment_link],
     "customer.created" => [:customer],
     "customer.updated" => [:customer],
-    "customer.deleted" => [:customer]
+    "customer.deleted" => [:customer],
+    "setup_intent.succeeded" => [:customer],
+    "setup_intent.setup_failed" => [:customer],
+    "payment_method.attached" => [:customer],
+    "payment_method.detached" => [:customer],
+    "payment_method.updated" => [:customer],
+    "payment_method.automatically_updated" => [:customer]
   }
 
   @doc """
@@ -224,7 +237,7 @@ defmodule MishkaPay.Providers.Stripe do
            request(
              :get,
              "/v1/checkout/sessions/#{checkout_id}",
-             [{"expand[]", "line_items"}],
+             [{"expand[]", "line_items"}, {"expand[]", "setup_intent"}],
              keys
            ) do
       {:ok, Mapper.checkout(session)}
@@ -649,6 +662,57 @@ defmodule MishkaPay.Providers.Stripe do
       {:ok, %{session | id: answer["id"], url: answer["url"]}}
     end
   end
+
+  @impl MishkaPay.Provider
+  def list_payment_methods(opts, keys) do
+    customer_id = opts[:customer_id]
+
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id) do
+      page(
+        "/v1/customers/#{customer_id}/payment_methods",
+        [],
+        opts,
+        keys,
+        &Mapper.payment_method/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payment_method(payment_method_id, keys) do
+    with :ok <- payment_method_id(payment_method_id),
+         {:ok, method} <- request(:get, "/v1/payment_methods/#{payment_method_id}", [], keys) do
+      Mapper.payment_method(method)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def detach_payment_method(payment_method_id, keys) do
+    with :ok <- payment_method_id(payment_method_id),
+         {:ok, method} <-
+           request(:post, "/v1/payment_methods/#{payment_method_id}/detach", %{}, keys) do
+      Mapper.payment_method(method)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def set_default_payment_method(customer_id, payment_method_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         :ok <- payment_method_id(payment_method_id),
+         {:ok, customer} <-
+           request(
+             :post,
+             "/v1/customers/#{customer_id}",
+             %{"invoice_settings" => %{"default_payment_method" => payment_method_id}},
+             keys
+           ) do
+      Mapper.customer(customer)
+    end
+  end
+
+  # Stripe's payment method ids start with `pm_`, and `card_` for a card saved before them.
+  defp payment_method_id("card_" <> _ = id), do: stripe_id(id, "card_", :payment_method_id)
+  defp payment_method_id(id), do: stripe_id(id, "pm_", :payment_method_id)
 
   @impl MishkaPay.Provider
   def create_coupon(%Coupon{} = coupon, keys) do

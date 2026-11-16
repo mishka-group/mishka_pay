@@ -150,6 +150,21 @@ defmodule MishkaPay.Money do
   def fits?(%Money{amount: amount}, digits) when is_integer(digits) and digits >= 0,
     do: Decimal.equal?(Decimal.round(amount, digits), amount)
 
+  @doc """
+  A guarded_struct field validator for a currency code alone: `validator: {MishkaPay.Money,
+  :currency_field}`. It takes `"usd"`, `"USD"` or `:USD` and keeps the ISO 4217 atom (`:USD`).
+  """
+  @spec currency_field(atom(), term()) ::
+          {:ok, atom(), atom() | nil} | {:error, atom(), String.t()}
+  def currency_field(name, nil), do: {:ok, name, nil}
+
+  def currency_field(name, code) do
+    case currency(code) do
+      {:ok, code} -> {:ok, name, code}
+      {:error, _unknown} -> {:error, name, Messages.text(:currency_unknown)}
+    end
+  end
+
   defp currency(code) when is_binary(code) or is_atom(code) do
     case code |> to_string() |> String.trim() |> String.upcase() |> Money.validate_currency() do
       {:ok, code} -> {:ok, code}
