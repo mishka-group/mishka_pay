@@ -62,6 +62,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp from_stripe(minor, currency), do: Money.from_minor(minor, currency)
 
   @checkout_statuses %{"open" => :open, "complete" => :complete, "expired" => :expired}
+  @ui_modes %{"hosted_page" => :hosted, "embedded_page" => :embedded}
 
   @refund_reasons %{
     "requested_by_customer" => :requested_by_customer,
@@ -91,11 +92,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
     %{
       "mode" => Atom.to_string(checkout.mode),
-      "success_url" => checkout.success_url,
-      "cancel_url" => checkout.cancel_url,
       "client_reference_id" => checkout.reference,
       "metadata" => Map.merge(checkout.metadata || %{}, reference)
     }
+    |> Map.merge(ui_params(checkout))
     |> Map.merge(mode_data(checkout, reference))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(options(checkout))
@@ -123,6 +123,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     do: %{"customer_creation" => "always"}
 
   defp setup_customer(_chosen), do: %{}
+  # A hosted page sends the buyer back to one of two pages; an embedded form to its return page.
+  defp ui_params(%Checkout{ui_mode: :embedded} = checkout),
+    do: %{"ui_mode" => "embedded_page", "return_url" => checkout.return_url}
+
+  defp ui_params(checkout),
+    do: %{"success_url" => checkout.success_url, "cancel_url" => checkout.cancel_url}
 
   # The checkout's own choice, else the tenant's default, else the Stripe account's (not sent).
   defp automatic_tax(%{automatic_tax: choice}, _settings) when is_boolean(choice),
@@ -186,7 +192,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         reject_nil(%{
           "metadata" => reference,
           "description" => checkout.description,
-          "statement_descriptor_suffix" => checkout.statement_suffix
+          "statement_descriptor_suffix" => checkout.statement_suffix,
+          "capture_method" => checkout.capture && Atom.to_string(checkout.capture)
         })
     }
 
@@ -231,12 +238,16 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp field_values(_none), do: nil
 
-  # The checkout's own choice, else the tenant's setting, else nil: the Stripe account's default.
-  defp merchant_of_record(%{merchant_of_record: choice}, _settings)
-       when is_boolean(choice),
-       do: choice
+  @doc """
+  Whether a checkout sells with Stripe as the merchant of record: its own choice, else the
+  tenant's setting, else `nil`, the Stripe account's default.
+  """
+  @spec merchant_of_record(Checkout.t(), map()) :: boolean() | nil
+  def merchant_of_record(%{merchant_of_record: choice}, _settings)
+      when is_boolean(choice),
+      do: choice
 
-  defp merchant_of_record(_checkout, settings), do: Map.get(settings, :merchant_of_record)
+  def merchant_of_record(_checkout, settings), do: Map.get(settings, :merchant_of_record)
 
   # Stripe Managed Payments is Stripe selling as the merchant of record; nil leaves the account's
   # own default.
@@ -315,6 +326,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       checkout
       | id: session["id"],
         url: session["url"],
+        ui_mode: Map.get(@ui_modes, session["ui_mode"], checkout.ui_mode),
+        client_secret: session["client_secret"],
+        return_url: session["return_url"] || checkout.return_url,
         status: Map.get(@checkout_statuses, session["status"]),
         payment_id: id_of(session["payment_intent"]),
         setup_intent_id: id_of(session["setup_intent"]),
@@ -370,6 +384,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec payment(map()) :: {:ok, Payment.t()} | {:error, Splode.Error.t()}
   def payment(intent) do
     charge = expanded(intent["latest_charge"])
+    captured = captured(intent)
 
     with {:ok, amount} <- from_stripe(intent["amount"], intent["currency"]),
          {:ok, refunded} <- from_stripe(charge["amount_refunded"] || 0, intent["currency"]) do
@@ -378,7 +393,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         id: intent["id"],
         amount: amount,
         amount_refunded: refunded,
-        status: payment_status(intent, refunded, amount),
+        amount_captured: captured,
+        status: payment_status(intent, refunded, captured || amount),
         reference: get_in(intent, ["metadata", @reference]),
         owner: get_in(intent, ["metadata", @owner]),
         description: intent["description"],
@@ -735,6 +751,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   defp payment_status(%{"status" => "requires_action"}, _refunded, _amount), do: :requires_action
+  defp payment_status(%{"status" => "requires_capture"}, _refunded, _amount), do: :authorized
   defp payment_status(%{"status" => "canceled"}, _refunded, _amount), do: :canceled
 
   defp payment_status(
@@ -745,6 +762,21 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
        do: :failed
 
   defp payment_status(_waiting, _refunded, _amount), do: :pending
+
+  # What Stripe took on a paid PaymentIntent; less than its amount after a capture in part.
+  defp captured(%{"status" => "succeeded", "amount_received" => received} = intent)
+       when is_integer(received) and received > 0,
+       do: money(received, intent["currency"])
+
+  defp captured(_not_paid), do: nil
+
+  @doc """
+  Params of `POST /v1/payment_intents/:id/capture`: the part to take, or none for all that is
+  held.
+  """
+  @spec capture_params(Money.t() | nil) :: map()
+  def capture_params(nil), do: %{}
+  def capture_params(amount), do: %{"amount_to_capture" => minor(amount)}
 
   @doc "Params of `POST /v1/refunds`: the payment, and the amount when it is not the whole."
   @spec refund_params(Refund.t()) :: map()

@@ -34,8 +34,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     %{key: key}
   end
 
-  # A payment the way a buyer's browser makes one, with a Stripe test card.
-  defp pay(key, card) do
+  # A payment the way a buyer's browser makes one, with a Stripe test card; `extra` params such as
+  # a manual capture.
+  defp pay(key, card, extra \\ %{}) do
     {:ok, %{status: status, body: body}} =
       Client.request(%{
         provider: "stripe",
@@ -45,13 +46,15 @@ defmodule MishkaPay.Providers.StripeLiveTest do
         auth: {:bearer, key},
         headers: %{"stripe-version" => Stripe.version()},
         form:
-          Stripe.form(%{
+          %{
             "amount" => 1999,
             "currency" => "usd",
             "payment_method" => card,
             "confirm" => "true",
             "automatic_payment_methods" => %{"enabled" => "true", "allow_redirects" => "never"}
-          })
+          }
+          |> Map.merge(extra)
+          |> Stripe.form()
       })
 
     {status, body}
@@ -81,6 +84,76 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert {:ok, %Checkout{id: ^id, status: :open, reference: ^reference, payment_id: nil}} =
              MishkaPay.fetch_checkout("stripe", id)
+  end
+
+  test "an embedded checkout answers the client secret its page needs, and may hold the money" do
+    embedded = %{
+      provider: "stripe",
+      ui_mode: :embedded,
+      items: [
+        %{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}, tax_code: "txcd_10302000"}
+      ],
+      return_url: "https://shop.test/return?session_id={CHECKOUT_SESSION_ID}"
+    }
+
+    assert {:ok,
+            %Checkout{
+              id: "cs_test_" <> _ = id,
+              ui_mode: :embedded,
+              client_secret: "cs_test_" <> _,
+              url: nil,
+              status: :open
+            }} = MishkaPay.checkout(embedded)
+
+    assert {:ok, %Checkout{id: ^id, ui_mode: :embedded, return_url: "https://shop.test/" <> _}} =
+             MishkaPay.fetch_checkout("stripe", id)
+
+    # This account sells with Managed Payments by default, which makes an invoice after payment.
+    held = Map.put(embedded, :capture, :manual)
+
+    assert {:error, %Errors.Rejected{code: "capture_invoice", param: "capture"}} =
+             MishkaPay.checkout(held)
+
+    assert {:ok, %Checkout{ui_mode: :embedded, capture: :manual, client_secret: "cs_test_" <> _}} =
+             MishkaPay.checkout(Map.put(held, :merchant_of_record, false))
+  end
+
+  test "a held payment is authorized, captured in part and read as paid; another is let go",
+       %{key: key} do
+    manual = %{"capture_method" => "manual"}
+    {200, %{"id" => id, "status" => "requires_capture"}} = pay(key, "pm_card_mastercard", manual)
+
+    assert {:ok, %Payment{status: :authorized, amount_captured: nil}} =
+             MishkaPay.fetch_payment("stripe", id)
+
+    assert {:ok, %Payment{status: :paid, amount_captured: part}} =
+             MishkaPay.capture_payment("stripe", id, nil,
+               amount: %{amount: "12", currency: "USD"}
+             )
+
+    assert Money.equal?(part, Money.new(:USD, "12"))
+    assert {:ok, %Payment{status: :paid, amount: asked}} = MishkaPay.fetch_payment("stripe", id)
+    assert Money.equal?(asked, Money.new(:USD, "19.99"))
+
+    # Only the part taken can go back.
+    assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+             MishkaPay.refund(%{
+               provider: "stripe",
+               payment_id: id,
+               amount: %{amount: "15", currency: "USD"}
+             })
+
+    {200, %{"id" => other}} = pay(key, "pm_card_mastercard", manual)
+
+    assert {:ok, %Payment{id: ^other, status: :canceled}} =
+             MishkaPay.cancel_payment("stripe", other)
+
+    {200, %{"id" => whole}} = pay(key, "pm_card_mastercard", manual)
+
+    assert {:ok, %Payment{status: :paid, amount_captured: all}} =
+             MishkaPay.capture_payment("stripe", whole)
+
+    assert Money.equal?(all, Money.new(:USD, "19.99"))
   end
 
   test "a checkout can turn Stripe Managed Payments off for itself" do

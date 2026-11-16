@@ -44,6 +44,9 @@ defmodule MishkaPay.Provider do
   them does not compile:
 
     * `:checkout`: `checkout/2`, `fetch_checkout/2` and `fetch_payment/2`;
+    * `:embedded_checkout`: nothing more; `checkout/2` also takes `ui_mode: :embedded`;
+    * `:capture`: `capture_payment/3`, `cancel_payment/2` (`checkout/2` also takes
+      `capture: :manual`);
     * `:expire`: `expire_checkout/2`;
     * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
@@ -90,6 +93,8 @@ defmodule MishkaPay.Provider do
 
   @capabilities [
     :checkout,
+    :embedded_checkout,
+    :capture,
     :expire,
     :payment_list,
     :refund,
@@ -118,6 +123,10 @@ defmodule MishkaPay.Provider do
   What a provider can do:
 
     * `:checkout`: sends the buyer to pay, or embeds a payment form.
+    * `:embedded_checkout`: shows its checkout form inside the site's own page
+      (`ui_mode: :embedded`).
+    * `:capture`: holds the money on a card at checkout (`capture: :manual`), then takes it, all
+      or part, or lets it go.
     * `:expire`: ends an open checkout before the buyer pays, so its stock is free again.
     * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
@@ -146,6 +155,8 @@ defmodule MishkaPay.Provider do
   """
   @type capability ::
           :checkout
+          | :embedded_checkout
+          | :capture
           | :expire
           | :refund
           | :refund_read
@@ -207,6 +218,21 @@ defmodule MishkaPay.Provider do
   @doc "With `:refund`. Gives money back on a payment and answers the refund as the provider made it."
   @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:capture`. Takes the money held on an `:authorized` payment: all of it, or `:amount`
+  (a `Money` in the payment's currency) when given. The rest is let go. Answers the payment after.
+  """
+  @callback capture_payment(
+              payment_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) ::
+              {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:capture`. Lets the money held on an `:authorized` payment go; it ends `:canceled`."
+  @callback cancel_payment(payment_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:refund_read`. Reads one refund again, with its status."
   @callback fetch_refund(refund_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -572,6 +598,8 @@ defmodule MishkaPay.Provider do
                       expire_checkout: 2,
                       refund: 2,
                       fetch_refund: 2,
+                      capture_payment: 3,
+                      cancel_payment: 2,
                       search_customers: 2,
                       upcoming_invoice: 2,
                       list_events: 2,
@@ -648,6 +676,7 @@ defmodule MishkaPay.Provider do
     expire: [expire_checkout: 2],
     payment_list: [list_payments: 2],
     refund: [refund: 2],
+    capture: [capture_payment: 3, cancel_payment: 2],
     refund_read: [fetch_refund: 2, list_refunds: 2],
     subscription: [
       fetch_subscription: 2,

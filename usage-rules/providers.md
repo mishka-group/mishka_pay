@@ -19,6 +19,8 @@ end
 - Capabilities and their callbacks (`MishkaPay.Provider.operations/1`); the module does not
   compile with one missing:
   - `:checkout`: `checkout/2`, `fetch_checkout/2`, `fetch_payment/2`;
+  - `:embedded_checkout`: no callback; `checkout/2` also takes `ui_mode: :embedded`;
+  - `:capture`: `capture_payment/3`, `cancel_payment/2`; `checkout/2` also takes `capture: :manual`;
   - `:expire`: `expire_checkout/2`;
   - `:payment_list`: `list_payments/2`;
   - `:refund`: `refund/2`;

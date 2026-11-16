@@ -48,7 +48,8 @@ defmodule MishkaPay do
   `:provider`, `:unknown`). Never a key or a buyer's details. The operations:
 
     * checkouts and payments: `:checkout`, `:checkout_read`, `:checkout_expire`, `:payment`,
-      `:payment_list`, `:refund`, `:refund_read`, `:refund_list`;
+      `:payment_list`, `:payment_capture`, `:payment_cancel`, `:refund`, `:refund_read`,
+      `:refund_list`;
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
       `:subscription_unpause`, `:invoices`, `:invoice`, `:invoice_upcoming`;
@@ -91,6 +92,7 @@ defmodule MishkaPay do
     Product,
     PromotionCode,
     Provider,
+    ProviderKit,
     Refund
   }
 
@@ -101,6 +103,7 @@ defmodule MishkaPay do
   def checkout(attrs) when is_map(attrs) do
     span(:checkout, attrs, fn ->
       with {:ok, checkout} <- Errors.from_builder(Checkout.builder(attrs)),
+           :ok <- Checkout.pages(checkout),
            {:ok, provider} <- Provider.capable(checkout.provider, :checkout),
            :ok <- mode_capable(checkout),
            {:ok, checkout} <- before_checkout(checkout),
@@ -138,6 +141,47 @@ defmodule MishkaPay do
         module.fetch_payment(payment_id, keys)
       end
     end)
+  end
+
+  @doc """
+  Takes the money held on `:authorized` payment `payment_id` (a checkout with `capture: :manual`):
+  all of it, or `amount:` (a `Money`, or a map of `:amount` and `:currency`, in the payment's
+  currency) and the rest is let go. Answers the payment, `:paid`, with `:amount_captured`.
+  """
+  @spec capture_payment(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+  def capture_payment(provider, payment_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(payment_id) do
+    capable(:capture, :payment_capture, provider, tenant, fn module, keys ->
+      with {:ok, amount} <- capture_amount(opts[:amount]),
+           do: module.capture_payment(payment_id, [amount: amount], keys)
+    end)
+  end
+
+  @doc """
+  Lets the money held on `:authorized` payment `payment_id` go back to the buyer; the payment ends
+  `:canceled`.
+  """
+  @spec cancel_payment(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+  def cancel_payment(provider, payment_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_id) do
+    capable(:capture, :payment_cancel, provider, tenant, & &1.cancel_payment(payment_id, &2))
+  end
+
+  # The part to take: money above zero, or nil for all of it.
+  defp capture_amount(nil), do: {:ok, nil}
+
+  defp capture_amount(amount) do
+    case MishkaPay.Money.field(:amount, amount) do
+      {:ok, :amount, %Money{} = money} ->
+        if Money.positive?(money),
+          do: {:ok, money},
+          else: ProviderKit.invalid(:amount, Messages.text(:amount_not_positive))
+
+      {:error, field, message} ->
+        ProviderKit.invalid(field, message)
+    end
   end
 
   @doc "Refunds a payment from `attrs` (see `MishkaPay.Refund`), in full or in part."
@@ -1151,17 +1195,26 @@ defmodule MishkaPay do
     end)
   end
 
-  # A subscription checkout needs a provider that runs subscriptions.
-  defp mode_capable(%Checkout{mode: :subscription, provider: provider}) do
-    with {:ok, _module} <- Provider.capable(provider, :subscription), do: :ok
-  end
+  # Each choice that needs more than `:checkout` asks the provider for its capability: a
+  # subscription, an embedded form, a hold on the card, a card saved without a charge.
+  defp mode_capable(%Checkout{provider: provider} = checkout) do
+    [
+      {checkout.mode == :subscription, :subscription},
+      {checkout.ui_mode == :embedded, :embedded_checkout},
+      {checkout.capture == :manual, :capture},
+      {checkout.mode == :setup, :payment_method}
+    ]
+    |> Enum.reduce_while(:ok, fn
+      {true, capability}, :ok ->
+        case Provider.capable(provider, capability) do
+          {:ok, _module} -> {:cont, :ok}
+          error -> {:halt, error}
+        end
 
-  # A setup checkout saves a payment method, so the provider keeps them.
-  defp mode_capable(%Checkout{mode: :setup, provider: provider}) do
-    with {:ok, _module} <- Provider.capable(provider, :payment_method), do: :ok
+      {false, _capability}, :ok ->
+        {:cont, :ok}
+    end)
   end
-
-  defp mode_capable(_one_time), do: :ok
 
   defp before_checkout(checkout) do
     timeout = Application.get_env(:mishka_pay, :checkout_gate_timeout, 5_000)

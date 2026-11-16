@@ -609,6 +609,42 @@ defmodule MishkaPayTest do
     end
   end
 
+  test "an embedded form or a hold on the card needs its capability, asked before the provider" do
+    embedded =
+      @checkout
+      |> Map.drop([:success_url, :cancel_url])
+      |> Map.merge(%{ui_mode: :embedded, return_url: "https://shop.test/return"})
+
+    assert {:error, %Errors.Unsupported{provider: "acme", operation: :embedded_checkout}} =
+             MishkaPay.checkout(embedded)
+
+    assert {:error, %Errors.Unsupported{operation: :capture}} =
+             MishkaPay.checkout(Map.put(@checkout, :capture, :manual))
+
+    assert {:error, %Errors.Unsupported{operation: :capture}} =
+             MishkaPay.capture_payment("acme", "acme_paid", "site-a")
+
+    assert {:error, %Errors.Unsupported{operation: :capture}} =
+             MishkaPay.cancel_payment("acme", "acme_paid", "site-a")
+
+    assert {:ok, %Checkout{ui_mode: :hosted}} =
+             MishkaPay.checkout(Map.put(@checkout, :capture, "automatic"))
+  end
+
+  test "a checkout's pages fit its ui mode: two for a hosted page, one for an embedded form" do
+    embedded = Map.merge(@checkout, %{ui_mode: "embedded", return_url: "https://shop.test/r"})
+
+    for {attrs, field} <- [
+          {Map.delete(@checkout, :cancel_url), :cancel_url},
+          {Map.put(@checkout, :return_url, "https://shop.test/r"), :return_url},
+          {embedded, :success_url},
+          {Map.drop(embedded, [:success_url, :cancel_url, :return_url]), :return_url},
+          {Map.merge(@checkout, %{capture: :manual, mode: :subscription}), :capture}
+        ] do
+      assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} = MishkaPay.checkout(attrs)
+    end
+  end
+
   test "a checkout is read again by its id, with the payment it made" do
     assert {:ok, %Checkout{id: "acme_cs_o-9", status: :complete, payment_id: "acme_paid"}} =
              MishkaPay.fetch_checkout("acme", "acme_cs_o-9", "site-a")

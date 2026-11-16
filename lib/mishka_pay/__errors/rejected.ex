@@ -17,8 +17,10 @@ defmodule MishkaPay.Errors.Rejected do
       `code: "managed_payments_invoice"` is an invoice turned off where the provider, as merchant of
       record, must make one; `"tax_code_missing"` a product it sells as merchant of record without
       a tax category; `"merchant_of_record_off"` a choice (`:param`) the provider takes only with
-      merchant of record off; `"one_time_only"` and `"recurring_only"` a choice (`:param`) that goes only
-      with one-time prices, or only with a plan's.
+      merchant of record off; `"one_time_only"` and `"recurring_only"` a choice (`:param`) that
+      goes only with one-time prices, or only with a plan's; `"capture_invoice"` a checkout that
+      holds the money (`capture: :manual`) where an invoice is made after payment, as a merchant
+      of record always makes one.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
@@ -35,6 +37,7 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{code: "managed_payments_invoice"}), do: Messages.text(:managed_payments_invoice)
   def message(%{code: "tax_code_missing"}), do: Messages.text(:tax_code_missing)
+  def message(%{code: "capture_invoice"}), do: Messages.text(:capture_invoice)
 
   def message(%{code: "merchant_of_record_off", param: param}),
     do: Messages.text(:merchant_of_record_off, param: param || "this choice")
