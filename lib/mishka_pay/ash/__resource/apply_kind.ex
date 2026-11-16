@@ -194,6 +194,7 @@ if Code.ensure_loaded?(Ash) do
 
     defp trigger(result, _kind, _module), do: result
 
+    # sobelow_skip ["DOS.ModuleConcat"]
     defp listener({:ok, dsl}, true, kind, module) do
       listener = Module.concat(module, MishkaPayListener)
       using = Kinds.listener(kind)

@@ -168,7 +168,10 @@ if Code.ensure_loaded?(Ash) do
     @doc "The identity that keeps each provider object (or event) once."
     @spec identity(kind()) :: {atom(), [atom()]}
     def identity(:inbox), do: {:provider_event, [:provider, :event_id]}
-    def identity(kind), do: {:"provider_#{kind}", [:provider, :provider_id]}
+    def identity(:payment), do: {:provider_payment, [:provider, :provider_id]}
+    def identity(:subscription), do: {:provider_subscription, [:provider, :provider_id]}
+    def identity(:customer), do: {:provider_customer, [:provider, :provider_id]}
+    def identity(:dispute), do: {:provider_dispute, [:provider, :provider_id]}
 
     @doc "The calculations of a kind: its amounts as `Money`."
     @spec calculations(kind()) :: [{atom(), atom(), {module(), keyword()}}]
@@ -334,6 +337,7 @@ if Code.ensure_loaded?(Ash) do
     Its worker and scheduler are named after the resource, so two inboxes never share them.
     """
     @spec trigger(module()) :: keyword()
+    # sobelow_skip ["DOS.ModuleConcat"]
     def trigger(resource) do
       [
         name: :process,

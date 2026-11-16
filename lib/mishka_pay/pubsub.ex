@@ -113,13 +113,17 @@ defmodule MishkaPay.PubSub do
         end
       end
 
-    names = Enum.map(kinds, &(&1 |> Atom.to_string() |> Macro.camelize()))
+    plugins =
+      Enum.map(
+        kinds,
+        &Module.concat(__CALLER__.module, &1 |> Atom.to_string() |> Macro.camelize())
+      )
 
     quote do
       unquote_splicing(hooks)
 
       @doc "The broadcasting plugins, one per kind of change."
-      def plugins, do: Enum.map(unquote(names), &Module.concat(__MODULE__, &1))
+      def plugins, do: unquote(plugins)
 
       @doc false
       def child_spec(_opts) do
