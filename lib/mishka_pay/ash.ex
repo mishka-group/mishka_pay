@@ -21,8 +21,9 @@ if Code.ensure_loaded?(Ash) do
     ## Errors
 
     `to_ash_error/1` turns a `MishkaPay.Errors` error into Ash's own classes, so a form shows it on
-    its field: an `:invalid` error becomes `Ash.Error.Changes.InvalidArgument`s at their fields,
-    anything else an `Ash.Error.Unknown.UnknownError`. The actions here return them.
+    its field: an `:invalid` error becomes `Ash.Error.Changes.InvalidArgument`s at their fields
+    (for a nested input such as the customer of a checkout, at the inner field that failed, such
+    as `:email`), anything else an `Ash.Error.Unknown.UnknownError`. The actions here return them.
     """
 
     alias MishkaPay.Errors
@@ -32,7 +33,7 @@ if Code.ensure_loaded?(Ash) do
     def to_ash_error(error) do
       case Errors.to_class(error) do
         %Errors.Invalid{errors: errors} ->
-          Enum.map(errors, &invalid/1)
+          errors |> Enum.flat_map(&leaves/1) |> Enum.map(&invalid/1)
 
         %{errors: errors} ->
           Enum.map(errors, &Ash.Error.Unknown.UnknownError.exception(error: message(&1)))
@@ -46,6 +47,11 @@ if Code.ensure_loaded?(Ash) do
     @spec message(term()) :: String.t()
     def message(%{errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
 
+    def message(%{child_errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+
+    def message(%{__exception__: true, bread_crumbs: [_ | _]} = error),
+      do: message(%{error | bread_crumbs: []})
+
     def message(%Ash.Error.Unknown.UnknownError{error: inner}) when not is_nil(inner),
       do: message(inner)
 
@@ -53,6 +59,10 @@ if Code.ensure_loaded?(Ash) do
     def message(%{__exception__: true, __struct__: module} = error), do: module.message(error)
     def message(text) when is_binary(text), do: text
     def message(other), do: inspect(other)
+
+    # A nested input reports its own failures under it; the person needs the inner ones.
+    defp leaves(%{child_errors: [_ | _] = errors}), do: Enum.flat_map(errors, &leaves/1)
+    defp leaves(error), do: [error]
 
     defp invalid(%{field: field} = error) when not is_nil(field),
       do: Ash.Error.Changes.InvalidArgument.exception(field: field, message: message(error))

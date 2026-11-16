@@ -41,6 +41,7 @@ defmodule MishkaPay.Messages do
           | :refund_currency
           | :refund_left
           | :refund_once
+          | :refund_nothing_left
           | :refund_reference
           | :stripe_metadata
           | :stripe_three_decimal
@@ -147,7 +148,11 @@ defmodule MishkaPay.Messages do
     do: dgettext_noop("mishka_pay", "A keys plugin must answer a map or nil")
 
   defp msgid(:stripe_id),
-    do: dgettext_noop("mishka_pay", "The payment_id field is not a Stripe id")
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The %{field} field is not a Stripe id that starts with %{prefix}"
+      )
 
   defp msgid(:refund_currency),
     do:
@@ -167,8 +172,11 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The payment was refunded already: this site refunds a payment once, and a new purchase is a new payment"
+        "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment"
       )
+
+  defp msgid(:refund_nothing_left),
+    do: dgettext_noop("mishka_pay", "The payment is refunded in full: nothing is left to refund")
 
   defp msgid(:refund_reference),
     do:

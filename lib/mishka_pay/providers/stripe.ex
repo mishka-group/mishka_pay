@@ -82,7 +82,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def fetch_checkout(checkout_id, keys) do
-    with :ok <- stripe_id(checkout_id),
+    with :ok <- stripe_id(checkout_id, "cs_", :checkout_id),
          {:ok, session} <- request(:get, "/v1/checkout/sessions/#{checkout_id}", [], keys) do
       {:ok, Mapper.checkout(session)}
     end
@@ -90,7 +90,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def fetch_payment(payment_id, keys) do
-    with :ok <- stripe_id(payment_id),
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
          {:ok, intent} <-
            request(
              :get,
@@ -104,7 +104,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def refund(%Refund{} = refund, keys) do
-    with :ok <- stripe_id(refund.payment_id),
+    with :ok <- stripe_id(refund.payment_id, "pi_", :payment_id),
          :ok <- currencies([refund], :refund),
          {:ok, key} <- refund_key(refund, keys),
          :ok <- refundable(refund, keys),
@@ -264,9 +264,11 @@ defmodule MishkaPay.Providers.Stripe do
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
 
-  # A Stripe id is letters, digits and underscores; anything else never reaches a path.
-  defp stripe_id(id) do
-    case is_binary(id) and Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
+  # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
+  # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
+  defp stripe_id(id, prefix, field) do
+    case is_binary(id) and String.starts_with?(id, prefix) and
+           Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
       true ->
         :ok
 
@@ -275,9 +277,9 @@ defmodule MishkaPay.Providers.Stripe do
           {:error,
            [
              %{
-               field: :payment_id,
+               field: field,
                action: :stripe_id,
-               message: Messages.text(:stripe_id)
+               message: Messages.text(:stripe_id, field: field, prefix: prefix)
              }
            ]}
         )
@@ -304,6 +306,9 @@ defmodule MishkaPay.Providers.Stripe do
       cond do
         keys.refunds == :once and Money.positive?(payment.amount_refunded) ->
           invalid(:payment_id, Messages.text(:refund_once))
+
+        not Decimal.positive?(left) ->
+          invalid(:payment_id, Messages.text(:refund_nothing_left))
 
         is_nil(amount) ->
           :ok

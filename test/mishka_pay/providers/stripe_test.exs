@@ -148,6 +148,40 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a whole refund of a payment with nothing left is refused before Stripe, many or once" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn
+        %{method: "GET"} = conn ->
+          {:ok, %{body: intent}} =
+            Req.get("http://localhost:12111#{conn.request_path}?#{conn.query_string}",
+              auth: {:bearer, "sk_test_123"}
+            )
+
+          Req.Test.json(
+            conn,
+            put_in(intent, ["latest_charge", "amount_refunded"], intent["amount"])
+          )
+
+        conn ->
+          send(test, :refund_sent)
+          StripeMock.forward(conn)
+      end)
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", refunds: :many})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id, message: message}]}} =
+               MishkaPay.refund(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 payment_id: "pi_123",
+                 reference: "r-9"
+               })
+
+      assert message =~ "nothing is left to refund"
+      refute_received :refund_sent
+    end
+
     test "a site that refunds once is refused a second refund; one that refunds many is not" do
       test = self()
 
@@ -283,6 +317,19 @@ defmodule MishkaPay.Providers.StripeTest do
     test "an id that is not a Stripe id never reaches a path" do
       assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
                MishkaPay.fetch_payment("stripe", "pi_1/../../v1/charges", "site-a")
+    end
+
+    test "an id of another kind is refused before Stripe: a checkout id is not a payment id" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id, message: message}]}} =
+               MishkaPay.fetch_payment("stripe", "cs_test_123", "site-a")
+
+      assert message =~ "pi_"
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :checkout_id}]}} =
+               MishkaPay.fetch_checkout("stripe", "pi_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "ch_123"})
     end
 
     test "a currency Stripe counts differently from ISO 4217 is refused, not charged wrong" do

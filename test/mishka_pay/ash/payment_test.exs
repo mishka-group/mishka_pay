@@ -215,6 +215,46 @@ defmodule MishkaPay.Ash.PaymentTest do
       assert again.tenant == "site-a"
     end
 
+    test "a refund of less than zero says it must be more than zero, as zero does" do
+      {:ok, payment} = sync()
+
+      for amount <- ["-5", "0"] do
+        assert {:error, %Ash.Error.Invalid{} = error} =
+                 payment
+                 |> Ash.Changeset.for_update(:refund, %{
+                   amount: %{amount: amount, currency: "USD"}
+                 })
+                 |> Ash.update(authorize?: false)
+
+        assert MishkaPay.Ash.message(error) =~ "more than zero"
+      end
+    end
+
+    test "a nested input's error reaches Ash at its inner field, and no message carries breadcrumbs" do
+      checkout = %{
+        provider: "stripe",
+        items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+        success_url: "https://shop.test/thanks",
+        cancel_url: "https://shop.test/cart",
+        customer: %{email: "not-an-email"}
+      }
+
+      assert {:error,
+              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidArgument{} = inner]} = error} =
+               @payment
+               |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout})
+               |> Ash.run_action(authorize?: false)
+
+      assert inner.field == :email
+      refute MishkaPay.Ash.message(error) =~ "customer field"
+
+      assert {:error, required} =
+               Ash.create(@payment, %{provider: "stripe"}, action: :sync, authorize?: false)
+
+      refute MishkaPay.Ash.message(required) =~ "Bread Crumbs"
+      assert MishkaPay.Ash.message(required) =~ "payment_id"
+    end
+
     test "errors reach Ash as plain words, with no stack trace" do
       declined = MishkaPay.Errors.Declined.exception(provider: "stripe", reason: "card_declined")
 

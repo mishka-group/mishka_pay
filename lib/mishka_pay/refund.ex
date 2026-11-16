@@ -59,7 +59,25 @@ defmodule MishkaPay.Refund do
 
   # A refund of nothing is no refund; an amount left out is the whole payment.
   @doc false
-  def amount(:amount, value), do: :amount |> MishkaPay.Money.field(value) |> positive()
+  def amount(:amount, value) do
+    case negative?(value) do
+      true -> {:error, :amount, MishkaPay.Messages.text(:amount_not_positive)}
+      false -> :amount |> MishkaPay.Money.field(value) |> positive()
+    end
+  end
+
+  defp negative?(%Money{amount: amount}), do: Decimal.negative?(amount)
+
+  defp negative?(%{} = money) do
+    keys = Map.new(money, fn {key, value} -> {to_string(key), value} end)
+
+    case Decimal.cast(keys["amount"]) do
+      {:ok, amount} -> Decimal.negative?(amount)
+      :error -> false
+    end
+  end
+
+  defp negative?(_other), do: false
 
   defp positive({:ok, :amount, %Money{amount: amount}} = ok) do
     case Decimal.gt?(amount, 0) do
