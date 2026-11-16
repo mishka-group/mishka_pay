@@ -443,6 +443,8 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.PaymentToolsComponent} id="payment-tools" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.CheckoutOptionsComponent} id="checkout-more" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
