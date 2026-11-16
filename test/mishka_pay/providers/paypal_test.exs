@@ -175,6 +175,36 @@ defmodule MishkaPay.Providers.PayPalTest do
       end
     end
 
+    test "a captured Order says what PayPal took; one not taken yet says nothing" do
+      PayPalStub.order("ORDERC", "COMPLETED",
+        captures: [
+          %{
+            "id" => "C1",
+            "status" => "COMPLETED",
+            "amount" => %{"currency_code" => "USD", "value" => "19.99"}
+          }
+        ]
+      )
+
+      assert {:ok, %Payment{amount_captured: captured}} =
+               MishkaPay.fetch_payment("paypal", "ORDERC", "site-a")
+
+      assert captured == Money.new(:USD, "19.99")
+
+      PayPalStub.order("ORDERP", "COMPLETED",
+        captures: [
+          %{
+            "id" => "C2",
+            "status" => "PENDING",
+            "amount" => %{"currency_code" => "USD", "value" => "19.99"}
+          }
+        ]
+      )
+
+      assert {:ok, %Payment{amount_captured: nil}} =
+               MishkaPay.fetch_payment("paypal", "ORDERP", "site-a")
+    end
+
     test "an id that is not a PayPal Order id never reaches a path" do
       assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
                MishkaPay.fetch_payment("paypal", "ORDER1/../../v1/x", "site-a")

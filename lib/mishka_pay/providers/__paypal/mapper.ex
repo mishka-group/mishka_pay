@@ -154,6 +154,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       provider: "paypal",
       id: order["id"],
       amount: amount,
+      amount_captured: captured(capture),
       amount_refunded: refunded,
       status: status(order, capture, refunded, amount),
       reference: unit(order)["custom_id"],
@@ -174,6 +175,13 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   @spec capture(map()) :: map() | nil
   def capture(order),
     do: order |> unit() |> get_in(["payments", "captures"]) |> List.wrap() |> List.first()
+
+  # What PayPal took: the capture's amount, once it is not declined, failed or still pending.
+  defp captured(%{"status" => status} = capture)
+       when status not in ["DECLINED", "FAILED", "PENDING"],
+       do: money_of(capture["amount"])
+
+  defp captured(_not_taken), do: nil
 
   defp status(%{"status" => "VOIDED"}, _capture, _refunded, _amount), do: :canceled
 
