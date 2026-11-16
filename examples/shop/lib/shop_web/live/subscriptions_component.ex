@@ -125,11 +125,13 @@ defmodule ShopWeb.SubscriptionsComponent do
               <td class="text-sm">{price(sub)}</td>
               <td>
                 <.sub_status status={sub.status} />
-                <div :if={sub.cancel_at_period_end} class="text-xs text-warning">
+                <div :if={active?(sub) and sub.cancel_at_period_end} class="text-xs text-warning">
                   ends at period end
                 </div>
               </td>
-              <td class="text-xs opacity-70">{time(sub.current_period_end)}</td>
+              <td class="text-xs opacity-70" data-testid="subscription-period">
+                <.period sub={sub} />
+              </td>
             </tr>
           </tbody>
         </table>
@@ -190,16 +192,24 @@ defmodule ShopWeb.SubscriptionsComponent do
                 {@selected.customer_name || "–"}
                 <span class="block text-xs opacity-70">{@selected.customer_email}</span>
               </dd>
-              <dt class="opacity-70">Period ends</dt>
+              <dt class="opacity-70">{if active?(@selected), do: "Period ends", else: "Ended"}</dt>
               <dd class="text-xs" data-testid="sub-stored-period-end">
-                {time(@selected.current_period_end)}
+                {if active?(@selected),
+                  do: time(@selected.current_period_end),
+                  else: time(ended_at(@selected))}
               </dd>
-              <dt class="opacity-70">Ends then</dt>
-              <dd data-testid="sub-stored-cancel">{yes_no(@selected.cancel_at_period_end)}</dd>
+              <dt :if={active?(@selected) and @selected.canceled_at} class="opacity-70">
+                Canceled at
+              </dt>
+              <dd :if={active?(@selected) and @selected.canceled_at} class="text-xs">
+                {time(@selected.canceled_at)}
+              </dd>
+              <dt :if={active?(@selected)} class="opacity-70">Ends then</dt>
+              <dd :if={active?(@selected)} data-testid="sub-stored-cancel">
+                {yes_no(@selected.cancel_at_period_end)}
+              </dd>
               <dt :if={@selected.trial_end} class="opacity-70">Trial ends</dt>
               <dd :if={@selected.trial_end} class="text-xs">{time(@selected.trial_end)}</dd>
-              <dt :if={@selected.canceled_at} class="opacity-70">Canceled at</dt>
-              <dd :if={@selected.canceled_at} class="text-xs">{time(@selected.canceled_at)}</dd>
               <dt class="opacity-70">Reference</dt>
               <dd class="font-mono text-xs break-all">{@selected.reference}</dd>
               <dt class="opacity-70">Last synced</dt>
@@ -234,8 +244,8 @@ defmodule ShopWeb.SubscriptionsComponent do
                     live.subscription.current_period_end
                   )}
                 </dd>
-                <dt class="opacity-70">Ends then</dt>
-                <dd data-testid="sub-live-cancel">
+                <dt :if={active?(live.subscription)} class="opacity-70">Ends then</dt>
+                <dd :if={active?(live.subscription)} data-testid="sub-live-cancel">
                   {yes_no(live.subscription.cancel_at_period_end)}
                 </dd>
                 <dt :if={live.subscription.trial_end} class="opacity-70">Trial ends</dt>
@@ -415,6 +425,17 @@ defmodule ShopWeb.SubscriptionsComponent do
       id -> {:ok, id}
     end
   end
+
+  attr :sub, :map, required: true
+
+  defp period(assigns) do
+    ~H"""
+    <span :if={active?(@sub)}>{time(@sub.current_period_end)}</span>
+    <span :if={!active?(@sub)}>Ended {time(ended_at(@sub))}</span>
+    """
+  end
+
+  defp ended_at(sub), do: sub.canceled_at || sub.current_period_end
 
   defp active?(%{status: status}), do: status not in [:canceled, :incomplete_expired]
 

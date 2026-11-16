@@ -58,7 +58,7 @@ defmodule ShopWeb.ShopLive do
      socket
      |> assign(page_title: "Mishka Pay demo shop", tenant: @tenant, statuses: @statuses)
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
-     |> assign(selected: nil, checkout_read: nil, simulated: nil)
+     |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{})
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -162,10 +162,16 @@ defmodule ShopWeb.ShopLive do
 
   def handle_event("simulate", %{"payment_id" => payment_id, "type" => type} = params, socket) do
     signature = if params["signature"] == "bad", do: :bad_signature, else: :good
-    socket = assign(socket, simulated: nil)
+
+    socket =
+      assign(socket,
+        simulated: nil,
+        simulate_form: %{payment_id: payment_id, type: type, signature: params["signature"]}
+      )
 
     with {:ok, payment_id} <- object_id(payment_id),
-         true <- type in WebhookSimulator.types() do
+         true <- type in WebhookSimulator.types(),
+         :ok <- id_matches_type(payment_id, type) do
       {status, event_id} = WebhookSimulator.send_event(payment_id, type, @tenant, signature)
 
       {:noreply,
@@ -316,6 +322,7 @@ defmodule ShopWeb.ShopLive do
       <.webhook_simulator
         types={@simulator_types}
         simulated={@simulated}
+        form={@simulate_form}
         tenant={@tenant}
         local_webhook_secret?={@local_webhook_secret?}
       />
@@ -571,6 +578,29 @@ defmodule ShopWeb.ShopLive do
       nil -> {:error, "Type a payment id first, it starts with pi_."}
       "cs_" <> _ -> {:error, ~s|That is a checkout id (cs_). Use "Read a checkout back" below.|}
       id -> {:ok, id}
+    end
+  end
+
+  # Stripe sends payment_intent.* and charge.refunded about a pi_ id, subscription and invoice
+  # events about a sub_ id. A well-formed id that does not exist (pi_nope) still goes through: it
+  # shows the inbox retry path.
+  defp id_matches_type(id, "payment_intent." <> _),
+    do: expect_prefix(id, "pi_", "payment_intent.*")
+
+  defp id_matches_type(id, "charge.refunded"), do: expect_prefix(id, "pi_", "charge.refunded")
+
+  defp id_matches_type(id, "customer.subscription." <> _),
+    do: expect_prefix(id, "sub_", "customer.subscription.*")
+
+  defp id_matches_type(id, "invoice." <> _), do: expect_prefix(id, "sub_", "invoice.*")
+
+  defp expect_prefix(id, prefix, family) do
+    case String.starts_with?(id, prefix) do
+      true ->
+        :ok
+
+      false ->
+        {:error, "#{family} events need a #{prefix} id: Stripe never sends them about #{id}."}
     end
   end
 

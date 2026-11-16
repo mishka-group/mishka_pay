@@ -686,6 +686,7 @@ defmodule ShopWeb.PayComponents do
   @doc "Sends a signed Stripe webhook about a payment to the shop's own endpoint."
   attr :types, :list, required: true
   attr :simulated, :any, required: true
+  attr :form, :map, default: %{}
   attr :tenant, :string, required: true
   attr :local_webhook_secret?, :boolean, required: true
 
@@ -706,14 +707,17 @@ defmodule ShopWeb.PayComponents do
           name="payment_id"
           placeholder="pi_... or sub_... (copy it from a row)"
           class="input input-sm w-72"
+          value={@form[:payment_id]}
           data-testid="simulate-payment"
         />
         <select name="type" class="select select-sm" data-testid="simulate-type">
-          <option :for={type <- @types} value={type}>{type}</option>
+          <option :for={type <- @types} value={type} selected={type == @form[:type]}>
+            {type}
+          </option>
         </select>
         <select name="signature" class="select select-sm" data-testid="simulate-signature">
-          <option value="good">Good signature</option>
-          <option value="bad">Bad signature</option>
+          <option value="good" selected={@form[:signature] != "bad"}>Good signature</option>
+          <option value="bad" selected={@form[:signature] == "bad"}>Bad signature</option>
         </select>
         <button class="btn btn-sm" data-testid="simulate-submit">Send webhook</button>
       </form>
