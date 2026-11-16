@@ -20,13 +20,17 @@ if Code.ensure_loaded?(Ash) do
     again later.
     """
 
+    alias MishkaPay.Ash.Object.Spec
+    alias MishkaPay.Errors.Unsupported
+
     @doc false
     defmacro __using__(opts) do
       resource = Keyword.fetch!(opts, :resource)
       kind = Keyword.fetch!(opts, :kind)
       priority = Keyword.get(opts, :priority, 50)
-      object = MishkaPay.Ash.Object.Spec.object(kind)
-      capability = MishkaPay.Ash.Object.Spec.capability(kind)
+      object = Spec.object(kind)
+      capability = Spec.capability(kind)
+      id_argument = Spec.id_argument(kind)
 
       quote do
         use MishkaInstaller.Event.Hook,
@@ -42,14 +46,14 @@ if Code.ensure_loaded?(Ash) do
             )
             when is_binary(id) do
           case MishkaPay.Provider.capable(event.provider, unquote(capability)) do
-            {:error, %MishkaPay.Errors.Unsupported{}} ->
+            {:error, %unquote(Unsupported){}} ->
               {:reply, state}
 
             _capable_or_unknown ->
               {:reply,
                MishkaPay.Ash.sync_event(
                  unquote(resource),
-                 unquote(MishkaPay.Ash.Object.Spec.id_argument(kind)),
+                 unquote(id_argument),
                  id,
                  event,
                  state
