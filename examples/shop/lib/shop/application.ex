@@ -22,6 +22,7 @@ defmodule Shop.Application do
       Shop.Pay.Keys,
       Shop.Pay.Gate,
       Shop.Pay.Inbox,
+      Shop.Pay.FailingListener,
       Shop.Pay.PaymentSync,
       Shop.Pay.LiveFeed,
       Shop.Pay.SubscriptionSync,

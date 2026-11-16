@@ -62,7 +62,8 @@ defmodule ShopWeb.ShopLive do
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
-       simulator_types: WebhookSimulator.types()
+       simulator_types: WebhookSimulator.types(),
+       simulator_situations: WebhookSimulator.situations()
      )
      |> assign_status()
      |> assign_stats()
@@ -176,24 +177,30 @@ defmodule ShopWeb.ShopLive do
   end
 
   def handle_event("simulate", %{"payment_id" => payment_id, "type" => type} = params, socket) do
-    signature = if params["signature"] == "bad", do: :bad_signature, else: :good
-
     socket =
       assign(socket,
         simulated: nil,
-        simulate_form: %{payment_id: payment_id, type: type, signature: params["signature"]}
+        simulate_form: %{payment_id: payment_id, type: type, situation: params["situation"]}
       )
 
     with {:ok, payment_id} <- object_id(payment_id),
          true <- type in WebhookSimulator.types(),
-         :ok <- id_matches_type(payment_id, type) do
-      {status, event_id} = WebhookSimulator.send_event(payment_id, type, @tenant, signature)
+         :ok <- id_matches_type(payment_id, type),
+         {:ok, situation, spec} <- situation(params["situation"]) do
+      {statuses, event_id} = WebhookSimulator.send_event(payment_id, type, @tenant, situation)
 
       {:noreply,
        socket
        |> clear_flash()
        |> assign(
-         simulated: %{status: status, event_id: event_id, type: type, signature: signature}
+         simulated: %{
+           statuses: statuses,
+           expect: spec.expect,
+           event_id: event_id,
+           type: type,
+           situation: situation,
+           label: spec.label
+         }
        )}
     else
       false -> {:noreply, flash(socket, :error, "Choose an event type from the list.")}
@@ -339,6 +346,7 @@ defmodule ShopWeb.ShopLive do
 
       <.webhook_simulator
         types={@simulator_types}
+        situations={@simulator_situations}
         simulated={@simulated}
         form={@simulate_form}
         tenant={@tenant}
@@ -638,6 +646,15 @@ defmodule ShopWeb.ShopLive do
   defp provider_of("pi_" <> _), do: "stripe"
   defp provider_of("cs_" <> _), do: "stripe"
   defp provider_of(_paypal_order), do: "paypal"
+
+  defp situation(value) do
+    case Enum.find(WebhookSimulator.situations(), fn {name, _spec} ->
+           Atom.to_string(name) == value
+         end) do
+      {name, spec} -> {:ok, name, spec}
+      nil -> {:error, "Choose a situation from the list."}
+    end
+  end
 
   # The simulator takes a payment or a subscription id.
   defp object_id(value) do

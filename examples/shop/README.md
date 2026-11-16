@@ -22,7 +22,8 @@ without leaning on text or layout.
 | **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
 | **Subscriptions**, live | `Shop.Pay.Subscription` rows (`MishkaPay.Ash.Subscription`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.invoices/3`); cancel at the period's end or now, keep it going, sync |
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
-| **Webhook simulator** | a Stripe event about a payment or a subscription (`invoice.paid`, `customer.subscription.updated`...), signed as Stripe signs (or with a bad signature), sent to the shop's own webhook endpoint |
+| **Webhook simulator** | a Stripe event about a payment or subscription in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
+| **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |
 | **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job; every Mishka Pay call and HTTP request with its outcome and time |
 | **Site settings** | refund rule, merchant of record and shop open or closed, in the database, read on every call |
 

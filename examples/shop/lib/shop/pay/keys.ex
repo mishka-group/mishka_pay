@@ -25,6 +25,9 @@ defmodule Shop.Pay.Keys do
   require Ash.Query
 
   @impl MishkaPay.Credentials
+  # Only the demo site has keys: any other tenant is a site this shop does not know.
+  def credentials(_provider, tenant) when tenant != "demo", do: nil
+
   def credentials("stripe", tenant) do
     with key when is_binary(key) <- System.get_env("STRIPE_SECRET_KEY") do
       %{secret_key: key, webhook_secret: webhook_secret()}
