@@ -6,6 +6,8 @@ defmodule ShopWeb.PayComponents do
 
   use Phoenix.Component
 
+  alias Phoenix.LiveView.JS
+
   import ShopWeb.CoreComponents, only: [icon: 1]
 
   attr :icon, :string, required: true
@@ -24,7 +26,7 @@ defmodule ShopWeb.PayComponents do
 
   def hint(assigns) do
     ~H"""
-    <p class="text-xs opacity-60 mb-2" data-testid="code-hint">
+    <p class="text-xs opacity-60 mb-2 grow-0" data-testid="code-hint">
       <code>{render_slot(@inner_block)}</code>
     </p>
     """
@@ -107,15 +109,59 @@ defmodule ShopWeb.PayComponents do
           </h2>
           <.hint>mishka_pay:* events</.hint>
           <ul class="text-xs space-y-1">
-            <li :for={plugin <- @plugins} class="flex flex-wrap gap-1" data-testid="plugin">
-              <code class="opacity-70">{plugin.event}</code>
-              <span class="font-medium">{inspect(plugin.name)}</span>
-              <span class="badge badge-ghost badge-xs">{plugin.status}</span>
-            </li>
+            <.plugin_row :for={plugin <- Enum.take(@plugins, 4)} plugin={plugin} />
           </ul>
+          <ul
+            :if={Enum.drop(@plugins, 4) != []}
+            id="plugins-rest"
+            class="hidden text-xs space-y-1"
+            data-testid="plugins-rest"
+          >
+            <.plugin_row :for={plugin <- Enum.drop(@plugins, 4)} plugin={plugin} />
+          </ul>
+          <div :if={Enum.drop(@plugins, 4) != []}>
+            <button
+              id="plugins-more"
+              type="button"
+              class="btn btn-ghost btn-xs"
+              phx-click={
+                JS.show(to: "#plugins-rest")
+                |> JS.hide(to: "#plugins-more")
+                |> JS.show(to: "#plugins-less")
+              }
+              data-testid="plugins-more"
+            >
+              Read more
+            </button>
+            <button
+              id="plugins-less"
+              type="button"
+              class="btn btn-ghost btn-xs hidden"
+              phx-click={
+                JS.hide(to: "#plugins-rest")
+                |> JS.hide(to: "#plugins-less")
+                |> JS.show(to: "#plugins-more")
+              }
+              data-testid="plugins-less"
+            >
+              Show less
+            </button>
+          </div>
         </div>
       </div>
     </section>
+    """
+  end
+
+  attr :plugin, :map, required: true
+
+  defp plugin_row(assigns) do
+    ~H"""
+    <li class="flex flex-wrap gap-1" data-testid="plugin">
+      <code class="opacity-70">{@plugin.event}</code>
+      <span class="font-medium">{inspect(@plugin.name)}</span>
+      <span class="badge badge-ghost badge-xs">{@plugin.status}</span>
+    </li>
     """
   end
 
