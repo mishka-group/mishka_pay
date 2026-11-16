@@ -503,7 +503,7 @@ defmodule ShopWeb.AdminRowsComponent do
   defp amount(:price, row), do: money_text(row.money)
 
   defp amount(:coupon, %{percent_off: %Decimal{} = percent}),
-    do: "#{Decimal.normalize(percent)}% off"
+    do: "#{percent |> Decimal.normalize() |> Decimal.to_string(:normal)}% off"
 
   defp amount(:coupon, row), do: "#{money_text(row.money_off)} off"
 

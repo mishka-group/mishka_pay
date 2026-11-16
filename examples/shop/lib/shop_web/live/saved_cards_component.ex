@@ -82,7 +82,7 @@ defmodule ShopWeb.SavedCardsComponent do
       }
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
-    with {:ok, customer_id} <- customer_id(params),
+    with {:ok, customer_id} <- portal_customer(attrs[:subscription_id], params),
          {:ok, session} <- MishkaPay.portal_session(Map.put(attrs, :customer_id, customer_id)) do
       {:noreply, redirect(socket, external: session.url)}
     else
@@ -289,6 +289,19 @@ defmodule ShopWeb.SavedCardsComponent do
   end
 
   # The id typed wins over the one picked.
+  # A subscription task opens the portal for the customer who has the subscription.
+  defp portal_customer(nil, params), do: customer_id(params)
+
+  defp portal_customer(subscription_id, params) do
+    Shop.Pay.Subscription
+    |> Ash.Query.filter(provider_id == ^subscription_id)
+    |> Ash.read_one(authorize?: false)
+    |> case do
+      {:ok, %{customer_id: customer_id}} when is_binary(customer_id) -> {:ok, customer_id}
+      _not_kept -> customer_id(params)
+    end
+  end
+
   defp customer_id(params) do
     case blank_nil(params["customer_id"]) || blank_nil(params["customer"]) do
       nil -> {:error, "Pick a customer, or type its id (cus_...)."}
