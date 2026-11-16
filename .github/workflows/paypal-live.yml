@@ -1,0 +1,61 @@
+name: PayPal live
+
+# The :paypal_live tests against the PayPal sandbox app whose keys are the PAYPAL_CLIENT_ID and
+# PAYPAL_CLIENT_SECRET secrets. A sandbox moves no real money. A pull request from a fork has no
+# secrets, so the job is skipped there; without the secrets the test step is skipped.
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: paypal-live-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  paypal-live:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      PAYPAL_CLIENT_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
+      PAYPAL_CLIENT_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
+
+    # The test run starts the Ash layer's database, as every run does.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same OTP and Elixir as ci.yml: the ones in .tool-versions.
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: paypal-live-${{ runner.os }}-${{ hashFiles('.tool-versions', 'mix.lock') }}
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - run: mix ash.codegen ci
+
+      - if: env.PAYPAL_CLIENT_ID != '' && env.PAYPAL_CLIENT_SECRET != ''
+        run: mix test --only paypal_live
