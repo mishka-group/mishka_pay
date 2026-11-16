@@ -58,7 +58,8 @@ if System.get_env("STRIPE_MOCK_REQUIRED") && not stripe_mock?,
 excluded =
   [
     stripe_mock: not stripe_mock?,
-    stripe_live: is_nil(System.get_env("STRIPE_SECRET_KEY"))
+    stripe_live: is_nil(System.get_env("STRIPE_SECRET_KEY")),
+    paypal_live: is_nil(System.get_env("PAYPAL_CLIENT_SECRET"))
   ]
   |> Enum.filter(fn {_tag, skip?} -> skip? end)
   |> Enum.map(fn {tag, _skip?} -> tag end)

@@ -5,14 +5,19 @@
 defmodule MishkaPay.Application do
   @moduledoc """
   Mishka Pay's own processes: the task supervisor `MishkaPay.Credentials.fetch/3` runs a host's
-  keys plugins under, so a plugin that exits, throws or hangs never takes the caller with it.
+  keys plugins under, so a plugin that exits, throws or hangs never takes the caller with it; and
+  the owner of the providers' token cache (`MishkaPay.Helpers.TokenCache`).
   """
 
   use Application
 
   @impl true
   def start(_type, _args) do
-    children = [{Task.Supervisor, name: MishkaPay.TaskSupervisor}]
+    children = [
+      {Task.Supervisor, name: MishkaPay.TaskSupervisor},
+      MishkaPay.Helpers.TokenCache
+    ]
+
     opts = [strategy: :one_for_one, name: MishkaPay.Supervisor]
     Supervisor.start_link(children, opts)
   end

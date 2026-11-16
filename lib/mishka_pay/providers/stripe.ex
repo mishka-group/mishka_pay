@@ -62,7 +62,7 @@ defmodule MishkaPay.Providers.Stripe do
     label: "Stripe",
     capabilities: [:checkout, :refund, :subscription, :webhook]
 
-  alias MishkaPay.{Checkout, Client, Errors, Messages, Refund}
+  alias MishkaPay.{Checkout, Client, Errors, Messages, ProviderKit, Refund}
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -80,7 +80,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- metadata(checkout.metadata),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
-             key: idempotency_key("checkout", checkout.tenant, checkout.reference)
+             key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
            ) do
       {:ok, Mapper.checkout(session, checkout)}
     end
@@ -116,8 +116,9 @@ defmodule MishkaPay.Providers.Stripe do
   def refund(%Refund{} = refund, keys) do
     with :ok <- stripe_id(refund.payment_id, "pi_", :payment_id),
          :ok <- currencies([refund], :refund),
-         {:ok, key} <- refund_key(refund, keys),
-         :ok <- refundable(refund, keys),
+         {:ok, key} <- ProviderKit.refund_key(refund, keys),
+         {:ok, payment} <- fetch_payment(refund.payment_id, keys),
+         :ok <- ProviderKit.refundable(refund, payment, keys),
          {:ok, answer} <-
            request(:post, "/v1/refunds", Mapper.refund_params(refund), keys, key: key) do
       Mapper.refund(answer, refund)
@@ -360,48 +361,6 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  # A tenant that refunds once has one refund per payment, so the payment is the key; one that
-  # refunds many times names each refund with its reference.
-  defp refund_key(refund, %{refunds: :once}),
-    do: {:ok, idempotency_key("refund", refund.tenant, refund.payment_id)}
-
-  defp refund_key(%Refund{reference: nil}, _many),
-    do: invalid(:reference, Messages.text(:refund_reference))
-
-  defp refund_key(refund, _many),
-    do: {:ok, idempotency_key("refund", refund.tenant, {refund.payment_id, refund.reference})}
-
-  # Stripe has no currency on a refund: it counts the amount in the payment's own currency, so a
-  # part refund in another currency, or over what is left, is refused.
-  defp refundable(%Refund{amount: amount, payment_id: id}, keys) do
-    with {:ok, payment} <- fetch_payment(id, keys) do
-      left = Decimal.sub(payment.amount.amount, payment.amount_refunded.amount)
-
-      cond do
-        keys.refunds == :once and Money.positive?(payment.amount_refunded) ->
-          invalid(:payment_id, Messages.text(:refund_once))
-
-        not Decimal.positive?(left) ->
-          invalid(:payment_id, Messages.text(:refund_nothing_left))
-
-        is_nil(amount) ->
-          :ok
-
-        amount.currency != payment.amount.currency ->
-          invalid(
-            :amount,
-            Messages.text(:refund_currency, currency: payment.amount.currency)
-          )
-
-        Decimal.gt?(amount.amount, left) ->
-          invalid(:amount, Messages.text(:refund_left))
-
-        true ->
-          :ok
-      end
-    end
-  end
-
   # Stripe keeps up to 50 metadata keys (one is the reference), of 40 characters, with values of
   # 500.
   defp metadata(nil), do: :ok
@@ -422,8 +381,7 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  defp invalid(field, message),
-    do: Errors.from_builder({:error, [%{field: field, action: :stripe, message: message}]})
+  defp invalid(field, message), do: ProviderKit.invalid(field, message)
 
   defp currencies(items, operation) do
     odd =
@@ -461,14 +419,6 @@ defmodule MishkaPay.Providers.Stripe do
        do: rem(MishkaPay.Money.to_minor(money), 10) == 0
 
   defp three_decimal_ok?(_item), do: true
-
-  # The same reference for the same tenant is the same request to Stripe, however often it is sent.
-  defp idempotency_key(_operation, _tenant, nil), do: nil
-
-  defp idempotency_key(operation, tenant, reference) do
-    digest = :crypto.hash(:sha256, :erlang.term_to_binary({tenant, reference}))
-    "mishka_pay-#{operation}-" <> Base.url_encode64(digest, padding: false)
-  end
 
   defp base_url do
     :mishka_pay

@@ -1,8 +1,12 @@
 defmodule Shop.Pay.Keys do
   @moduledoc """
-  Answers Mishka Pay's `mishka_pay:credentials` event: the Stripe sandbox keys from the
+  Answers Mishka Pay's `mishka_pay:credentials` event: the Stripe and PayPal sandbox keys from the
   environment, and the site's own settings (`Shop.Pay.Setting`) from the database, read again on
   every call.
+
+  PayPal needs `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` (a sandbox app's), and for its
+  webhooks `PAYPAL_WEBHOOK_ID`. The merchant-of-record setting is Stripe's, so PayPal gets only the
+  refund rule.
 
   The webhook secret is `STRIPE_WEBHOOK_SECRET` (the one `stripe listen` prints), or a local one the
   page's webhook simulator signs with when it is not set.
@@ -25,6 +29,20 @@ defmodule Shop.Pay.Keys do
     with key when is_binary(key) <- System.get_env("STRIPE_SECRET_KEY") do
       %{secret_key: key, webhook_secret: webhook_secret()}
       |> Map.merge(settings(tenant))
+      |> Map.reject(fn {_name, value} -> is_nil(value) end)
+    end
+  end
+
+  def credentials("paypal", tenant) do
+    with id when is_binary(id) <- System.get_env("PAYPAL_CLIENT_ID"),
+         secret when is_binary(secret) <- System.get_env("PAYPAL_CLIENT_SECRET") do
+      %{
+        publishable_key: id,
+        secret_key: secret,
+        webhook_secret: System.get_env("PAYPAL_WEBHOOK_ID"),
+        mode: :test
+      }
+      |> Map.merge(Map.take(settings(tenant), [:refunds]))
       |> Map.reject(fn {_name, value} -> is_nil(value) end)
     end
   end

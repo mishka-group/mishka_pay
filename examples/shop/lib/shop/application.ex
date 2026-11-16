@@ -18,6 +18,7 @@ defmodule Shop.Application do
       # Mishka Pay's plugins: Stripe as the provider, the shop's keys and settings, the inbox
       # that stores each webhook, the sync that keeps the payments table, and the live feed.
       MishkaPay.Providers.Stripe,
+      MishkaPay.Providers.PayPal,
       Shop.Pay.Keys,
       Shop.Pay.Gate,
       Shop.Pay.Inbox,

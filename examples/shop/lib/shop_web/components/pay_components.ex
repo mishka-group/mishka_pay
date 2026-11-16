@@ -37,6 +37,7 @@ defmodule ShopWeb.PayComponents do
   attr :tenant, :string, required: true
   attr :plugins, :list, required: true
   attr :local_webhook_secret?, :boolean, required: true
+  attr :paypal?, :boolean, default: false
 
   def status(assigns) do
     ~H"""
@@ -91,6 +92,8 @@ defmodule ShopWeb.PayComponents do
                 {if @setting.open, do: "open", else: "closed"}
               </span>
             </dd>
+            <dt class="opacity-70">PayPal</dt>
+            <dd data-testid="site-paypal">coming soon</dd>
           </dl>
         </div>
       </div>
@@ -152,15 +155,25 @@ defmodule ShopWeb.PayComponents do
 
   @doc "The optional parts of a checkout, sent with whichever product is bought."
   attr :max_quantity, :integer, required: true
+  attr :paypal?, :boolean, default: false
 
   def checkout_options(assigns) do
     ~H"""
     <details class="collapse collapse-arrow bg-base-200" data-testid="checkout-options">
       <summary class="collapse-title font-medium">
         Checkout options
-        <span class="text-sm opacity-60">(quantity, buyer, merchant of record, metadata)</span>
+        <span class="text-sm opacity-60">
+          (provider, quantity, buyer, merchant of record, metadata)
+        </span>
       </summary>
       <div class="collapse-content grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="fieldset">
+          <span class="fieldset-legend">Pay with</span>
+          <select name="provider" class="select select-sm" data-testid="option-provider">
+            <option value="stripe">Stripe</option>
+            <option value="paypal" disabled>PayPal (coming soon)</option>
+          </select>
+        </label>
         <label class="fieldset">
           <span class="fieldset-legend">Quantity, 1 to {@max_quantity}</span>
           <input
@@ -363,7 +376,10 @@ defmodule ShopWeb.PayComponents do
             data-status={payment.status}
           >
             <td>
-              <div class="font-medium">{product_name(payment.reference, @names)}</div>
+              <div class="font-medium flex items-center gap-2">
+                {product_name(payment.reference, @names)}
+                <.provider_badge provider={payment.provider} />
+              </div>
               <div class="text-xs opacity-60 font-mono">{payment.provider_id}</div>
             </td>
             <td class="text-sm">
@@ -404,9 +420,11 @@ defmodule ShopWeb.PayComponents do
         <div class="flex flex-wrap items-center gap-3">
           <h2 class="card-title flex-1 min-w-0 flex-wrap">
             {product_name(@selected.payment.reference, @names)}
+            <.provider_badge provider={@selected.payment.provider} />
             <code class="text-sm opacity-70 break-all">{@selected.payment.provider_id}</code>
           </h2>
           <a
+            :if={@selected.payment.provider == "stripe"}
             href={"https://dashboard.stripe.com/test/payments/#{@selected.payment.provider_id}"}
             target="_blank"
             class="btn btn-ghost btn-sm shrink-0"
@@ -696,7 +714,7 @@ defmodule ShopWeb.PayComponents do
       <.section_title icon="hero-paper-airplane" title="Webhook simulator" />
       <p class="text-sm opacity-70 mb-2">
         Sends a Stripe event about a payment to <code>/pay/webhooks/stripe/{@tenant}</code>,
-        signed as Stripe signs. It goes the whole way: signature check, inbox, job, payment sync.
+        signed as Stripe signs. It goes the whole way: signature check, inbox, job, payment sync. PayPal webhooks cannot be simulated here: PayPal checks each one itself, on its servers.
         <span :if={!@local_webhook_secret?}>
           Signed with your <code>STRIPE_WEBHOOK_SECRET</code>.
         </span>
@@ -900,6 +918,15 @@ defmodule ShopWeb.PayComponents do
         <div><button class="btn btn-sm" data-testid="settings-save">Save settings</button></div>
       </form>
     </section>
+    """
+  end
+
+  @doc "Which provider took a payment."
+  attr :provider, :string, required: true
+
+  def provider_badge(assigns) do
+    ~H"""
+    <span class="badge badge-outline badge-xs" data-testid="provider-badge">{@provider}</span>
     """
   end
 
