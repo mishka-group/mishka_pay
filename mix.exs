@@ -44,7 +44,8 @@ defmodule MishkaPay.MixProject do
     [
       licenses: ["Apache-2.0"],
       maintainers: ["Shahryar Tavakkoli"],
-      files: ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README*),
+      files:
+        ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* usage-rules.md usage-rules),
       links: %{
         "GitHub" => @source_url,
         "Sponsor" => "https://github.com/sponsors/mishka-group",
@@ -53,7 +54,10 @@ defmodule MishkaPay.MixProject do
     ]
   end
 
-  def cli, do: [preferred_envs: [ci: :test, "mishka_pay.credence": :test]]
+  def cli,
+    do: [
+      preferred_envs: [ci: :test, "mishka_pay.credence": :test, "mishka_pay.usage_rules": :test]
+    ]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
@@ -147,6 +151,8 @@ defmodule MishkaPay.MixProject do
         "format --check-formatted",
         "credo --strict",
         "mishka_pay.credence",
+        # The rules an LLM agent reads name only what exists.
+        "mishka_pay.usage_rules",
         # Every message of Messages is in priv/gettext/mishka_pay.pot.
         "gettext.extract --check-up-to-date",
         "sobelow --config",

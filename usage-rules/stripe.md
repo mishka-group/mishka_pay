@@ -1,0 +1,48 @@
+# Rules for Stripe in Mishka Pay
+
+`MishkaPay.Providers.Stripe` (id `"stripe"`) has every capability: `:checkout`, `:refund`,
+`:subscription`, `:webhook`. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`).
+
+## Checkout
+
+- A checkout is a Stripe Checkout Session. The buyer comes back to `success_url` with the session
+  id when the URL carries Stripe's placeholder: `url(~p"/thanks") <> "?session_id={CHECKOUT_SESSION_ID}"`.
+- On that page, read it back: `MishkaPay.fetch_checkout("stripe", session_id, tenant)`. Its
+  `:payment_id` (one-time) or `:subscription_id` (subscription) is set once Stripe took the money.
+  Then read the payment or subscription itself before giving access.
+- `:amount_total` and `:amount_tax` on the read-back checkout are what Stripe charged, tax
+  included.
+
+## Managed Payments (merchant of record)
+
+- With `merchant_of_record: true` (the checkout's own field, else the tenant's keys setting, else
+  the Stripe account's default) Stripe sells as the merchant of record and adds tax. Every item
+  then needs a `tax_code` (`"txcd_10302000"` digital book, `"txcd_10103001"` SaaS).
+- The buyer's total can be higher than the item price (tax). Show "+ tax" next to prices.
+
+## Ids and what is refused before any request
+
+- Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, test clocks
+  `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+- Refused as `Errors.Unsupported`: HUF, TWD, ISK, UGX, MGA (Stripe counts them differently from
+  ISO 4217). BHD, JOD, KWD, OMR and TND only with a last decimal of 0.
+- Metadata: at most 49 keys of 40 characters, values of 500, string keys and values.
+
+## Payments as Mishka Pay reads them
+
+`fetch_payment("stripe", "pi_...", tenant)` reads the PaymentIntent with its charge, the charge's
+refunds and the customer in one request, and answers `:status`, `:amount`, `:amount_refunded`,
+`:customer_email`, `:customer_name`, `:card_brand`, `:card_last4`, `:receipt_url`,
+`:failure_code`, `:failure_message`, `:description`, `:metadata` and `:refunds`.
+
+## Sandbox
+
+- Test cards: `4242 4242 4242 4242` (Visa), `5555 5555 5555 4444` (Mastercard), `4000 0025 0000
+  3155` (3D Secure), `4000 0000 0000 0002` (declined), `4000 0000 0000 9995` (insufficient funds).
+  Any future date and CVC. Server-side, the matching tokens are `pm_card_visa`,
+  `pm_card_mastercard`, `pm_card_chargeDeclined`...
+- A refund with reason `:fraudulent` puts the card in the account's Radar block list; later
+  payments with that card are declined (`block_if_in_blocklist`). Use other reasons in tests.
+- **Test clocks** show what time does to a subscription: `MishkaPay.Providers.Stripe.TestClock`
+  (`create/2`, `fetch/2`, `advance/3`, `list/1`, `delete/2`), test keys only. A clock moves on
+  Stripe's servers: read it until `status: :ready`, then read the subscription again.
