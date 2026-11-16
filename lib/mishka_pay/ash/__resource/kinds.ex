@@ -772,15 +772,14 @@ if Code.ensure_loaded?(Ash) do
           upsert?: true,
           upsert_identity: identity,
           upsert_fields: synced ++ also,
-          upsert_condition: newer(kind)
+          upsert_condition: newer()
         ],
         opts
       )
     end
 
     # A provider object is written over only by a read that is not older than the one kept.
-    defp newer(:inbox), do: nil
-    defp newer(_kind), do: Ash.Expr.expr(synced_at <= upsert_conflict(:synced_at))
+    defp newer, do: Ash.Expr.expr(synced_at <= upsert_conflict(:synced_at))
 
     defp update(name, change, arguments, opts \\ []) do
       {name, :update,

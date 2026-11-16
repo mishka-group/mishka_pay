@@ -46,7 +46,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   def digits(currency), do: Map.get(@digits, currency)
 
   @doc "Stripe's integer `amount` for `money`, in the places Stripe counts its currency in."
-  @spec minor(Money.t()) :: integer()
+  @spec minor(Elixir.Money.t()) :: integer()
   def minor(%{currency: currency} = money) do
     case digits(currency) do
       nil -> Money.to_minor(money)
@@ -321,7 +321,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Whether a checkout sells with Stripe as the merchant of record: its own choice, else the
   tenant's setting, else `nil`, the Stripe account's default.
   """
-  @spec merchant_of_record(Checkout.t(), map()) :: boolean() | nil
+  @spec merchant_of_record(Checkout.t() | PaymentLink.t(), map()) :: boolean() | nil
   def merchant_of_record(%{merchant_of_record: choice}, _settings)
       when is_boolean(choice),
       do: choice
@@ -1006,7 +1006,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/payment_intents/:id/capture`: the part to take, or none for all that is
   held.
   """
-  @spec capture_params(Money.t() | nil) :: map()
+  @spec capture_params(Elixir.Money.t() | nil) :: map()
   def capture_params(nil), do: %{}
   def capture_params(amount), do: %{"amount_to_capture" => minor(amount)}
 
