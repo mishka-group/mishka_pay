@@ -48,6 +48,7 @@ defmodule ShopWeb.ShopLive do
       Phoenix.PubSub.subscribe(Shop.PubSub, LiveFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
+      Phoenix.PubSub.subscribe(Shop.PubSub, Shop.Pay.SubscriptionFeed.topic())
       ShopWeb.Endpoint.subscribe("pay:inbox")
     end
 
@@ -163,7 +164,7 @@ defmodule ShopWeb.ShopLive do
     signature = if params["signature"] == "bad", do: :bad_signature, else: :good
     socket = assign(socket, simulated: nil)
 
-    with {:ok, payment_id} <- payment_id(payment_id),
+    with {:ok, payment_id} <- object_id(payment_id),
          true <- type in WebhookSimulator.types() do
       {status, event_id} = WebhookSimulator.send_event(payment_id, type, @tenant, signature)
 
@@ -212,6 +213,14 @@ defmodule ShopWeb.ShopLive do
 
   def handle_info(:settings_changed, socket), do: {:noreply, assign_status(socket)}
 
+  def handle_info({:subscription_changed, record}, socket) do
+    send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", changed: record)
+    {:noreply, socket}
+  end
+
+  # A message from the subscriptions part, shown like the page's own.
+  def handle_info({:flash, kind, message}, socket), do: {:noreply, flash(socket, kind, message)}
+
   def handle_info({:telemetry, entry}, socket),
     do: {:noreply, stream_insert(socket, :telemetry, entry, at: 0)}
 
@@ -234,8 +243,25 @@ defmodule ShopWeb.ShopLive do
       <section data-testid="buy">
         <.section_title icon="hero-shopping-cart" title="Buy something" />
         <form id="buy" phx-submit="buy" class="space-y-4">
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <.product :for={product <- @products} product={product} open?={@setting.open} />
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="one-time-products">
+            <.product
+              :for={product <- @products}
+              :if={!Shop.Catalog.plan?(product)}
+              product={product}
+              open?={@setting.open}
+            />
+          </div>
+          <h3 class="font-medium flex items-center gap-2">
+            Plans
+            <span class="text-sm font-normal opacity-60">charged again on a schedule, as a subscription</span>
+          </h3>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="plans">
+            <.product
+              :for={product <- @products}
+              :if={Shop.Catalog.plan?(product)}
+              product={product}
+              open?={@setting.open}
+            />
           </div>
           <.checkout_options max_quantity={@max_quantity} />
         </form>
@@ -264,6 +290,8 @@ defmodule ShopWeb.ShopLive do
       </section>
 
       <.payment_details :if={@selected} selected={@selected} live={@live} names={@names} />
+
+      <.live_component module={ShopWeb.SubscriptionsComponent} id="subscriptions" tenant={@tenant} />
 
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
@@ -314,16 +342,22 @@ defmodule ShopWeb.ShopLive do
     |> Ash.run_action(authorize?: false)
   end
 
+  # A plan opens a subscription checkout, with its interval and trial; any other product is paid
+  # once.
   defp checkout(product, count, params) do
     %{
       provider: "stripe",
       tenant: @tenant,
+      mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
+      trial_days: product.trial_days,
       items: [
         %{
           name: product.name,
           amount: %{amount: product.price, currency: "USD"},
           tax_code: product.tax_code,
-          quantity: count
+          quantity: count,
+          interval: product.interval,
+          interval_count: product.interval && product.interval_count
         }
       ],
       success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
@@ -339,6 +373,32 @@ defmodule ShopWeb.ShopLive do
   # the payment at once rather than waiting for the webhook.
   defp back_from_checkout(socket, session_id) do
     case MishkaPay.fetch_checkout("stripe", session_id, @tenant) do
+      {:ok, %{subscription_id: subscription_id} = checkout} when is_binary(subscription_id) ->
+        socket = assign(socket, checkout_read: checkout)
+
+        case Ash.create(
+               Shop.Pay.Subscription,
+               %{provider: "stripe", subscription_id: subscription_id, tenant: @tenant},
+               action: :sync,
+               authorize?: false
+             ) do
+          {:ok, subscription} ->
+            send_update(ShopWeb.SubscriptionsComponent,
+              id: "subscriptions",
+              changed: subscription
+            )
+
+            send_update(ShopWeb.SubscriptionsComponent,
+              id: "subscriptions",
+              open: subscription.id
+            )
+
+            flash(socket, :info, "Thank you! Your subscription is below, with its invoices.")
+
+          {:error, error} ->
+            flash(socket, :error, MishkaPay.Ash.message(error))
+        end
+
       {:ok, %{payment_id: payment_id} = checkout} when is_binary(payment_id) ->
         socket = assign(socket, checkout_read: checkout)
 
@@ -510,6 +570,15 @@ defmodule ShopWeb.ShopLive do
     case blank_nil(value) do
       nil -> {:error, "Type a payment id first, it starts with pi_."}
       "cs_" <> _ -> {:error, ~s|That is a checkout id (cs_). Use "Read a checkout back" below.|}
+      id -> {:ok, id}
+    end
+  end
+
+  # The simulator takes a payment or a subscription id.
+  defp object_id(value) do
+    case blank_nil(value) do
+      nil -> {:error, "Type a payment (pi_) or subscription (sub_) id first."}
+      "cs_" <> _ -> {:error, "That is a checkout id (cs_): the simulator takes a pi_ or sub_ id."}
       id -> {:ok, id}
     end
   end

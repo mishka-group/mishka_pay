@@ -7,7 +7,33 @@ products = [
   %{slug: "stickers", name: "Sticker pack", price: "4.50", icon: "hero-sparkles"},
   %{slug: "workshop", name: "Phoenix workshop", price: "129.00", icon: "hero-academic-cap"},
   %{slug: "ashbook", name: "Ash framework book", price: "34.00", icon: "hero-book-open"},
-  %{slug: "hoodie", name: "Elixir hoodie", price: "39.00", icon: "hero-gift"}
+  %{slug: "hoodie", name: "Elixir hoodie", price: "39.00", icon: "hero-gift"},
+  # Plans, sold as subscriptions. txcd_10103001 is software as a service.
+  %{
+    slug: "pro-monthly",
+    name: "Pro plan, monthly",
+    price: "9.00",
+    icon: "hero-bolt",
+    interval: :month,
+    tax_code: "txcd_10103001"
+  },
+  %{
+    slug: "pro-yearly",
+    name: "Pro plan, yearly",
+    price: "90.00",
+    icon: "hero-bolt",
+    interval: :year,
+    tax_code: "txcd_10103001"
+  },
+  %{
+    slug: "team-monthly",
+    name: "Team plan, 14-day trial",
+    price: "29.00",
+    icon: "hero-user-group",
+    interval: :month,
+    trial_days: 14,
+    tax_code: "txcd_10103001"
+  }
 ]
 
 for {product, position} <- Enum.with_index(products) do

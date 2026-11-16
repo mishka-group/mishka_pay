@@ -1,5 +1,8 @@
 defmodule Shop.Catalog.Product do
-  @moduledoc "A product the demo shop sells. The seeds (`priv/repo/seeds.exs`) fill them."
+  @moduledoc """
+  A product the demo shop sells, paid once or, with an `:interval`, a plan sold as a subscription.
+  The seeds (`priv/repo/seeds.exs`) fill them.
+  """
 
   use Ash.Resource, domain: Shop.Pay, data_layer: AshPostgres.DataLayer
 
@@ -12,10 +15,33 @@ defmodule Shop.Catalog.Product do
     defaults [:read]
 
     create :seed do
-      accept [:slug, :name, :price, :icon, :tax_code, :position, :active]
+      accept [
+        :slug,
+        :name,
+        :price,
+        :icon,
+        :tax_code,
+        :position,
+        :active,
+        :interval,
+        :interval_count,
+        :trial_days
+      ]
+
       upsert? true
       upsert_identity :slug
-      upsert_fields [:name, :price, :icon, :tax_code, :position, :active]
+
+      upsert_fields [
+        :name,
+        :price,
+        :icon,
+        :tax_code,
+        :position,
+        :active,
+        :interval,
+        :interval_count,
+        :trial_days
+      ]
     end
   end
 
@@ -30,6 +56,12 @@ defmodule Shop.Catalog.Product do
     attribute :tax_code, :string, allow_nil?: false, default: "txcd_10302000", public?: true
     attribute :position, :integer, allow_nil?: false, default: 0, public?: true
     attribute :active, :boolean, allow_nil?: false, default: true, public?: true
+
+    # A plan: charged again every `interval_count` `interval`s, as a subscription, after an
+    # optional trial. Left out, the product is paid once.
+    attribute :interval, :atom, constraints: [one_of: [:day, :week, :month, :year]], public?: true
+    attribute :interval_count, :integer, allow_nil?: false, default: 1, public?: true
+    attribute :trial_days, :integer, public?: true
     timestamps()
   end
 

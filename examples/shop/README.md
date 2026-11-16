@@ -18,8 +18,10 @@ without leaning on text or layout.
 | Back from Stripe, or canceled | `MishkaPay.fetch_checkout/3` reads the session, `:sync` keeps the payment at once |
 | **Payments**: totals, status filter, live | the stored rows with buyer, card and failure reason; webhook → inbox → job → sync → `mishka_pay:payment:changed` → the page |
 | **Details** of a payment | the stored row beside `MishkaPay.fetch_payment/3` live from Stripe: buyer, card, receipt, failure, description, metadata and every refund; its webhook events; sync; refund with an amount and a reason |
+| **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
+| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`MishkaPay.Ash.Subscription`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.invoices/3`); cancel at the period's end or now, keep it going, sync |
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
-| **Webhook simulator** | a Stripe event about a payment, signed as Stripe signs (or with a bad signature), sent to the shop's own webhook endpoint |
+| **Webhook simulator** | a Stripe event about a payment or a subscription (`invoice.paid`, `customer.subscription.updated`...), signed as Stripe signs (or with a bad signature), sent to the shop's own webhook endpoint |
 | **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job; every Mishka Pay call and HTTP request with its outcome and time |
 | **Site settings** | refund rule, merchant of record and shop open or closed, in the database, read on every call |
 
@@ -47,8 +49,9 @@ the seeds (`priv/repo/seeds.exs`): the products and the site's settings.
 ### Test payments in every status
 
 ```bash
-mix shop.sandbox           # 17 payments: paid, part refunded, refunded, declined, 3D Secure, waiting, canceled
-mix shop.sandbox resync    # reads every stored payment from Stripe again
+mix shop.sandbox                 # 17 payments in every status, then 4 subscriptions
+mix shop.sandbox subscriptions   # only the subscriptions: active, in trial, ending, canceled
+mix shop.sandbox resync          # reads every stored payment from Stripe again
 ```
 
 It runs only with a test key, makes each payment with one of Stripe's test cards, and saves and

@@ -4,10 +4,12 @@ defmodule Mix.Tasks.Shop.Sandbox do
   @moduledoc """
   Makes test payments on the Stripe sandbox, for many buyers and products, in every status the
   shop shows: paid, part refunded, refunded, failed (declined, insufficient funds), waiting for
-  3D Secure, waiting for a card, and canceled. Each one is then synced into the shop's payments
+  3D Secure, waiting for a card, and canceled. Then subscriptions to the seeded plans: active, in
+  trial, ending at the period's end, and canceled. Each one is then synced into the shop's payments
   table through Mishka Pay (`:sync`), and refunds go through Mishka Pay's `:refund` action.
 
-      mix shop.sandbox           # makes the payments
+      mix shop.sandbox                 # makes the payments, then the subscriptions
+      mix shop.sandbox subscriptions   # makes only the subscriptions
       mix shop.sandbox resync    # reads every stored payment from Stripe again
 
   It only runs with a test key (`sk_test_...` in `.env`): Stripe's test cards move no money. A
@@ -46,6 +48,14 @@ defmodule Mix.Tasks.Shop.Sandbox do
     {"stickers", 1, "Harper Baker", nil, :cancel}
   ]
 
+  # {plan slug, buyer, what happens after}
+  @subscriptions [
+    {"pro-monthly", "Grace Hopper", :keep},
+    {"team-monthly", "Alan Turing", :keep},
+    {"pro-yearly", "Ada Lovelace", :cancel_at_period_end},
+    {"pro-monthly", "Linus Torvalds", :cancel_now}
+  ]
+
   @impl Mix.Task
   def run(args) do
     # Its own plugin registry, so it can run while `mix phx.server` holds the shop's one.
@@ -65,6 +75,7 @@ defmodule Mix.Tasks.Shop.Sandbox do
 
     case args do
       ["resync"] -> resync()
+      ["subscriptions"] -> make_subscriptions(key)
       _make -> make(key)
     end
   end
@@ -108,7 +119,93 @@ defmodule Mix.Tasks.Shop.Sandbox do
       end
     end
 
+    make_subscriptions(key)
     Mix.shell().info("\nDone. Open the shop to see them: http://localhost:4041")
+  end
+
+  defp make_subscriptions(key) do
+    Mix.shell().info("\nMaking #{length(@subscriptions)} sandbox subscriptions...\n")
+
+    for {plan_slug, buyer, after_start} <- @subscriptions do
+      plan =
+        Shop.Catalog.fetch(plan_slug) || Mix.raise("No plan #{plan_slug}: run the seeds first")
+
+      case key
+           |> subscribe(plan, customer_with_card(key, buyer))
+           |> sync_subscription()
+           |> then_do(after_start) do
+        {:ok, sub} ->
+          Mix.shell().info(
+            "  #{String.pad_trailing(buyer, 16)} #{String.pad_trailing(plan.name, 24)} " <>
+              "#{sub.status}#{if sub.cancel_at_period_end, do: ", ends at period end"} (#{sub.provider_id})"
+          )
+
+        {:error, error} ->
+          Mix.shell().error("  #{buyer}: #{MishkaPay.Ash.message(error)}")
+      end
+    end
+  end
+
+  # A buyer with a Mastercard test card on file, as a subscription renews with it.
+  defp customer_with_card(key, name) do
+    customer = customer(key, name)
+
+    {200, %{"id" => card}} =
+      stripe(key, "/v1/payment_methods/pm_card_mastercard/attach", %{"customer" => customer})
+
+    {200, _customer} =
+      stripe(key, "/v1/customers/#{customer}", %{
+        "invoice_settings" => %{"default_payment_method" => card}
+      })
+
+    customer
+  end
+
+  # A Stripe product for the plan, then a subscription to its price, with the plan's trial.
+  defp subscribe(key, plan, customer) do
+    {200, %{"id" => product}} = stripe(key, "/v1/products", %{"name" => plan.name})
+    cents = plan.price |> Decimal.mult(100) |> Decimal.to_integer()
+
+    {200, %{"id" => id}} =
+      stripe(key, "/v1/subscriptions", %{
+        "customer" => customer,
+        "trial_period_days" => plan.trial_days,
+        "metadata" => %{"mishka_pay_reference" => Shop.Catalog.reference(plan)},
+        "items" => [
+          %{
+            "price_data" => %{
+              "currency" => "usd",
+              "product" => product,
+              "unit_amount" => cents,
+              "recurring" => %{
+                "interval" => Atom.to_string(plan.interval),
+                "interval_count" => plan.interval_count
+              }
+            }
+          }
+        ]
+      })
+
+    id
+  end
+
+  defp sync_subscription(subscription_id) do
+    Ash.create(
+      Shop.Pay.Subscription,
+      %{provider: "stripe", subscription_id: subscription_id, tenant: @tenant},
+      action: :sync,
+      authorize?: false
+    )
+  end
+
+  defp then_do({:ok, sub}, :cancel_at_period_end), do: cancel(sub, :period_end)
+  defp then_do({:ok, sub}, :cancel_now), do: cancel(sub, :now)
+  defp then_do(synced, :keep), do: synced
+
+  defp cancel(sub, at) do
+    sub
+    |> Ash.Changeset.for_update(:cancel, %{at: at})
+    |> Ash.update(authorize?: false)
   end
 
   defp customer(key, name) do

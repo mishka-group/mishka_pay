@@ -124,8 +124,17 @@ defmodule ShopWeb.PayComponents do
         <.icon name={@product.icon} class="size-8 text-primary" />
         <h3 class="card-title">{@product.name}</h3>
         <p class="text-2xl font-semibold" data-testid="product-price">
-          ${@product.price} <span class="text-sm font-normal opacity-60">+ tax</span>
+          ${@product.price}
+          <span :if={@product.interval} class="text-base font-normal">
+            / {if @product.interval_count > 1,
+              do: "#{@product.interval_count} #{@product.interval}s",
+              else: @product.interval}
+          </span>
+          <span class="text-sm font-normal opacity-60">+ tax</span>
         </p>
+        <span :if={@product.trial_days} class="badge badge-info badge-sm" data-testid="product-trial">
+          {@product.trial_days}-day free trial
+        </span>
         <button
           name="product"
           value={@product.slug}
@@ -133,7 +142,7 @@ defmodule ShopWeb.PayComponents do
           phx-disable-with="Opening Stripe..."
           data-testid={"buy-#{@product.slug}"}
         >
-          Buy with Stripe
+          {if @product.interval, do: "Subscribe with Stripe", else: "Buy with Stripe"}
         </button>
         <p :if={!@open?} class="text-xs text-error">The shop is closed: the gate will refuse.</p>
       </div>
@@ -695,7 +704,7 @@ defmodule ShopWeb.PayComponents do
       <form phx-submit="simulate" class="flex flex-wrap gap-2 items-end">
         <input
           name="payment_id"
-          placeholder="pi_... (pick a row, then copy its id)"
+          placeholder="pi_... or sub_... (copy it from a row)"
           class="input input-sm w-72"
           data-testid="simulate-payment"
         />
@@ -743,7 +752,7 @@ defmodule ShopWeb.PayComponents do
         <thead>
           <tr>
             <th>Type</th>
-            <th>Payment</th>
+            <th>About</th>
             <th>Status</th>
             <th>Error</th>
           </tr>
@@ -760,7 +769,7 @@ defmodule ShopWeb.PayComponents do
             data-status={event.status}
           >
             <td><code class="text-xs">{event.type}</code></td>
-            <td class="font-mono text-xs break-all">{event.payment_id}</td>
+            <td class="font-mono text-xs break-all">{event.payment_id || event.subscription_id}</td>
             <td><span class="badge badge-sm">{event.status}</span></td>
             <td class="text-xs text-error">{event.last_error}</td>
           </tr>
