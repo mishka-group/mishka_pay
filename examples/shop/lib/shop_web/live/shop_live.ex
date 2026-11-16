@@ -109,7 +109,19 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  # PayPal sends the buyer back with the Order id in `token`.
+  # PayPal sends the buyer back with the subscription id in `subscription_id` (its `token` is not
+  # the subscription), or for a payment with the Order id in `token`.
+  def handle_params(%{"provider" => "paypal", "subscription_id" => subscription_id}, _uri, socket) do
+    case connected?(socket) do
+      true ->
+        {:noreply,
+         socket |> back_from_checkout("paypal", subscription_id) |> push_patch(to: ~p"/")}
+
+      false ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_params(%{"provider" => "paypal", "token" => order_id}, _uri, socket) do
     case connected?(socket) do
       true ->
