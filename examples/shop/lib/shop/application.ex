@@ -27,6 +27,8 @@ defmodule Shop.Application do
       Shop.Pay.LiveFeed,
       Shop.Pay.SubscriptionSync,
       Shop.Pay.SubscriptionFeed,
+      Shop.Pay.CustomerSync,
+      Shop.Pay.CustomerFeed,
       ShopWeb.Endpoint
     ]
 

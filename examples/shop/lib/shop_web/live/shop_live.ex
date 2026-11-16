@@ -9,6 +9,8 @@ defmodule ShopWeb.ShopLive do
     * the payments with totals by status, a status filter, and each payment's full details: the
       stored row beside the payment read live from Stripe (buyer, card, receipt, failure, metadata,
       refunds), its webhook events, sync and refund;
+    * the customers: register one on Stripe, find and keep one, edit it, open its customer portal,
+      and buy as that customer;
     * reading a checkout or a payment back by its id;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
@@ -49,6 +51,7 @@ defmodule ShopWeb.ShopLive do
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
       Phoenix.PubSub.subscribe(Shop.PubSub, Shop.Pay.SubscriptionFeed.topic())
+      Phoenix.PubSub.subscribe(Shop.PubSub, Shop.Pay.CustomerFeed.topic())
       ShopWeb.Endpoint.subscribe("pay:inbox")
     end
 
@@ -58,7 +61,7 @@ defmodule ShopWeb.ShopLive do
      socket
      |> assign(page_title: "Mishka Pay demo shop", tenant: @tenant, statuses: @statuses)
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
-     |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{})
+     |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -108,6 +111,19 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
+  def handle_params(%{"portal" => "back"}, _uri, socket) do
+    case connected?(socket) do
+      true ->
+        {:noreply,
+         socket
+         |> flash(:info, "Back from the customer portal. Changes there come in by webhook.")
+         |> push_patch(to: ~p"/")}
+
+      false ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   @impl true
@@ -121,6 +137,8 @@ defmodule ShopWeb.ShopLive do
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
+
+  def handle_event("clear_buyer", _params, socket), do: {:noreply, assign(socket, buyer: nil)}
 
   def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
 
@@ -247,6 +265,18 @@ defmodule ShopWeb.ShopLive do
   end
 
   # A message from the subscriptions part, shown like the page's own.
+  def handle_info({:customer_changed, record}, socket) do
+    send_update(ShopWeb.CustomersComponent, id: "customers", changed: record)
+    {:noreply, assign(socket, buyer: same_buyer(socket.assigns.buyer, record))}
+  end
+
+  def handle_info({:buyer, customer}, socket) do
+    {:noreply,
+     socket
+     |> assign(buyer: customer)
+     |> flash(:info, "The next checkout pays as #{customer.name || customer.email}.")}
+  end
+
   def handle_info({:flash, kind, message}, socket), do: {:noreply, flash(socket, kind, message)}
 
   def handle_info({:telemetry, entry}, socket),
@@ -292,7 +322,8 @@ defmodule ShopWeb.ShopLive do
               open?={@setting.open}
             />
           </div>
-          <.checkout_options max_quantity={@max_quantity} paypal?={@paypal?} />
+          <.buyer_bar :if={@buyer} buyer={@buyer} />
+          <.checkout_options max_quantity={@max_quantity} paypal?={@paypal?} buyer?={!!@buyer} />
         </form>
         <.test_cards />
       </section>
@@ -321,6 +352,13 @@ defmodule ShopWeb.ShopLive do
       <.payment_details :if={@selected} selected={@selected} live={@live} names={@names} />
 
       <.live_component module={ShopWeb.SubscriptionsComponent} id="subscriptions" tenant={@tenant} />
+
+      <.live_component
+        module={ShopWeb.CustomersComponent}
+        id="customers"
+        tenant={@tenant}
+        buyer={@buyer}
+      />
 
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
 
@@ -398,11 +436,21 @@ defmodule ShopWeb.ShopLive do
       success_url: success_url(provider),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
-      customer: blank_nil(params["email"]) && %{email: params["email"]},
+      customer: buyer(params),
       merchant_of_record: on_off(params["merchant_of_record"]),
       metadata: metadata(params["meta_key"], params["meta_value"])
     }
   end
+
+  # A customer picked with "Buy as this customer" pays as that Stripe customer; otherwise the
+  # email typed, if any, fills Stripe's page.
+  defp buyer(%{"customer_id" => id}) when id != "", do: %{id: id}
+  defp buyer(params), do: blank_nil(params["email"]) && %{email: params["email"]}
+
+  # A customer deleted on Stripe stops being the buyer; an edited one keeps buying, as it is now.
+  defp same_buyer(%{id: id}, %{id: id, deleted_at: nil} = record), do: record
+  defp same_buyer(%{id: id}, %{id: id}), do: nil
+  defp same_buyer(buyer, _other), do: buyer
 
   # The buyer comes back from Stripe with the session id: read it, and when it made a payment, keep
   # the payment at once rather than waiting for the webhook.

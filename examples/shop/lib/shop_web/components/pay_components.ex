@@ -156,6 +156,7 @@ defmodule ShopWeb.PayComponents do
   @doc "The optional parts of a checkout, sent with whichever product is bought."
   attr :max_quantity, :integer, required: true
   attr :paypal?, :boolean, default: false
+  attr :buyer?, :boolean, default: false
 
   def checkout_options(assigns) do
     ~H"""
@@ -187,7 +188,7 @@ defmodule ShopWeb.PayComponents do
             data-testid="option-quantity"
           />
         </label>
-        <label class="fieldset">
+        <label :if={!@buyer?} class="fieldset">
           <span class="fieldset-legend">Buyer email</span>
           <input
             name="email"
@@ -224,6 +225,31 @@ defmodule ShopWeb.PayComponents do
         </div>
       </div>
     </details>
+    """
+  end
+
+  @doc "The Stripe customer the next checkout pays as, picked in the customers part."
+  attr :buyer, :map, required: true
+
+  def buyer_bar(assigns) do
+    ~H"""
+    <div class="alert alert-info py-2" data-testid="buyer-bar" data-customer-id={@buyer.provider_id}>
+      <.icon name="hero-user" class="size-5" />
+      <span>
+        Buying as <strong>{@buyer.name || @buyer.email}</strong>
+        <code class="text-xs opacity-70">{@buyer.provider_id}</code>: Stripe fills their details
+        and keeps the payment on their record.
+      </span>
+      <input type="hidden" name="customer_id" value={@buyer.provider_id} />
+      <button
+        type="button"
+        class="btn btn-ghost btn-xs"
+        phx-click="clear_buyer"
+        data-testid="buyer-clear"
+      >
+        Buy as a guest
+      </button>
+    </div>
     """
   end
 
