@@ -131,6 +131,7 @@ if Code.ensure_loaded?(Ash) do
         {:status, :atom, required(constraints: [one_of: @payment_statuses])},
         {:amount, :decimal, required()},
         {:amount_refunded, :decimal, required(default: 0)},
+        {:amount_captured, :decimal, public()},
         {:currency, :string, required()},
         {:reference, :string, public()},
         {:customer_id, :string, public()},
@@ -315,7 +316,11 @@ if Code.ensure_loaded?(Ash) do
     """
     @spec calculations(kind()) :: [{atom(), atom(), term()}]
     def calculations(:payment),
-      do: [money(:money, :amount), money(:money_refunded, :amount_refunded)]
+      do: [
+        money(:money, :amount),
+        money(:money_refunded, :amount_refunded),
+        money(:money_captured, :amount_captured)
+      ]
 
     def calculations(:subscription) do
       [

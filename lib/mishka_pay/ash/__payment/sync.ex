@@ -46,6 +46,7 @@ if Code.ensure_loaded?(Ash) do
         amount_refunded:
           (payment.amount_refunded || Money.new(payment.amount.currency, 0)).amount,
         currency: to_string(payment.amount.currency),
+        amount_captured: payment.amount_captured && payment.amount_captured.amount,
         reference: payment.reference,
         customer_id: payment.customer_id,
         customer_email: payment.customer_email,

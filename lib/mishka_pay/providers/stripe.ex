@@ -327,7 +327,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def fetch_payment(payment_id, keys) do
     with {:ok, payment} <- read_payment(payment_id, keys),
-         {:ok, %{"data" => sessions}} <-
+         {:ok, sessions} <-
            request(
              :get,
              "/v1/checkout/sessions",
@@ -338,7 +338,8 @@ defmodule MishkaPay.Providers.Stripe do
              ],
              keys
            ) do
-      {:ok, Mapper.with_checkout(payment, List.first(sessions))}
+      {:ok,
+       Mapper.with_checkout(payment, sessions |> Map.get("data") |> List.wrap() |> List.first())}
     end
   end
 
