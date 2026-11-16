@@ -16,7 +16,7 @@ defmodule MishkaPay.ProviderTest do
     assert {:ok, Acme} = Provider.fetch("acme")
     assert Acme in Provider.all()
     assert Acme.label() == "Acme Pay"
-    assert Acme.capabilities() == [:checkout, :refund]
+    assert Acme.capabilities() == [:checkout, :refund, :subscription]
   end
 
   test "an id nobody installed is an unknown provider, in the invalid class" do

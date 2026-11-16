@@ -45,6 +45,8 @@ defmodule MishkaPay.Provider do
 
     * `:checkout`: `checkout/2`, `fetch_checkout/2` and `fetch_payment/2`;
     * `:refund`: `refund/2`;
+    * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
+      `list_invoices/2` (a subscription starts with a checkout in `mode: :subscription`);
     * `:webhook`: `verify_webhook/3`.
 
   Every operation takes a guarded_struct and the tenant's `MishkaPay.Credentials`, and answers a
@@ -106,6 +108,31 @@ defmodule MishkaPay.Provider do
   @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:subscription`. Reads one subscription again from the provider."
+  @callback fetch_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription`. Cancels a subscription `:now`, or at the end of the period paid for
+  (`:period_end`), and answers it as the provider has it after.
+  """
+  @callback cancel_subscription(
+              subscription_id :: String.t(),
+              at :: :now | :period_end,
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription`. Takes back a cancel set for the period's end, so the subscription goes on,
+  and answers it as the provider has it after.
+  """
+  @callback resume_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription`. Lists a subscription's invoices, newest first."
+  @callback list_invoices(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, [MishkaPay.Invoice.t()]} | {:error, Splode.Error.t()}
+
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
   the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
@@ -123,11 +150,21 @@ defmodule MishkaPay.Provider do
                       fetch_checkout: 2,
                       fetch_payment: 2,
                       refund: 2,
+                      fetch_subscription: 2,
+                      cancel_subscription: 3,
+                      resume_subscription: 2,
+                      list_invoices: 2,
                       verify_webhook: 3
 
   @operations %{
     checkout: [checkout: 2, fetch_checkout: 2, fetch_payment: 2],
     refund: [refund: 2],
+    subscription: [
+      fetch_subscription: 2,
+      cancel_subscription: 3,
+      resume_subscription: 2,
+      list_invoices: 2
+    ],
     webhook: [verify_webhook: 3]
   }
 

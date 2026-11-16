@@ -15,6 +15,9 @@ defmodule MishkaPay.Event do
     * `:payment_id`: the payment it concerns, when it concerns one: the object itself for a
       payment, or the payment a checkout, charge, refund or dispute belongs to. The id
       `MishkaPay.fetch_payment/3` takes.
+    * `:subscription_id`: the subscription it concerns, when it concerns one: the object itself
+      for a subscription, or the subscription an invoice belongs to. The id
+      `MishkaPay.fetch_subscription/3` takes.
     * `:livemode`: whether it came from live or test mode.
     * `:account`: the connected account it is for, when the provider has those.
     * `:created_at`: when the provider made it.
@@ -34,6 +37,7 @@ defmodule MishkaPay.Event do
     field :object_id, String.t(), derives: "validate(string)"
     field :object_type, String.t(), derives: "validate(string)"
     field :payment_id, String.t(), derives: "validate(string)"
+    field :subscription_id, String.t(), derives: "validate(string)"
     field :livemode, boolean(), default: false, derives: "validate(boolean)"
     field :account, String.t(), derives: "validate(string)"
     field :created_at, DateTime.t(), derives: "validate(struct)"

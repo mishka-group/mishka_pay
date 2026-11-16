@@ -93,6 +93,50 @@ defmodule MishkaPayTest do
              MishkaPay.checkout(%{@checkout | reference: "gate-hang"})
   end
 
+  describe "subscriptions" do
+    test "are read, cancelled at the period's end or now, taken back, and their invoices listed" do
+      assert {:ok, %MishkaPay.Subscription{id: "acme_sub_active", status: :active, items: [plan]}} =
+               MishkaPay.fetch_subscription("acme", "acme_sub_active", "site-a")
+
+      assert {plan.interval, plan.amount} == {:month, Money.new(:USD, "9.00")}
+
+      assert {:ok, %{status: :active, cancel_at_period_end: true}} =
+               MishkaPay.cancel_subscription("acme", "acme_sub_active", "site-a")
+
+      assert {:ok, %{status: :canceled}} =
+               MishkaPay.cancel_subscription("acme", "acme_sub_active", "site-a", at: :now)
+
+      assert {:ok, %{cancel_at_period_end: false}} =
+               MishkaPay.resume_subscription("acme", "acme_sub_active", "site-a")
+
+      assert {:ok, [%MishkaPay.Invoice{status: :paid, subscription_id: "acme_sub_active"}]} =
+               MishkaPay.invoices("acme", "acme_sub_active", "site-a")
+
+      assert_raise ArgumentError, ~r/must be :now or :period_end/, fn ->
+        MishkaPay.cancel_subscription("acme", "acme_sub_active", "site-a", at: :tomorrow)
+      end
+    end
+
+    test "a provider without subscriptions refuses a subscription checkout and every call" do
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      monthly = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      assert {:error, %Errors.Unsupported{operation: :subscription}} =
+               MishkaPay.checkout(
+                 %{
+                   @checkout
+                   | provider: "checkout_only",
+                     items: [monthly]
+                 }
+                 |> Map.put(:mode, :subscription)
+               )
+
+      assert {:error, %Errors.Unsupported{operation: :subscription}} =
+               MishkaPay.fetch_subscription("checkout_only", "sub_1")
+    end
+  end
+
   test "a checkout is read again by its id, with the payment it made" do
     assert {:ok, %Checkout{id: "acme_cs_o-9", status: :complete, payment_id: "acme_paid"}} =
              MishkaPay.fetch_checkout("acme", "acme_cs_o-9", "site-a")
