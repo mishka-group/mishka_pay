@@ -502,16 +502,26 @@ defmodule ShopWeb.DiscountsComponent do
     socket
   end
 
-  defp off(%{percent_off: %Decimal{} = percent}), do: "#{Decimal.normalize(percent)}% off"
+  defp off(%{percent_off: %Decimal{} = percent}),
+    do: "#{percent |> Decimal.normalize() |> Decimal.to_string(:normal)}% off"
+
   defp off(%{amount_off: %Money{} = amount}), do: "#{Money.to_string!(amount)} off"
   defp off(_coupon), do: "–"
 
-  defp how_long(%{duration: :repeating, duration_in_months: months}), do: "#{months} months"
-  defp how_long(%{duration: :forever}), do: "every payment"
-  defp how_long(_once), do: "one payment"
+  defp how_long(coupon), do: period(coupon) <> until(coupon.redeem_by)
 
-  defp used(%{times_redeemed: times, max_redemptions: nil}), do: "#{times || 0} times"
+  defp period(%{duration: :repeating, duration_in_months: months}), do: "#{months} months"
+  defp period(%{duration: :forever}), do: "every payment"
+  defp period(_once), do: "one payment"
+
+  defp until(nil), do: ""
+  defp until(at), do: ", usable until #{Calendar.strftime(at, "%Y-%m-%d")}"
+
+  defp used(%{times_redeemed: times, max_redemptions: nil}), do: times(times || 0)
   defp used(%{times_redeemed: times, max_redemptions: max}), do: "#{times || 0} of #{max}"
+
+  defp times(1), do: "1 time"
+  defp times(count), do: "#{count} times"
 
   defp code_limits(code) do
     [

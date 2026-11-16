@@ -841,7 +841,8 @@ defmodule ShopWeb.PayComponents do
           End this checkout
         </button>
         <span class="text-xs opacity-70 self-center">
-          Ending it frees what it held: Stripe's page then refuses to take payment.
+          Ending it frees what it held: Stripe's page then refuses to take payment. Tax is counted
+          once the buyer gives an address there: read the checkout back for the final total.
         </span>
       </dd>
     </dl>
