@@ -93,6 +93,11 @@ defmodule MishkaPayTest do
              MishkaPay.checkout(%{@checkout | reference: "gate-hang"})
   end
 
+  test "a checkout is read again by its id, with the payment it made" do
+    assert {:ok, %Checkout{id: "acme_cs_o-9", status: :complete, payment_id: "acme_paid"}} =
+             MishkaPay.fetch_checkout("acme", "acme_cs_o-9", "site-a")
+  end
+
   test "a payment is read again from the provider, and a refund is made there" do
     assert {:ok, %Payment{id: "acme_paid", status: :paid}} =
              MishkaPay.fetch_payment("acme", "acme_paid", "site-a")

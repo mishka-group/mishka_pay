@@ -39,6 +39,14 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(@checkout)
     end
 
+    test "a checkout is read back by its session id, and a bad id never reaches a path" do
+      assert {:ok, %Checkout{id: "cs_" <> _, provider: "stripe"}} =
+               MishkaPay.fetch_checkout("stripe", "cs_test_123", "site-a")
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.fetch_checkout("stripe", "cs_1/../../v1/charges", "site-a")
+    end
+
     test "a tax code and the merchant-of-record choice are sent as Stripe expects" do
       ebook = [
         %{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}, tax_code: "txcd_10302000"}

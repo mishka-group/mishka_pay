@@ -59,9 +59,10 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   test "a checkout opens a real Checkout Session" do
     assert {:ok,
             %Checkout{
-              id: "cs_test_" <> _,
+              id: "cs_test_" <> _ = id,
               url: "https://checkout.stripe.com/" <> _,
-              status: :open
+              status: :open,
+              reference: reference
             }} =
              MishkaPay.checkout(%{
                provider: "stripe",
@@ -76,6 +77,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                cancel_url: "https://shop.test/cart",
                reference: "live-#{System.unique_integer([:positive])}"
              })
+
+    assert {:ok, %Checkout{id: ^id, status: :open, reference: ^reference, payment_id: nil}} =
+             MishkaPay.fetch_checkout("stripe", id)
   end
 
   test "a checkout can turn Stripe Managed Payments off for itself" do

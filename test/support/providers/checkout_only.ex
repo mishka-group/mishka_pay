@@ -12,6 +12,19 @@ defmodule MishkaPay.Support.CheckoutOnly do
     do: {:ok, %{checkout | id: "co_1", url: "https://co.test/1", status: :open}}
 
   @impl MishkaPay.Provider
+  def fetch_checkout(id, _keys),
+    do:
+      {:ok,
+       %MishkaPay.Checkout{
+         provider: "checkout_only",
+         items: [],
+         success_url: nil,
+         cancel_url: nil,
+         id: id,
+         status: :complete
+       }}
+
+  @impl MishkaPay.Provider
   def fetch_payment(id, _keys),
     do:
       MishkaPay.Payment.builder(%{

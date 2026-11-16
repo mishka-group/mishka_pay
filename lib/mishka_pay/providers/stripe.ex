@@ -24,6 +24,7 @@ defmodule MishkaPay.Providers.Stripe do
       on every price. The caller's
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
+    * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
@@ -76,6 +77,14 @@ defmodule MishkaPay.Providers.Stripe do
              key: idempotency_key("checkout", checkout.tenant, checkout.reference)
            ) do
       {:ok, Mapper.checkout(session, checkout)}
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_checkout(checkout_id, keys) do
+    with :ok <- stripe_id(checkout_id),
+         {:ok, session} <- request(:get, "/v1/checkout/sessions/#{checkout_id}", [], keys) do
+      {:ok, Mapper.checkout(session)}
     end
   end
 

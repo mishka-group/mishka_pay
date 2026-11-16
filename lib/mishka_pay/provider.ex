@@ -43,7 +43,7 @@ defmodule MishkaPay.Provider do
   Each capability brings the callbacks it needs, and a provider that declares a capability without
   them does not compile:
 
-    * `:checkout`: `checkout/2` and `fetch_payment/2`;
+    * `:checkout`: `checkout/2`, `fetch_checkout/2` and `fetch_payment/2`;
     * `:refund`: `refund/2`;
     * `:webhook`: `verify_webhook/3`.
 
@@ -90,6 +90,14 @@ defmodule MishkaPay.Provider do
   @callback checkout(MishkaPay.Checkout.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Checkout.t()} | {:error, Splode.Error.t()}
 
+  @doc """
+  With `:checkout`. Reads a checkout again by its id, as the buyer comes back to the success page:
+  what the provider fills in (`:id`, `:url`, `:status`, `:payment_id`), with `:provider` and the
+  caller's `:reference`. Its items and URLs stay empty.
+  """
+  @callback fetch_checkout(checkout_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Checkout.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:checkout`. Reads one payment again from the provider, its source of truth."
   @callback fetch_payment(payment_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
@@ -110,10 +118,15 @@ defmodule MishkaPay.Provider do
             ) ::
               {:ok, MishkaPay.Event.t()} | {:error, Splode.Error.t()}
 
-  @optional_callbacks offered?: 0, checkout: 2, fetch_payment: 2, refund: 2, verify_webhook: 3
+  @optional_callbacks offered?: 0,
+                      checkout: 2,
+                      fetch_checkout: 2,
+                      fetch_payment: 2,
+                      refund: 2,
+                      verify_webhook: 3
 
   @operations %{
-    checkout: [checkout: 2, fetch_payment: 2],
+    checkout: [checkout: 2, fetch_checkout: 2, fetch_payment: 2],
     refund: [refund: 2],
     webhook: [verify_webhook: 3]
   }

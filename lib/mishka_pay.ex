@@ -36,7 +36,8 @@ defmodule MishkaPay do
 
   ## Telemetry
 
-  Each call is a span, `[:mishka_pay, :checkout | :payment | :refund, :start | :stop]`, with
+  Each call is a span, `[:mishka_pay, :checkout | :checkout_read | :payment | :refund, :start |
+  :stop]`, with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
   """
@@ -53,6 +54,23 @@ defmodule MishkaPay do
            {:ok, checkout} <- before_checkout(checkout),
            {:ok, keys} <- Credentials.fetch(checkout.provider, checkout.tenant) do
         provider.checkout(checkout, keys)
+      end
+    end)
+  end
+
+  @doc """
+  Reads checkout `checkout_id` again from `provider`, with `tenant`'s keys: its `:status` and the
+  `:payment_id` it made. A success page calls it with the id the provider put in its URL, to show
+  the sale at once without waiting for the webhook.
+  """
+  @spec fetch_checkout(String.t(), String.t(), term()) ::
+          {:ok, Checkout.t()} | {:error, Splode.Error.t()}
+  def fetch_checkout(provider, checkout_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(checkout_id) do
+    span(:checkout_read, %{provider: provider, tenant: tenant}, fn ->
+      with {:ok, module} <- Provider.capable(provider, :checkout),
+           {:ok, keys} <- Credentials.fetch(provider, tenant) do
+        module.fetch_checkout(checkout_id, keys)
       end
     end)
   end

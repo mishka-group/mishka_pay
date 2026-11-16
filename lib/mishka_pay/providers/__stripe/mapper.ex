@@ -70,6 +70,18 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp customer(%{email: email}) when is_binary(email), do: %{"customer_email" => email}
   defp customer(_none), do: %{}
 
+  @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
+  @spec checkout(map()) :: Checkout.t()
+  def checkout(session) do
+    checkout(session, %Checkout{
+      provider: "stripe",
+      items: [],
+      success_url: nil,
+      cancel_url: nil,
+      reference: session["client_reference_id"]
+    })
+  end
+
   @doc "The checkout with Stripe's answer: its session id, page, status and payment."
   @spec checkout(map(), Checkout.t()) :: Checkout.t()
   def checkout(session, %Checkout{} = checkout) do
