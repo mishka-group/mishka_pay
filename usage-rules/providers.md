@@ -34,6 +34,9 @@ end
   - `:tax_id`: `create_tax_id/2`, `list_tax_ids/2` (`:customer_id` in its options),
     `delete_tax_id/3`;
   - `:tax`: `calculate_tax/2`, `record_tax/3`;
+  - `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2`; the checkout sends its
+    `:shipping_countries` and `:shipping_rates`, and reads back `:shipping_address`,
+    `:shipping_rate_id` and `:amount_shipping`;
   - `:portal`: `portal_session/2`;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
     `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,

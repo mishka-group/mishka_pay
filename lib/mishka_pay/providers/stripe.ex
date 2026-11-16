@@ -38,6 +38,10 @@ defmodule MishkaPay.Providers.Stripe do
       `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
+    * `create_shipping_rate/2` and `list_shipping_rates/2` keep Shipping Rates (`shr_...`). A
+      checkout's `:shipping_countries` is `shipping_address_collection` and its `:shipping_rates`
+      are `shipping_options` (a rate by id, or `shipping_rate_data`), up to 5, in payment mode
+      only. Stripe refuses shipping where Managed Payments is on.
     * `calculate_tax/2` asks Stripe Tax for the tax on a sale made outside Checkout
       (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
       (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
@@ -86,6 +90,7 @@ defmodule MishkaPay.Providers.Stripe do
       :customer,
       :tax_id,
       :tax,
+      :shipping,
       :portal,
       :discount,
       :webhook,
@@ -201,6 +206,7 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- currencies(checkout.items),
          :ok <- metadata(checkout.metadata),
          :ok <- expiry(checkout.expires_at),
+         :ok <- shipping_rates(checkout.shipping_rates),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -637,6 +643,38 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
+  def create_shipping_rate(%MishkaPay.ShippingRate{} = rate, keys) do
+    with :ok <- currencies([rate]),
+         :ok <- metadata(rate.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/shipping_rates", Mapper.shipping_rate_params(rate), keys) do
+      Mapper.shipping_rate(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_shipping_rates(opts, keys),
+    do: page("/v1/shipping_rates", [active: opts[:active]], opts, keys, &Mapper.shipping_rate/1)
+
+  # Stripe offers up to 5 rates on a checkout: its own by id (`shr_`), or new ones in a currency
+  # it takes.
+  defp shipping_rates(nil), do: :ok
+
+  defp shipping_rates(rates) do
+    case Enum.drop(rates, 5) do
+      [] -> with :ok <- currencies(rates), do: shipping_rate_ids(rates)
+      _more -> invalid(:shipping_rates, Messages.text(:stripe_shipping_five))
+    end
+  end
+
+  defp shipping_rate_ids(rates) do
+    case Enum.find(rates, &(is_binary(&1.id) and not shipping_rate?(&1.id))) do
+      nil -> :ok
+      %{id: id} -> stripe_id(id, "shr_", :shipping_rates)
+    end
+  end
+
+  @impl MishkaPay.Provider
   def delete_tax_id(customer_id, tax_id_id, keys) do
     with :ok <- stripe_id(customer_id, "cus_", :customer_id),
          :ok <- stripe_id(tax_id_id, "txi_", :tax_id_id),
@@ -955,6 +993,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp stripe_price?(id), do: stripe_id(id, "price_", :items) == :ok
+  defp shipping_rate?(id), do: stripe_id(id, "shr_", :shipping_rates) == :ok
 
   # One page of a Stripe list: the list options as Stripe's `limit` and `starting_after`, the
   # filters set, each item mapped; the next cursor is the last item's id when Stripe has more.
@@ -1167,7 +1206,9 @@ defmodule MishkaPay.Providers.Stripe do
     {"proration_behavior", "proration"},
     {"invoice_creation", "invoice"},
     {"managed_payments", "merchant_of_record"},
-    {"after_completion", "success_url"}
+    {"after_completion", "success_url"},
+    {"shipping_options", "shipping_rates"},
+    {"shipping_address_collection", "shipping_countries"}
   ]
 
   defp field_of(nil), do: nil
@@ -1215,13 +1256,29 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp code_of(%{"message" => message}) when is_binary(message) do
     cond do
-      String.contains?(message, "already exists") -> "already_exists"
-      String.contains?(message, "when Managed Payments is enabled") -> "managed_payments_invoice"
-      String.contains?(message, "product tax code is missing") -> "tax_code_missing"
-      String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
-      String.contains?(message, "must pass a recurring price") -> "recurring_only"
-      String.contains?(message, "Stripe Tax has not been activated") -> "tax_not_set_up"
-      true -> nil
+      String.contains?(message, "already exists") ->
+        "already_exists"
+
+      String.contains?(message, "when Managed Payments is enabled") ->
+        "managed_payments_invoice"
+
+      String.contains?(message, "product tax code is missing") ->
+        "tax_code_missing"
+
+      String.contains?(message, "does not contain any recurring prices") ->
+        "one_time_only"
+
+      String.contains?(message, "must pass a recurring price") ->
+        "recurring_only"
+
+      String.contains?(message, "Stripe Tax has not been activated") ->
+        "tax_not_set_up"
+
+      String.contains?(message, "Shipping parameters cannot be used with Managed") ->
+        "managed_payments_shipping"
+
+      true ->
+        nil
     end
   end
 

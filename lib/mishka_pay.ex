@@ -57,6 +57,7 @@ defmodule MishkaPay do
       `:customer_search`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
       `:tax_id_delete`;
     * tax outside a checkout: `:tax_calculate`, `:tax_record`;
+    * shipping: `:shipping_rate_create`, `:shipping_rate_list`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
       `:promotion_code_update`;
@@ -255,6 +256,40 @@ defmodule MishkaPay do
       provider,
       tenant,
       & &1.delete_tax_id(customer_id, tax_id_id, &2)
+    )
+  end
+
+  @doc """
+  Makes a shipping rate from `attrs` (see `MishkaPay.ShippingRate`): its `:name`, its `:amount`
+  for the whole order, and a delivery estimate. A checkout offers it by its `:id` in
+  `:shipping_rates`.
+  """
+  @spec create_shipping_rate(map()) ::
+          {:ok, MishkaPay.ShippingRate.t()} | {:error, Splode.Error.t()}
+  def create_shipping_rate(attrs) when is_map(attrs) do
+    made(
+      :shipping_rate_create,
+      :shipping,
+      attrs,
+      MishkaPay.ShippingRate,
+      [:provider, :name, :amount],
+      :create_shipping_rate
+    )
+  end
+
+  @doc """
+  One page of shipping rates at `provider`, newest first (`MishkaPay.Page`): `active:` only those
+  that can (or cannot) be offered, plus `limit:` and `after:`.
+  """
+  @spec list_shipping_rates(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_shipping_rates(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :shipping,
+      :shipping_rate_list,
+      provider,
+      tenant,
+      & &1.list_shipping_rates(limited(opts), &2)
     )
   end
 
@@ -967,11 +1002,19 @@ defmodule MishkaPay do
   end
 
   # A subscription checkout needs a provider that runs subscriptions.
-  defp mode_capable(%Checkout{mode: :subscription, provider: provider}) do
-    with {:ok, _module} <- Provider.capable(provider, :subscription), do: :ok
+  defp mode_capable(%Checkout{mode: :subscription, provider: provider} = checkout) do
+    with {:ok, _module} <- Provider.capable(provider, :subscription),
+         do: shipping_capable(checkout)
   end
 
-  defp mode_capable(_one_time), do: :ok
+  defp mode_capable(checkout), do: shipping_capable(checkout)
+
+  # A checkout that ships needs a provider that ships.
+  defp shipping_capable(%Checkout{shipping_countries: nil, shipping_rates: nil}), do: :ok
+
+  defp shipping_capable(%Checkout{provider: provider}) do
+    with {:ok, _module} <- Provider.capable(provider, :shipping), do: :ok
+  end
 
   defp before_checkout(checkout) do
     timeout = Application.get_env(:mishka_pay, :checkout_gate_timeout, 5_000)

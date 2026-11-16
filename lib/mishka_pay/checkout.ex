@@ -62,6 +62,14 @@ defmodule MishkaPay.Checkout do
     * `:tax_id_collection`: `true` lets a business buyer give its tax id.
     * `:invoice`: in a one-time checkout, `true` makes an invoice for the payment, which the
       provider can email with the receipt; a subscription makes its own invoices.
+    * `:shipping_countries`: two-letter country codes (`["NL", "DE"]`): the page asks the buyer
+      for a shipping address in one of them. A subscription may ask for one too.
+    * `:shipping_rates`: in a one-time checkout, the ways to ship the buyer picks from: a rate the
+      provider keeps by its id (`"shr_..."`, `MishkaPay.create_shipping_rate/1`), or a new one
+      as a map (`%{name: "Post", amount: %{amount: "4.95", currency: "EUR"}, min_days: 2,
+      max_days: 5}`, see `MishkaPay.ShippingRate`) in the items' currency. The provider needs
+      `:shipping`. A merchant of record (`:merchant_of_record`) sells no shipped goods, so
+      shipping goes only with it off.
 
   A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
   leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
@@ -78,6 +86,9 @@ defmodule MishkaPay.Checkout do
     * `:amount_total`, `:amount_tax`, `:amount_discount`: what the buyer pays in all, the tax in
       it and the discount taken off, as `Money`, once the provider has counted them (the tax may
       change as the buyer fills in an address).
+    * `:shipping_address`: where the buyer asked it shipped, a `MishkaPay.Address` with the
+      recipient's `:name`; `:amount_shipping`, what the chosen rate costs, and
+      `:shipping_rate_id`, which rate it was.
   """
 
   use GuardedStruct
@@ -169,6 +180,15 @@ defmodule MishkaPay.Checkout do
     field :terms_accepted, boolean(), derives: "validate(boolean)"
     field :invoice, boolean(), derives: "validate(boolean)"
     field :invoice_id, String.t(), derives: "validate(string)"
+
+    field :shipping_countries, list(),
+      derives: "validate(list)",
+      validator: {__MODULE__, :shipping_countries}
+
+    field :shipping_rates, list(), validator: {MishkaPay.ShippingRate, :rates}
+    field :shipping_address, struct(), struct: MishkaPay.Address
+    field :amount_shipping, Money.t(), validator: {MishkaPay.Money, :field}
+    field :shipping_rate_id, String.t(), derives: "validate(string)"
     field :payment_link_id, String.t(), derives: "validate(string)"
 
     field :payment_id, String.t(), derives: "validate(string)"
@@ -201,6 +221,19 @@ defmodule MishkaPay.Checkout do
   end
 
   def later(field, at), do: {:ok, field, at}
+
+  # Two-letter country codes, in upper case as providers take them.
+  @doc false
+  def shipping_countries(field, nil), do: {:ok, field, nil}
+
+  def shipping_countries(field, [_ | _] = countries) do
+    case Enum.all?(countries, &(is_binary(&1) and Regex.match?(~r/\A[A-Za-z]{2}\z/, &1))) do
+      true -> {:ok, field, Enum.map(countries, &String.upcase/1)}
+      false -> {:error, field, Messages.text(:shipping_countries)}
+    end
+  end
+
+  def shipping_countries(field, _other), do: {:error, field, Messages.text(:shipping_countries)}
 
   @doc false
   def return_url(field, url) when is_binary(url) do
@@ -245,6 +278,7 @@ defmodule MishkaPay.Checkout do
          {:ok, attrs} <- customer_creation_mode(attrs),
          {:ok, attrs} <- invoice_mode(attrs),
          {:ok, attrs} <- options_mode(attrs),
+         {:ok, attrs} <- shipping_mode(attrs),
          do: fits_mode(attrs)
   end
 
@@ -283,6 +317,33 @@ defmodule MishkaPay.Checkout do
            field: :submit_type,
            action: :mode,
            message: Messages.text(:one_time_only, param: "submit_type")
+         }}
+
+      true ->
+        {:ok, attrs}
+    end
+  end
+
+  # Shipping rates are a one-time checkout's, and no merchant of record ships goods.
+  defp shipping_mode(attrs) do
+    shipping? = key(attrs, :shipping_rates) not in [nil, []]
+
+    cond do
+      shipping? and key(attrs, :mode) in [:subscription, "subscription"] ->
+        {:error,
+         %{
+           field: :shipping_rates,
+           action: :mode,
+           message: Messages.text(:one_time_only, param: "shipping_rates")
+         }}
+
+      (shipping? or key(attrs, :shipping_countries) not in [nil, []]) and
+          key(attrs, :merchant_of_record) == true ->
+        {:error,
+         %{
+           field: :merchant_of_record,
+           action: :shipping,
+           message: Messages.text(:managed_payments_shipping)
          }}
 
       true ->
@@ -371,7 +432,9 @@ defmodule MishkaPay.Checkout do
     do: {:error, %{field: :items, action: :items, message: Messages.text(:items_empty)}}
 
   defp one_currency(%{items: items} = attrs) when is_list(items) do
-    case items |> MapSet.new(&currency/1) |> MapSet.delete(nil) |> MapSet.size() do
+    rates = Enum.filter(List.wrap(key(attrs, :shipping_rates)), &is_map/1)
+
+    case (items ++ rates) |> MapSet.new(&currency/1) |> MapSet.delete(nil) |> MapSet.size() do
       count when count <= 1 ->
         {:ok, attrs}
 

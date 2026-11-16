@@ -428,6 +428,113 @@ defmodule MishkaPay.Providers.StripeTest do
       assert :ok = MishkaPay.delete_tax_id("stripe", "cus_123", "txi_123", "site-a")
     end
 
+    test "shipping rates are made and listed, and a checkout ships with them as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.ShippingRate{id: "shr_" <> _}} =
+               MishkaPay.create_shipping_rate(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 name: "Express",
+                 amount: %{amount: "9.90", currency: "USD"},
+                 min_days: 1,
+                 max_days: 2,
+                 tax_code: "txcd_92010001",
+                 tax_behavior: :exclusive
+               })
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.ShippingRate{} | _]}} =
+               MishkaPay.list_shipping_rates("stripe", "site-a", active: true, limit: 3)
+
+      checkout =
+        Map.merge(@checkout, %{
+          merchant_of_record: false,
+          shipping_countries: ["nl", "DE"],
+          shipping_rates: [
+            "shr_123",
+            %{name: "Post", amount: %{amount: "4.95", currency: "USD"}, min_days: 2, max_days: 5}
+          ]
+        })
+
+      assert {:ok, %Checkout{id: "cs_" <> _}} = MishkaPay.checkout(checkout)
+
+      assert %{
+               "shipping_address_collection" => %{"allowed_countries" => ["NL", "DE"]},
+               "shipping_options" => [
+                 %{"shipping_rate" => "shr_123"},
+                 %{
+                   "shipping_rate_data" => %{
+                     "display_name" => "Post",
+                     "type" => "fixed_amount",
+                     "fixed_amount" => %{"amount" => 495, "currency" => "usd"},
+                     "delivery_estimate" => %{
+                       "minimum" => %{"unit" => "business_day", "value" => 2},
+                       "maximum" => %{"unit" => "business_day", "value" => 5}
+                     }
+                   }
+                 }
+               ]
+             } = Stripe.Mapper.checkout_params(elem(Checkout.builder(checkout), 1))
+
+      subscription =
+        Map.merge(@checkout, %{
+          mode: :subscription,
+          items: [%{name: "Box", amount: %{amount: "20", currency: "USD"}, interval: :month}],
+          shipping_countries: ["NL"]
+        })
+
+      assert {:ok, %Checkout{mode: :subscription}} = MishkaPay.checkout(subscription)
+    end
+
+    test "shipping that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      post = %{name: "Post", amount: %{amount: "4.95", currency: "USD"}}
+
+      for {changes, field} <- [
+            {%{shipping_countries: ["NLD"]}, :shipping_countries},
+            {%{shipping_countries: []}, :shipping_countries},
+            {%{shipping_rates: [%{name: "Post"}]}, :shipping_rates},
+            {%{shipping_rates: [%{post | amount: %{amount: "4.95", currency: "EUR"}}]}, :items},
+            {%{shipping_rates: ["price_123"]}, :shipping_rates},
+            {%{shipping_rates: List.duplicate(post, 6)}, :shipping_rates},
+            {%{shipping_rates: [post], merchant_of_record: true}, :merchant_of_record},
+            {%{shipping_rates: [post], mode: :subscription}, :shipping_rates}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} =
+                 MishkaPay.checkout(Map.merge(@checkout, changes))
+
+        assert Enum.any?(errors, &(&1.field == field)), inspect({changes, errors})
+      end
+
+      for {attrs, field} <- [
+            {%{name: "Post"}, :amount},
+            {Map.merge(post, %{min_days: 5, max_days: 2}), :max_days},
+            {%{post | amount: %{amount: "4.955", currency: "USD"}}, :amount}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} =
+                 MishkaPay.create_shipping_rate(Map.put(attrs, :provider, "stripe"))
+
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+    end
+
+    test "shipping asked where Stripe sells as merchant of record is a plain rejection" do
+      MishkaPay.Test.stub_http(fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{
+          "error" => %{
+            "type" => "invalid_request_error",
+            "message" =>
+              "Unsupported parameter: shipping_options. Shipping parameters cannot be used with Managed Payments, which is enabled by default on your account."
+          }
+        })
+      end)
+
+      assert {:error, %Errors.Rejected{code: "managed_payments_shipping"} = error} =
+               MishkaPay.checkout(Map.put(@checkout, :shipping_rates, ["shr_123"]))
+
+      assert Exception.message(error) =~ "merchant of record does not ship"
+    end
+
     test "the tax on a sale is counted and recorded as Stripe's spec accepts" do
       assert {:ok, %MishkaPay.TaxCalculation{id: "taxcalc_" <> _, amount_total: %Money{}}} =
                MishkaPay.calculate_tax(@tax)
@@ -1601,6 +1708,88 @@ defmodule MishkaPay.Providers.StripeTest do
                "value" => "12-3456789",
                "verification" => nil
              })
+  end
+
+  test "a checkout read back brings where it ships, the chosen rate and what shipping cost" do
+    assert %Checkout{
+             shipping_address: %MishkaPay.Address{
+               name: "Jenny Rosen",
+               country: "NL",
+               city: "Amsterdam",
+               postal_code: "1012 AB",
+               line1: "Dam 1",
+               line2: nil
+             },
+             shipping_rate_id: "shr_1",
+             amount_shipping: shipping
+           } =
+             Stripe.Mapper.checkout(%{
+               "id" => "cs_1",
+               "status" => "complete",
+               "currency" => "eur",
+               "amount_total" => 2495,
+               "collected_information" => %{
+                 "business_name" => nil,
+                 "individual_name" => nil,
+                 "shipping_details" => %{
+                   "name" => "Jenny Rosen",
+                   "address" => %{
+                     "city" => "Amsterdam",
+                     "country" => "NL",
+                     "line1" => "Dam 1",
+                     "line2" => "",
+                     "postal_code" => "1012 AB",
+                     "state" => nil
+                   }
+                 }
+               },
+               "shipping_cost" => %{
+                 "amount_subtotal" => 495,
+                 "amount_tax" => 0,
+                 "amount_total" => 495,
+                 "shipping_rate" => "shr_1"
+               },
+               "total_details" => %{
+                 "amount_discount" => 0,
+                 "amount_shipping" => 495,
+                 "amount_tax" => 0
+               }
+             })
+
+    assert Money.equal?(shipping, Money.new(:EUR, "4.95"))
+
+    assert %Checkout{shipping_address: nil, shipping_rate_id: nil} =
+             Stripe.Mapper.checkout(%{"id" => "cs_2", "collected_information" => nil})
+
+    assert {:ok,
+            %MishkaPay.ShippingRate{
+              id: "shr_1",
+              name: "Express",
+              min_days: 1,
+              max_days: nil,
+              tax_code: "txcd_92010001",
+              tax_behavior: :exclusive,
+              active: true,
+              amount: amount
+            }} =
+             Stripe.Mapper.shipping_rate(%{
+               "id" => "shr_1",
+               "object" => "shipping_rate",
+               "active" => true,
+               "created" => 1_794_000_000,
+               "delivery_estimate" => %{
+                 "minimum" => %{"unit" => "business_day", "value" => 1},
+                 "maximum" => %{"unit" => "week", "value" => 1}
+               },
+               "display_name" => "Express",
+               "fixed_amount" => %{"amount" => 990, "currency" => "usd"},
+               "metadata" => %{},
+               "tax_behavior" => "exclusive",
+               "tax_code" => "txcd_92010001",
+               "type" => "fixed_amount"
+             })
+
+    assert Money.equal?(amount, Money.new(:USD, "9.90"))
   end
 
   test "a tax calculation maps with its totals, each line's tax, the address and the expiry" do

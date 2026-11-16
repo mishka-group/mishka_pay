@@ -550,6 +550,46 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
   end
 
+  test "a shipping rate is made and listed, and a checkout that ships opens with it and an inline rate" do
+    run = System.unique_integer([:positive])
+
+    assert {:ok, %MishkaPay.ShippingRate{id: "shr_" <> _ = rate_id, min_days: 1, max_days: 2}} =
+             MishkaPay.create_shipping_rate(%{
+               provider: "stripe",
+               name: "Express #{run}",
+               amount: %{amount: "9.90", currency: "EUR"},
+               min_days: 1,
+               max_days: 2,
+               tax_code: "txcd_92010001"
+             })
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = rates}} =
+             MishkaPay.list_shipping_rates("stripe", nil, active: true, limit: 100)
+
+    assert Enum.any?(rates, &(&1.id == rate_id))
+
+    assert {:ok, %Checkout{id: "cs_test_" <> _ = id, status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               merchant_of_record: false,
+               items: [%{name: "Mug", amount: %{amount: "15.00", currency: "EUR"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "ship-#{run}",
+               shipping_countries: ["NL", "DE"],
+               shipping_rates: [
+                 rate_id,
+                 %{name: "Post", amount: %{amount: "4.95", currency: "EUR"}, max_days: 5}
+               ]
+             })
+
+    # Stripe picks the first rate until the buyer picks another.
+    assert {:ok, %Checkout{shipping_rate_id: ^rate_id, amount_shipping: shipping}} =
+             MishkaPay.fetch_checkout("stripe", id)
+
+    assert Money.equal?(shipping, Money.new(:EUR, "9.90"))
+  end
+
   test "a promotion code lowers a real checkout, and an expired checkout cannot be paid" do
     run = System.unique_integer([:positive])
 

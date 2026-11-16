@@ -19,7 +19,9 @@ defmodule MishkaPay.Errors.Rejected do
       a tax category; `"one_time_only"` and `"recurring_only"` a choice (`:param`) that goes only
       with one-time prices, or only with a plan's; `"tax_id_invalid"` a tax id whose number does
       not have the form its kind needs; `"tax_not_set_up"` a tax calculation on an account whose
-      tax service is off; `"tax_location_invalid"` a buyer's address too thin to count the tax.
+      tax service is off; `"tax_location_invalid"` a buyer's address too thin to count the tax;
+      `"managed_payments_shipping"` shipping asked of a checkout the provider sells as merchant of
+      record.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
@@ -38,6 +40,10 @@ defmodule MishkaPay.Errors.Rejected do
   def message(%{code: "tax_code_missing"}), do: Messages.text(:tax_code_missing)
   def message(%{code: "tax_id_invalid"}), do: Messages.text(:tax_id_invalid)
   def message(%{code: "tax_not_set_up"}), do: Messages.text(:tax_not_set_up)
+
+  def message(%{code: "managed_payments_shipping"}),
+    do: Messages.text(:managed_payments_shipping)
+
   def message(%{code: "tax_location_invalid"}), do: Messages.text(:tax_location_invalid)
 
   def message(%{code: "one_time_only", param: param}),

@@ -21,10 +21,22 @@
   then needs a `tax_code` (`"txcd_10302000"` digital book, `"txcd_10103001"` SaaS).
 - The buyer's total can be higher than the item price (tax). Show "+ tax" next to prices.
 
+## Shipping
+
+- `:shipping_countries` is Stripe's `shipping_address_collection[allowed_countries]`; it works in
+  payment and subscription mode. `:shipping_rates` is `shipping_options`: a rate by id (`shr_`)
+  or `shipping_rate_data` made with the session, at most 5, in payment mode only.
+- Stripe refuses shipping where Managed Payments is on, in the request or as the account's
+  default: pass `merchant_of_record: false` with shipping. The refusal is `Errors.Rejected` with
+  code `"managed_payments_shipping"`.
+- A rate's delivery estimate is in business days. Stripe sets the first rate on an open session
+  until the buyer picks another, so `:amount_shipping` and `:shipping_rate_id` are filled at once.
+- A shipping rate's amount cannot change once set; make a new rate instead.
+
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, tax ids `txi_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.

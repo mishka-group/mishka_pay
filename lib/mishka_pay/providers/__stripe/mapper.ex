@@ -22,6 +22,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Product,
     PromotionCode,
     Refund,
+    ShippingRate,
     Subscription,
     TaxCalculation,
     TaxId,
@@ -105,6 +106,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(options(checkout))
+    |> Map.merge(shipping(checkout))
     |> Map.merge(automatic_tax(checkout, settings))
   end
 
@@ -137,6 +139,78 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
+
+  # Where the checkout ships, and the rates the buyer picks from; each only when it is set.
+  defp shipping(%Checkout{} = checkout) do
+    reject_nil(%{
+      "shipping_address_collection" =>
+        checkout.shipping_countries && %{"allowed_countries" => checkout.shipping_countries},
+      "shipping_options" =>
+        checkout.shipping_rates && Enum.map(checkout.shipping_rates, &shipping_option/1)
+    })
+  end
+
+  # A rate Stripe keeps, by its id, or a new one made with the session.
+  defp shipping_option(%ShippingRate{id: id}) when is_binary(id), do: %{"shipping_rate" => id}
+  defp shipping_option(rate), do: %{"shipping_rate_data" => shipping_rate_params(rate)}
+
+  @doc """
+  Params of `POST /v1/shipping_rates` (and of a checkout's `shipping_rate_data`): a fixed amount
+  for the order, with its delivery estimate in business days.
+  """
+  @spec shipping_rate_params(ShippingRate.t()) :: map()
+  def shipping_rate_params(%ShippingRate{} = rate) do
+    reject_nil(%{
+      "display_name" => rate.name,
+      "type" => "fixed_amount",
+      "fixed_amount" => %{
+        "amount" => minor(rate.amount),
+        "currency" => lower_currency(rate.amount)
+      },
+      "delivery_estimate" => delivery_estimate(rate),
+      "tax_code" => rate.tax_code,
+      "tax_behavior" => rate.tax_behavior && Atom.to_string(rate.tax_behavior),
+      "metadata" => rate.metadata
+    })
+  end
+
+  defp delivery_estimate(%{min_days: nil, max_days: nil}), do: nil
+
+  defp delivery_estimate(rate) do
+    reject_nil(%{
+      "minimum" => rate.min_days && %{"unit" => "business_day", "value" => rate.min_days},
+      "maximum" => rate.max_days && %{"unit" => "business_day", "value" => rate.max_days}
+    })
+  end
+
+  @doc "A Stripe shipping rate as a `MishkaPay.ShippingRate`."
+  @spec shipping_rate(map()) :: {:ok, ShippingRate.t()} | {:error, Splode.Error.t()}
+  def shipping_rate(rate) do
+    fixed = rate["fixed_amount"] || %{}
+    estimate = rate["delivery_estimate"] || %{}
+
+    %{
+      provider: "stripe",
+      id: rate["id"],
+      name: rate["display_name"],
+      amount: money(fixed["amount"], fixed["currency"]),
+      min_days: days(estimate["minimum"]),
+      max_days: days(estimate["maximum"]),
+      tax_code: id_of(rate["tax_code"]),
+      tax_behavior: tax_behavior(rate["tax_behavior"]),
+      active: rate["active"],
+      metadata: rate["metadata"],
+      created_at: time(rate["created"])
+    }
+    |> ShippingRate.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # An estimate in days or business days; Stripe's hours, weeks and months have no such field.
+  defp days(%{"unit" => unit, "value" => value}) when unit in ["business_day", "day"],
+    do: value
+
+  defp days(_other), do: nil
 
   defp discounts(nil), do: nil
   defp discounts([]), do: nil
@@ -307,8 +381,22 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         field_values: field_values(session["custom_fields"]),
         terms_accepted:
           (is_map(session["consent"]) && session["consent"]["terms_of_service"] == "accepted") ||
-            nil
+            nil,
+        shipping_address: shipping_address(session),
+        amount_shipping:
+          money(get_in(session, ["total_details", "amount_shipping"]), session["currency"]),
+        shipping_rate_id: id_of(get_in(session, ["shipping_cost", "shipping_rate"]))
     }
+  end
+
+  # Where the buyer asked it shipped, with the recipient's name.
+  defp shipping_address(session) do
+    details = get_in(session, ["collected_information", "shipping_details"]) || %{}
+
+    case address(details["address"]) do
+      nil -> nil
+      address -> struct(Address, Map.put(address, :name, blank(details["name"])))
+    end
   end
 
   defp buyer(email) when is_binary(email), do: struct(MishkaPay.Customer, email: email)
