@@ -13,7 +13,10 @@ if Code.ensure_loaded?(Ash) do
 
     @impl true
     def run(input, _opts, _context) do
-      case MishkaPay.checkout(input.arguments.checkout) do
+      checkout =
+        MishkaPay.Ash.Tenant.into(input.arguments.checkout, MishkaPay.Ash.Tenant.of(input))
+
+      case MishkaPay.checkout(checkout) do
         {:ok, checkout} -> {:ok, checkout}
         {:error, error} -> {:error, MishkaPay.Ash.to_ash_error(error)}
       end

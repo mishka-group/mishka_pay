@@ -23,12 +23,31 @@ if Code.ensure_loaded?(Ash) do
     before any tenant is chosen.
     """
 
-    @doc "The tenant of a create action: its `:tenant` argument, else Ash's tenant."
-    @spec of(Ash.Changeset.t()) :: String.t() | nil
+    @doc """
+    The tenant of an action: a create's `:tenant` argument, else Ash's tenant; a generic action's
+    (`:start_checkout`) is Ash's tenant.
+    """
+    @spec of(Ash.Changeset.t() | Ash.ActionInput.t()) :: String.t() | nil
+    def of(%Ash.ActionInput{tenant: tenant}), do: text(tenant)
+
     def of(changeset) do
       case Ash.Changeset.get_argument(changeset, :tenant) do
         nil -> text(changeset.tenant)
         tenant -> text(tenant)
+      end
+    end
+
+    @doc """
+    `attrs` (a call's map) with `tenant` when they name none, so an action run in a site's Ash tenant
+    calls the provider with that site's keys.
+    """
+    @spec into(map(), String.t() | nil) :: map()
+    def into(attrs, nil), do: attrs
+
+    def into(attrs, tenant) when is_map(attrs) do
+      case Map.has_key?(attrs, :tenant) or Map.has_key?(attrs, "tenant") do
+        true -> attrs
+        false -> Map.put(attrs, :tenant, tenant)
       end
     end
 

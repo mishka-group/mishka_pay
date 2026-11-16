@@ -34,6 +34,31 @@ defmodule MishkaPay.Ash.MultitenancyTest do
     assert [] = Ash.read!(SitePayment, tenant: "site-b", authorize?: false)
   end
 
+  test ":start_checkout in a site's Ash tenant opens the checkout with that site's keys" do
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_456"}, "site-c")
+
+    MishkaPay.Test.stub_http(fn conn ->
+      send(self(), {:key, Plug.Conn.get_req_header(conn, "authorization")})
+      StripeMock.forward(conn)
+    end)
+
+    checkout = %{
+      provider: "stripe",
+      items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+      success_url: "https://shop.test/thanks",
+      cancel_url: "https://shop.test/cart"
+    }
+
+    assert {:ok, %MishkaPay.Checkout{url: "https://checkout.stripe.com/" <> _}} =
+             SitePayment
+             |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout},
+               tenant: "site-c"
+             )
+             |> Ash.run_action(authorize?: false)
+
+    assert_received {:key, ["Bearer sk_test_456"]}
+  end
+
   test "a webhook syncs its row inside the site its URL names, and only there" do
     MishkaPay.Test.start_plugin!(Inbox)
     MishkaPay.Test.start_plugin!(SitePaymentSync)
