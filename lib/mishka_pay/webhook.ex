@@ -161,11 +161,25 @@ defmodule MishkaPay.Webhook do
   end
 
   defp delivered(event) do
+    case deliver(event) do
+      :ok -> 200
+      {:error, _reason} -> 500
+    end
+  end
+
+  @doc """
+  Hands a checked `MishkaPay.Event` to the `mishka_pay:webhook:received` listeners, as a webhook
+  does: `:ok` when they took it, or `{:error, reason}`. `MishkaPay.replay_events/3` uses it for
+  events read back from the provider; the listeners keep each event once, by its id.
+  """
+  @spec deliver(MishkaPay.Event.t()) :: :ok | {:error, term()}
+  def deliver(%MishkaPay.Event{} = event) do
     timeout = Application.get_env(:mishka_pay, :webhook_timeout, 15_000)
 
     case Plugins.call(Events.webhook_received(), %{event: event, failed: nil}, timeout) do
-      {:ok, %{failed: nil}} -> 200
-      _failed_or_no_answer -> 500
+      {:ok, %{failed: nil}} -> :ok
+      {:ok, %{failed: reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
     end
   end
 

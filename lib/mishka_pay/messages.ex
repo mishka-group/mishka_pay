@@ -77,6 +77,7 @@ defmodule MishkaPay.Messages do
           | :stripe_three_decimal
           | :stripe_whole
           | :due_sent_only
+          | :stripe_event_types
           | :declined
           | :declined_reason
           | :missing_keys
@@ -394,6 +395,9 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
       )
+
+  defp msgid(:stripe_event_types),
+    do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
 
   defp msgid(:due_sent_only),
     do:

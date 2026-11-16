@@ -62,7 +62,8 @@ defmodule MishkaPay.Provider do
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
       `update_payment_link/2`;
     * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
-    * `:webhook`: `verify_webhook/3`.
+    * `:webhook`: `verify_webhook/3`;
+    * `:event_list`: `list_events/2`.
 
   Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
   page before; and its own filters) and answers one `MishkaPay.Page`.
@@ -93,6 +94,7 @@ defmodule MishkaPay.Provider do
     :payment_link,
     :dispute,
     :webhook,
+    :event_list,
     :return_verify
   ]
 
@@ -115,6 +117,7 @@ defmodule MishkaPay.Provider do
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
     * `:webhook`: sends signed messages when something changes.
+    * `:event_list`: lists the messages it sent, to deliver again those a site missed.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
   """
@@ -134,6 +137,7 @@ defmodule MishkaPay.Provider do
           | :dispute
           | :payment_list
           | :webhook
+          | :event_list
           | :return_verify
 
   @doc "The provider's id, such as `\"stripe\"`. Set by `use`."
@@ -210,6 +214,13 @@ defmodule MishkaPay.Provider do
   @doc "With `:invoice`. Deletes a draft bill."
   @callback delete_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
               :ok | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:event_list`. One page of the provider's events, newest first: `:since` (a `DateTime`)
+  and `:types` (a list of event types) filter them.
+  """
+  @callback list_events(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:subscription`. Reads one subscription again from the provider."
   @callback fetch_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -418,6 +429,7 @@ defmodule MishkaPay.Provider do
                       expire_checkout: 2,
                       refund: 2,
                       fetch_refund: 2,
+                      list_events: 2,
                       create_invoice: 2,
                       finalize_invoice: 2,
                       send_invoice: 2,
@@ -517,6 +529,7 @@ defmodule MishkaPay.Provider do
       update_price: 2,
       list_prices: 2
     ],
+    event_list: [list_events: 2],
     dispute: [fetch_dispute: 2, list_disputes: 2, update_dispute: 2, accept_dispute: 2],
     payment_link: [
       create_payment_link: 2,

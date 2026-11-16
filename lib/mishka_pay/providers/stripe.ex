@@ -80,7 +80,8 @@ defmodule MishkaPay.Providers.Stripe do
       :customer,
       :portal,
       :discount,
-      :webhook
+      :webhook,
+      :event_list
     ]
 
   alias MishkaPay.{
@@ -858,6 +859,24 @@ defmodule MishkaPay.Providers.Stripe do
   defp maybe_id(nil, _prefix, _field), do: :ok
   defp maybe_id(id, "", field), do: plain_id(id, field)
   defp maybe_id(id, prefix, field), do: stripe_id(id, prefix, field)
+
+  # Stripe keeps events for 30 days and filters them by type, up to 20 types a call.
+  @impl MishkaPay.Provider
+  def list_events(opts, keys) do
+    types = List.wrap(opts[:types])
+
+    case length(types) > 20 do
+      true ->
+        invalid(:types, Messages.text(:stripe_event_types))
+
+      false ->
+        filters =
+          [{:"created[gte]", opts[:since] && DateTime.to_unix(opts[:since])}] ++
+            Enum.map(types, &{:"types[]", &1})
+
+        page("/v1/events", filters, opts, keys, &Mapper.event/1)
+    end
+  end
 
   @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do

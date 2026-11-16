@@ -122,6 +122,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert {:ok, %Payment{status: :refunded}} = MishkaPay.fetch_payment("stripe", id)
 
+    since = DateTime.add(DateTime.utc_now(), -3600)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Event{type: "charge.refunded"} | _]}} =
+             MishkaPay.list_events("stripe", nil, since: since, types: ["charge.refunded"])
+
     assert {:ok, %Refund{id: ^rest_id, payment_id: ^id, reference: "rest-" <> _, amount: rest}} =
              MishkaPay.fetch_refund("stripe", rest_id)
 
@@ -635,6 +640,22 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {:ok, %Invoice{id: fourth}} = MishkaPay.create_invoice(draft.("bill-#{run}-4"))
     assert :ok = MishkaPay.delete_invoice("stripe", fourth)
     assert {:error, %Errors.Rejected{}} = MishkaPay.fetch_invoice("stripe", fourth)
+  end
+
+  test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
+    alias MishkaPay.Providers.Stripe.WebhookEndpoint
+
+    url = "https://example.com/pay/webhooks/stripe/live-#{System.unique_integer([:positive])}"
+
+    assert {:ok, %WebhookEndpoint{id: id, secret: "whsec_" <> _, api_version: version}} =
+             WebhookEndpoint.ensure(nil, url)
+
+    on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
+    assert version == Stripe.version()
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} = WebhookEndpoint.check(nil, url)
+    assert {:ok, %WebhookEndpoint{id: ^id, secret: nil}} = WebhookEndpoint.ensure(nil, url)
+    assert :ok = WebhookEndpoint.delete(nil, id)
+    assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url)
   end
 
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do

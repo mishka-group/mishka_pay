@@ -61,7 +61,8 @@ defmodule MishkaPay do
       `:price_create`, `:price`, `:price_update`, `:price_list`;
     * payment links: `:payment_link_create`, `:payment_link`, `:payment_link_update`,
       `:payment_link_list`;
-    * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`.
+    * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`;
+    * events: `:event_list`.
   """
 
   alias MishkaPay.{
@@ -617,6 +618,80 @@ defmodule MishkaPay do
 
   defp invoice_call(operation, provider, tenant, call) when is_binary(provider),
     do: capable(:invoice, operation, provider, tenant, call)
+
+  @doc """
+  One page of `provider`'s events for `tenant`, newest first (`MishkaPay.Page`), each a
+  `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, plus `limit:` and
+  `after:`.
+  """
+  @spec list_events(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_events(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:event_list, :event_list, provider, tenant, & &1.list_events(limited(opts), &2))
+  end
+
+  @doc """
+  Delivers again every event `provider` sent `tenant` since `since:`, to the
+  `mishka_pay:webhook:received` listeners (`MishkaPay.Webhook.deliver/1`), oldest first: what a
+  site missed while its webhook endpoint was down. Only the events the provider handles
+  (`types:`, by default every event Mishka Pay acts on, when the provider says which) are read.
+  A listener keeps each event once, so one already taken is not done twice.
+
+  Answers how many were delivered and which failed, by event id.
+  """
+  @spec replay_events(String.t(), term(), keyword()) ::
+          {:ok, %{delivered: non_neg_integer(), failed: [{String.t(), term()}]}}
+          | {:error, Splode.Error.t()}
+  def replay_events(provider, tenant \\ nil, opts) when is_binary(provider) do
+    with {:ok, module} <- Provider.capable(provider, :event_list),
+         opts = Keyword.put_new_lazy(opts, :types, fn -> handled(module) end),
+         {:ok, events} <- all_events(provider, tenant, opts) do
+      events
+      |> Enum.reverse()
+      |> Enum.map(&{&1.id, MishkaPay.Webhook.deliver(%{&1 | tenant: tenant})})
+      |> Enum.reduce(%{delivered: 0, failed: []}, fn
+        {_id, :ok}, acc -> %{acc | delivered: acc.delivered + 1}
+        {id, {:error, reason}}, acc -> %{acc | failed: [{id, reason} | acc.failed]}
+      end)
+      |> then(&{:ok, %{&1 | failed: Enum.reverse(&1.failed)}})
+    end
+  end
+
+  defp handled(module) do
+    case function_exported?(module, :handled_events, 0) do
+      true -> module.handled_events() |> Map.keys() |> Enum.sort()
+      false -> nil
+    end
+  end
+
+  # Every page of every chunk of types (a provider takes a few types a call), newest first, each
+  # event once.
+  defp all_events(provider, tenant, opts) do
+    opts
+    |> Keyword.get(:types)
+    |> chunks()
+    |> Enum.reduce_while({:ok, []}, fn types, {:ok, acc} ->
+      chunk = opts |> Keyword.put(:types, types) |> Keyword.put(:limit, 100)
+
+      case Page.all(&list_events(provider, tenant, Keyword.merge(chunk, &1))) do
+        {:ok, events} -> {:cont, {:ok, acc ++ events}}
+        error -> {:halt, error}
+      end
+    end)
+    |> newest_first()
+  end
+
+  defp newest_first({:ok, events}) do
+    {:ok,
+     events
+     |> Enum.uniq_by(& &1.id)
+     |> Enum.sort_by(& &1.created_at, &(DateTime.compare(&1, &2) != :lt))}
+  end
+
+  defp newest_first(error), do: error
+
+  defp chunks(nil), do: [nil]
+  defp chunks(types), do: Enum.chunk_every(types, 20)
 
   @doc "Reads subscription `subscription_id` again from `provider`, with `tenant`'s keys."
   @spec fetch_subscription(String.t(), String.t(), term()) ::
