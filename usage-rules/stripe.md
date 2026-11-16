@@ -14,6 +14,28 @@
 - `:amount_total` and `:amount_tax` on the read-back checkout are what Stripe charged, tax
   included.
 
+## Embedded checkout and paying later
+
+- `ui_mode: :embedded` is Stripe's `ui_mode=embedded_page`. It sends `return_url` (Stripe refuses
+  `success_url` and `cancel_url` there) and answers the session's `client_secret`. The page loads
+  Stripe.js and calls `initEmbeddedCheckout` with that secret. Put `{CHECKOUT_SESSION_ID}` in the
+  return URL to read the session back there.
+- Stripe Managed Payments works with Checkout on a hosted page or an embedded page. Stripe lists
+  "payment flows that use Elements with the Checkout Sessions API" and Payment Intents
+  integrations as not supported. A Mishka Pay checkout is always a Checkout Session.
+- `capture: :manual` is `payment_intent_data[capture_method]=manual`. The PaymentIntent waits in
+  `requires_capture`, read as `:authorized`. `capture_payment/4` is
+  `POST /v1/payment_intents/:id/capture` with `amount_to_capture` in Stripe's units; Stripe lets
+  the rest go. `cancel_payment/3` is `POST /v1/payment_intents/:id/cancel`. Each sends an
+  idempotency key, so a retry never captures twice.
+- A part to capture is checked against the payment first (one read): another currency, or more
+  than it holds, is `Errors.Invalid` on `:amount`. A payment captured in part answers
+  `:amount_captured`, and a refund can give back only that part.
+- Stripe holds no money where it makes an invoice after payment: `capture: :manual` with
+  `invoice: true` or `merchant_of_record: true` is `Errors.Invalid` on `:capture` before any
+  request. An account whose default is Managed Payments is refused by Stripe:
+  `Errors.Rejected` with code `"capture_invoice"`. Send `merchant_of_record: false` with it.
+
 ## Managed Payments (merchant of record)
 
 - With `merchant_of_record: true` (the checkout's own field, else the tenant's keys setting, else

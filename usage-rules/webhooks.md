@@ -37,8 +37,8 @@ webhook endpoint to these:
 |---|---|
 | `checkout.session.completed` | the payment, or the subscription it started |
 | `checkout.session.expired`, `.async_payment_succeeded`, `.async_payment_failed` | the payment |
-| `payment_intent.succeeded`, `.payment_failed`, `.canceled`, `.processing`, `.requires_action` | the payment |
-| `charge.succeeded`, `.failed`, `.refunded`; `refund.created`, `.updated`, `.failed` | the payment |
+| `payment_intent.succeeded`, `.payment_failed`, `.canceled`, `.processing`, `.requires_action`, `.amount_capturable_updated` | the payment |
+| `charge.succeeded`, `.failed`, `.refunded`, `.captured`, `.expired`; `refund.created`, `.updated`, `.failed` | the payment |
 | `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated` | the dispute and its payment |
 | `invoice.paid`, `.payment_failed`, `.finalized`, `.payment_action_required`, `.voided`, `.marked_uncollectible`, `.overdue`, `.upcoming` | the subscription |
 | `invoice_payment.paid` | the payment |
