@@ -20,8 +20,10 @@ defmodule MyApp.Pay.Payment do
 end
 ```
 
-`mix igniter.install mishka_pay --ash` writes the domain, the five resources (inbox, payment,
-subscription, customer, dispute) and their listeners. Then `mix ash.codegen mishka_pay`.
+`mix igniter.install mishka_pay --ash` writes the domain and the five resources (inbox, payment,
+subscription, customer, dispute), then `mix ash.codegen mishka_pay`. Each resource makes its own
+listener (`<Resource>.MishkaPayListener`), which the installer adds to the application's children;
+by hand, `MishkaPay.Ash.listeners(MyApp.Pay)` lists them all in the domain's order.
 
 ## What each kind does
 
