@@ -276,6 +276,16 @@ defmodule MishkaPay.Ash.PaymentTest do
 
       assert [%Ash.Error.Changes.InvalidChanges{message: "Acme cannot do pausing"}] =
                MishkaPay.Ash.to_ash_error(unsupported)
+
+      for error <- [declined, refused, unsupported] do
+        text =
+          error
+          |> MishkaPay.Ash.to_ash_error()
+          |> Ash.Error.to_error_class()
+          |> Exception.message()
+
+        refute text =~ ".ex:"
+      end
     end
   end
 

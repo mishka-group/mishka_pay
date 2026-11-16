@@ -158,9 +158,10 @@ if Code.ensure_loaded?(Ash) do
 
     # What the provider cannot do is the caller's request, refused in plain words, like `Refused`.
     defp other(%Errors.Unsupported{} = error),
-      do: Ash.Error.Changes.InvalidChanges.exception(message: message(error))
+      do: Ash.Error.Changes.InvalidChanges.exception(message: message(error), stacktrace: [])
 
-    defp other(error), do: Ash.Error.Unknown.UnknownError.exception(error: message(error))
+    defp other(error),
+      do: Ash.Error.Unknown.UnknownError.exception(error: message(error), stacktrace: [])
 
     @doc """
     The plain words of an error, for a person or a log: the error's own message, without the
@@ -188,9 +189,17 @@ if Code.ensure_loaded?(Ash) do
     defp leaves(%{child_errors: [_ | _] = errors}), do: Enum.flat_map(errors, &leaves/1)
     defp leaves(error), do: [error]
 
+    # Plain words about the provider or the input: a stack trace of where they were built adds
+    # nothing for the person who reads them, so none is kept.
     defp invalid(%{field: field} = error) when not is_nil(field),
-      do: Ash.Error.Changes.InvalidArgument.exception(field: field, message: message(error))
+      do:
+        Ash.Error.Changes.InvalidArgument.exception(
+          field: field,
+          message: message(error),
+          stacktrace: []
+        )
 
-    defp invalid(error), do: Ash.Error.Changes.InvalidChanges.exception(message: message(error))
+    defp invalid(error),
+      do: Ash.Error.Changes.InvalidChanges.exception(message: message(error), stacktrace: [])
   end
 end
