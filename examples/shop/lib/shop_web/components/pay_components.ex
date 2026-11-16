@@ -92,12 +92,8 @@ defmodule ShopWeb.PayComponents do
                 {if @setting.open, do: "open", else: "closed"}
               </span>
             </dd>
-            <dt class="opacity-70">PayPal keys</dt>
-            <dd data-testid="site-paypal">
-              {if @paypal?,
-                do: "set (sandbox)",
-                else: "not set: PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in .env"}
-            </dd>
+            <dt class="opacity-70">PayPal</dt>
+            <dd data-testid="site-paypal">coming soon</dd>
           </dl>
         </div>
       </div>
@@ -175,9 +171,7 @@ defmodule ShopWeb.PayComponents do
           <span class="fieldset-legend">Pay with</span>
           <select name="provider" class="select select-sm" data-testid="option-provider">
             <option value="stripe">Stripe</option>
-            <option value="paypal" disabled={!@paypal?}>
-              PayPal{if !@paypal?, do: " (no keys in .env)"}
-            </option>
+            <option value="paypal" disabled>PayPal (coming soon)</option>
           </select>
         </label>
         <label class="fieldset">

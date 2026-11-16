@@ -43,6 +43,9 @@ defmodule MishkaPay.Providers.PayPal do
 
   `config :mishka_pay, MishkaPay.Providers.PayPal, base_url: "http://localhost:..."` points it at
   another address, such as a test server.
+
+  Tested against a stand-in that answers in PayPal's shapes; the run against PayPal's own sandbox
+  is still to come (mishka_pay#17).
   """
 
   use MishkaPay.Provider,
