@@ -26,7 +26,9 @@ if Code.ensure_loaded?(Ash) do
           required: true,
           doc: """
           What the resource keeps: `:inbox` (each checked webhook event), `:payment`,
-          `:subscription`, `:customer` or `:dispute`.
+          `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin:
+          `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice`
+          (`MishkaPay.Ash.Object.Spec`).
           """
         ],
         actions: [

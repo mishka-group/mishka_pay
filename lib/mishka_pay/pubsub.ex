@@ -25,18 +25,30 @@ defmodule MishkaPay.PubSub do
       def handle_info({:mishka_pay, :payment, %{payment: payment, record: row}}, socket), do: ...
 
   The message is `{:mishka_pay, kind, changed}`: `kind` is `:payment`, `:subscription`,
-  `:customer` or `:dispute`, `changed` is what the event carried (the provider's struct under the
+  `:customer`, `:dispute`, `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or
+  `:payment_link`, `changed` is what the event carried (the provider's struct under the
   kind's name, and the stored `:record`).
 
   Options:
 
     * `:pubsub` (required): the host's PubSub name.
-    * `:kinds`: which changes to broadcast, all four by default.
+    * `:kinds`: which changes to broadcast, every kind by default.
     * `:prefix`: the topics' first part, `"mishka_pay"` by default.
     * `:priority`: the plugins' priority on their events, 90 by default (after the host's own).
   """
 
-  @kinds [:payment, :subscription, :customer, :dispute]
+  @kinds [
+    :payment,
+    :subscription,
+    :customer,
+    :dispute,
+    :invoice,
+    :product,
+    :price,
+    :coupon,
+    :promotion_code,
+    :payment_link
+  ]
 
   @doc "The kinds of change it can broadcast."
   @spec kinds() :: [atom()]
@@ -64,6 +76,7 @@ defmodule MishkaPay.PubSub do
   def event(:subscription), do: MishkaPay.Events.subscription_changed()
   def event(:customer), do: MishkaPay.Events.customer_changed()
   def event(:dispute), do: MishkaPay.Events.dispute_changed()
+  def event(kind), do: MishkaPay.Events.changed(kind)
 
   @doc false
   # The tenant of a change: on its stored row, or on the provider's struct.

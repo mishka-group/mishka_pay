@@ -119,7 +119,13 @@ defmodule MishkaPay.Ash.ResourceTest do
                MishkaPay.Support.Customer.MishkaPayListener,
                MishkaPay.Support.Dispute.MishkaPayListener,
                MishkaPay.Support.SitePayment.MishkaPayListener,
-               MishkaPay.Support.SiteSubscription.MishkaPayListener
+               MishkaPay.Support.SiteSubscription.MishkaPayListener,
+               MishkaPay.Support.SiteProduct.MishkaPayListener,
+               MishkaPay.Support.SitePrice.MishkaPayListener,
+               MishkaPay.Support.SiteCoupon.MishkaPayListener,
+               MishkaPay.Support.SitePromotionCode.MishkaPayListener,
+               MishkaPay.Support.SitePaymentLink.MishkaPayListener,
+               MishkaPay.Support.SiteInvoice.MishkaPayListener
              ]
     end
 

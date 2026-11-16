@@ -148,8 +148,10 @@ Its listener syncs the dispute of each `charge.dispute.*` event.
 ## Options
 
 * `:kind` - Required. What the resource keeps: `:inbox` (each checked webhook event), `:payment`,
-  `:subscription`, `:customer` or `:dispute`.
-   Valid values are :inbox, :payment, :subscription, :customer, :dispute
+  `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin:
+  `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice`
+  (`MishkaPay.Ash.Object.Spec`).
+   Valid values are :inbox, :payment, :subscription, :customer, :dispute, :product, :price, :coupon, :promotion_code, :payment_link, :invoice
 
 * `:actions` (list of `t:atom/0`) - Only these actions of the kind, besides the primary `:read`. Every action of the kind
   when left out. An `:inbox` needs all of its own.
@@ -208,7 +210,7 @@ end
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`kind`](#mishka_pay-kind){: #mishka_pay-kind .spark-required} | `:inbox \| :payment \| :subscription \| :customer \| :dispute` |  | What the resource keeps: `:inbox` (each checked webhook event), `:payment`, `:subscription`, `:customer` or `:dispute`. |
+| [`kind`](#mishka_pay-kind){: #mishka_pay-kind .spark-required} | `:inbox \| :payment \| :subscription \| :customer \| :dispute \| :product \| :price \| :coupon \| :promotion_code \| :payment_link \| :invoice` |  | What the resource keeps: `:inbox` (each checked webhook event), `:payment`, `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin: `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice` (`MishkaPay.Ash.Object.Spec`). |
 | [`actions`](#mishka_pay-actions){: #mishka_pay-actions } | `list(atom)` |  | Only these actions of the kind, besides the primary `:read`. Every action of the kind when left out. An `:inbox` needs all of its own. |
 | [`listen?`](#mishka_pay-listen?){: #mishka_pay-listen? } | `boolean` | `true` | Makes `<Resource>.MishkaPayListener`, the webhook listener that keeps the resource current. `MishkaPay.Ash.listeners/1` lists them for the application's children. |
 | [`announce?`](#mishka_pay-announce?){: #mishka_pay-announce? } | `boolean` | `true` | Fires `mishka_pay:<kind>:changed` after each write the provider answered. The inbox announces nothing either way. |

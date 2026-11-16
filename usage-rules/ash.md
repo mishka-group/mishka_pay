@@ -163,6 +163,12 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 | Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata`; the user attribute with `belongs_to_user` |
 | Customer | `:sync` | `provider`, `customer_id`, `tenant`; a deleted customer gets `deleted_at` |
 | Customer | `:edit` (update) | `email`, `name`, `phone`, `metadata` |
+| Product | `:sync`; `:add` (`provider`, `tenant`, `name`, `description`, `tax_code`, `id`, `metadata`); `:edit`; `:archive` | |
+| Price | `:sync`; `:add` (`product_id`, `amount` map, `interval`, `interval_count`, `tax_behavior`, `lookup_key`, `metadata`); `:archive` | |
+| Coupon | `:sync`; `:add` (`id`, `name`, `percent_off` or `amount_off` map, `duration`...); `:remove` (sets `deleted_at`) | |
+| Promotion code | `:sync`; `:add` (`coupon_id`, `code`, limits); `:edit` (`active`, `metadata`) | |
+| Payment link | `:sync`; `:add` (`link` map); `:edit` (`changes` map) | |
+| Invoice | `:sync`; `:add` (`draft` map); `:finalize`, `:send`, `:pay` (`out_of_band`), `:void`, `:mark_uncollectible`, `:remove` | |
 | Customer | `:portal` (generic) | `id` (the row's), `return_url`, `configuration`; answers `MishkaPay.PortalSession` |
 
 - Every action asks the provider before its transaction and writes what the provider answered;

@@ -275,7 +275,7 @@ if Code.ensure_loaded?(Ash) do
          quote do
            defmodule unquote(listener) do
              @moduledoc unquote(doc)
-             use unquote(using), resource: unquote(module)
+             use unquote(using), resource: unquote(module), kind: unquote(kind)
            end
          end
        )}

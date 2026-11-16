@@ -34,6 +34,16 @@ by hand, `MishkaPay.Ash.listeners(MyApp.Pay)` lists them all in the domain's ord
   `:pause`, `:resume_collection`.
 - **customer**: `:register`, `:sync`, `:edit`, `:portal`.
 - **dispute**: `:sync`, `:submit_evidence`, `:accept`.
+- **product**: `:sync`, `:add`, `:edit`, `:archive`. **price**: `:sync`, `:add`, `:archive`.
+- **coupon**: `:sync`, `:add`, `:remove`. **promotion_code**: `:sync`, `:add`, `:edit`.
+- **payment_link**: `:sync`, `:add` (`link`, the map `MishkaPay.create_payment_link/1` takes),
+  `:edit` (`changes`).
+- **invoice**: `:sync`, `:add` (`draft`, a `MishkaPay.InvoiceDraft` map), `:finalize`, `:send`,
+  `:pay` (`out_of_band`), `:void`, `:mark_uncollectible`, `:remove` (a draft).
+
+The last six are what a site manages from its admin. Each keeps a local copy that its webhooks
+(`product.*`, `price.*`, `coupon.*`, `promotion_code.*`, `payment_link.*`, `invoice.*`) keep
+current, and fires `mishka_pay:<kind>:changed` (`MishkaPay.Events.changed/1`) after each write.
 
 Every action asks the provider before its transaction and writes what the provider answered, then
 fires `mishka_pay:<kind>:changed`. The `mishka_pay` section takes `actions`, `listen?`,

@@ -1552,7 +1552,12 @@ defmodule MishkaPay.Providers.StripeTest do
       "payment" => %{"type" => "payment_intent", "payment_intent" => "pi_1"}
     },
     "customer.subscription" => %{"object" => "subscription", "id" => "sub_1"},
-    "customer" => %{"object" => "customer", "id" => "cus_1"}
+    "customer" => %{"object" => "customer", "id" => "cus_1"},
+    "product" => %{"object" => "product", "id" => "prod_1"},
+    "price" => %{"object" => "price", "id" => "price_1"},
+    "coupon" => %{"object" => "coupon", "id" => "coupon_1"},
+    "promotion_code" => %{"object" => "promotion_code", "id" => "promo_1"},
+    "payment_link" => %{"object" => "payment_link", "id" => "plink_1"}
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do
@@ -1593,6 +1598,9 @@ defmodule MishkaPay.Providers.StripeTest do
   defp named?(event, :subscription), do: event.subscription_id == "sub_1"
   defp named?(event, :dispute), do: event.dispute_id == "dp_1"
   defp named?(event, :customer), do: {event.object_type, event.object_id} == {"customer", "cus_1"}
+
+  defp named?(event, kind),
+    do: event.object_type == Atom.to_string(kind) and is_binary(event.object_id)
 
   test "a dispute maps with its status, due date and evidence count" do
     assert {:ok,

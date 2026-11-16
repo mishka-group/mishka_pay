@@ -16,11 +16,36 @@ if Code.ensure_loaded?(Ash) do
 
     alias Ash.Resource.Builder
 
-    @type kind :: :inbox | :payment | :subscription | :customer | :dispute
+    @type kind ::
+            :inbox
+            | :payment
+            | :subscription
+            | :customer
+            | :dispute
+            | :product
+            | :price
+            | :coupon
+            | :promotion_code
+            | :payment_link
+            | :invoice
     @type attribute :: {atom(), atom(), keyword()}
     @type action :: {atom(), Ash.Resource.Actions.action_type(), keyword()}
 
-    @kinds [:inbox, :payment, :subscription, :customer, :dispute]
+    @kinds [
+      :inbox,
+      :payment,
+      :subscription,
+      :customer,
+      :dispute,
+      :product,
+      :price,
+      :coupon,
+      :promotion_code,
+      :payment_link,
+      :invoice
+    ]
+
+    @objects MishkaPay.Ash.Object.Spec.kinds()
 
     @payment_statuses [
       :pending,
@@ -66,6 +91,7 @@ if Code.ensure_loaded?(Ash) do
     def listener(:subscription), do: MishkaPay.Ash.Subscription.Listener
     def listener(:customer), do: MishkaPay.Ash.Customer.Listener
     def listener(:dispute), do: MishkaPay.Ash.Dispute.Listener
+    def listener(kind) when kind in @objects, do: MishkaPay.Ash.Object.Listener
 
     @doc """
     The code interface name of an action. `receive` is an Elixir special form, so the inbox's
@@ -170,6 +196,102 @@ if Code.ensure_loaded?(Ash) do
       ])
     end
 
+    def attributes(:product) do
+      object([
+        {:name, :string, public()},
+        {:description, :string, public()},
+        {:tax_code, :string, public()},
+        {:active, :boolean, public()},
+        {:default_price_id, :string, public()},
+        {:metadata, :map, required(default: %{})},
+        {:deleted_at, :utc_datetime_usec, public()}
+      ])
+    end
+
+    def attributes(:price) do
+      object([
+        {:product_id, :string, public()},
+        {:name, :string, public()},
+        {:amount, :decimal, public()},
+        {:currency, :string, public()},
+        {:interval, :atom, public(constraints: [one_of: [:day, :week, :month, :year]])},
+        {:interval_count, :integer, public()},
+        {:tax_behavior, :atom, public(constraints: [one_of: [:inclusive, :exclusive]])},
+        {:lookup_key, :string, public()},
+        {:active, :boolean, public()},
+        {:metadata, :map, required(default: %{})},
+        {:deleted_at, :utc_datetime_usec, public()}
+      ])
+    end
+
+    def attributes(:coupon) do
+      object([
+        {:name, :string, public()},
+        {:percent_off, :decimal, public()},
+        {:amount_off, :decimal, public()},
+        {:currency, :string, public()},
+        {:duration, :atom, public(constraints: [one_of: [:once, :repeating, :forever]])},
+        {:duration_in_months, :integer, public()},
+        {:max_redemptions, :integer, public()},
+        {:redeem_by, :utc_datetime_usec, public()},
+        {:valid, :boolean, public()},
+        {:times_redeemed, :integer, public()},
+        {:metadata, :map, required(default: %{})},
+        {:deleted_at, :utc_datetime_usec, public()}
+      ])
+    end
+
+    def attributes(:promotion_code) do
+      object([
+        {:code, :string, public()},
+        {:coupon_id, :string, public()},
+        {:active, :boolean, public()},
+        {:max_redemptions, :integer, public()},
+        {:times_redeemed, :integer, public()},
+        {:expires_at, :utc_datetime_usec, public()},
+        {:first_time_transaction, :boolean, public()},
+        {:minimum_amount, :decimal, public()},
+        {:currency, :string, public()},
+        {:customer_id, :string, public()},
+        {:metadata, :map, required(default: %{})},
+        {:deleted_at, :utc_datetime_usec, public()}
+      ])
+    end
+
+    def attributes(:payment_link) do
+      object([
+        {:url, :string, public()},
+        {:active, :boolean, public()},
+        {:price_ids, {:array, :string}, required(default: [])},
+        {:max_purchases, :integer, public()},
+        {:purchases, :integer, public()},
+        {:metadata, :map, required(default: %{})},
+        {:deleted_at, :utc_datetime_usec, public()}
+      ])
+    end
+
+    def attributes(:invoice) do
+      object([
+        {:status, :atom,
+         public(constraints: [one_of: [:draft, :open, :paid, :uncollectible, :void]])},
+        {:number, :string, public()},
+        {:customer_id, :string, public()},
+        {:subscription_id, :string, public()},
+        {:collection, :atom,
+         public(constraints: [one_of: [:charge_automatically, :send_invoice]])},
+        {:amount_due, :decimal, public()},
+        {:amount_paid, :decimal, public()},
+        {:total, :decimal, public()},
+        {:currency, :string, public()},
+        {:hosted_url, :string, public()},
+        {:pdf_url, :string, public()},
+        {:due_at, :utc_datetime_usec, public()},
+        {:payment_id, :string, public()},
+        {:reference, :string, public()},
+        {:deleted_at, :utc_datetime_usec, public()}
+      ])
+    end
+
     @doc "The identity that keeps each provider object (or event) once."
     @spec identity(kind()) :: {atom(), [atom()]}
     def identity(:inbox), do: {:provider_event, [:provider, :event_id]}
@@ -177,6 +299,12 @@ if Code.ensure_loaded?(Ash) do
     def identity(:subscription), do: {:provider_subscription, [:provider, :provider_id]}
     def identity(:customer), do: {:provider_customer, [:provider, :provider_id]}
     def identity(:dispute), do: {:provider_dispute, [:provider, :provider_id]}
+    def identity(:product), do: {:provider_product, [:provider, :provider_id]}
+    def identity(:price), do: {:provider_price, [:provider, :provider_id]}
+    def identity(:coupon), do: {:provider_coupon, [:provider, :provider_id]}
+    def identity(:promotion_code), do: {:provider_promotion_code, [:provider, :provider_id]}
+    def identity(:payment_link), do: {:provider_payment_link, [:provider, :provider_id]}
+    def identity(:invoice), do: {:provider_invoice, [:provider, :provider_id]}
 
     @doc """
     The calculations of a kind: its amounts as `Money`, and for a subscription `:active?` (gives
@@ -205,6 +333,17 @@ if Code.ensure_loaded?(Ash) do
     end
 
     def calculations(:dispute), do: [money(:money, :amount)]
+    def calculations(:price), do: [money(:money, :amount)]
+    def calculations(:coupon), do: [money(:money_off, :amount_off)]
+    def calculations(:promotion_code), do: [money(:minimum, :minimum_amount)]
+
+    def calculations(:invoice),
+      do: [
+        money(:money, :total),
+        money(:money_due, :amount_due),
+        money(:money_paid, :amount_paid)
+      ]
+
     def calculations(_kind), do: []
 
     @doc """
@@ -364,6 +503,120 @@ if Code.ensure_loaded?(Ash) do
         ]),
         update(:accept, change.(:accept), [])
       ]
+    end
+
+    def actions(:product, opts) do
+      object_actions(:product, opts,
+        add: [
+          argument(:name, :string, allow_nil?: false),
+          argument(:description, :string),
+          argument(:tax_code, :string),
+          argument(:id, :string),
+          argument(:metadata, :map)
+        ],
+        edit: [
+          argument(:name, :string),
+          argument(:description, :string),
+          argument(:tax_code, :string),
+          argument(:active, :boolean),
+          argument(:metadata, :map)
+        ],
+        archive: []
+      )
+    end
+
+    def actions(:price, opts) do
+      object_actions(:price, opts,
+        add: [
+          argument(:product_id, :string, allow_nil?: false),
+          argument(:amount, :map, allow_nil?: false),
+          argument(:interval, :atom, constraints: [one_of: [:day, :week, :month, :year]]),
+          argument(:interval_count, :integer, constraints: [min: 1]),
+          argument(:tax_behavior, :atom, constraints: [one_of: [:inclusive, :exclusive]]),
+          argument(:lookup_key, :string),
+          argument(:metadata, :map)
+        ],
+        archive: []
+      )
+    end
+
+    def actions(:coupon, opts) do
+      object_actions(:coupon, opts,
+        add: [
+          argument(:id, :string),
+          argument(:name, :string),
+          argument(:percent_off, :decimal),
+          argument(:amount_off, :map),
+          argument(:duration, :atom, constraints: [one_of: [:once, :repeating, :forever]]),
+          argument(:duration_in_months, :integer, constraints: [min: 1]),
+          argument(:max_redemptions, :integer, constraints: [min: 1]),
+          argument(:redeem_by, :utc_datetime),
+          argument(:metadata, :map)
+        ],
+        remove: []
+      )
+    end
+
+    def actions(:promotion_code, opts) do
+      object_actions(:promotion_code, opts,
+        add: [
+          argument(:coupon_id, :string, allow_nil?: false),
+          argument(:code, :string),
+          argument(:max_redemptions, :integer, constraints: [min: 1]),
+          argument(:expires_at, :utc_datetime),
+          argument(:first_time_transaction, :boolean),
+          argument(:minimum_amount, :map),
+          argument(:customer_id, :string),
+          argument(:metadata, :map)
+        ],
+        edit: [argument(:active, :boolean), argument(:metadata, :map)]
+      )
+    end
+
+    def actions(:payment_link, opts) do
+      object_actions(:payment_link, opts,
+        add: [argument(:link, :map, allow_nil?: false)],
+        edit: [argument(:changes, :map, allow_nil?: false)]
+      )
+    end
+
+    def actions(:invoice, opts) do
+      object_actions(:invoice, opts,
+        add: [argument(:draft, :map, allow_nil?: false)],
+        finalize: [],
+        send: [],
+        pay: [argument(:out_of_band, :boolean, default: false, allow_nil?: false)],
+        void: [],
+        mark_uncollectible: [],
+        remove: []
+      )
+    end
+
+    # A site-managed object kind (`MishkaPay.Ash.Object.Spec`): `:sync` from the provider, `:add`
+    # at the provider (a create with the provider and tenant arguments), and each of its row
+    # actions, all through `MishkaPay.Ash.Object.Change`.
+    defp object_actions(kind, opts, actions) do
+      change = &{MishkaPay.Ash.Object.Change, [kind: kind, operation: &1] ++ announce(opts)}
+      sync = sync(kind, MishkaPay.Ash.Object.Spec.id_argument(kind), change.(:sync))
+
+      made =
+        for {name, arguments} <- actions do
+          case name do
+            :add ->
+              {:add, :create,
+               upsert(kind,
+                 arguments:
+                   [argument(:provider, :string, allow_nil?: false), argument(:tenant, :string)] ++
+                     arguments,
+                 changes: [change(change.(:add))]
+               )}
+
+            name ->
+              update(name, change.(name), arguments)
+          end
+        end
+
+      [sync | made]
     end
 
     @doc """

@@ -88,4 +88,14 @@ defmodule MishkaPay.Events do
   """
   @spec dispute_changed() :: String.t()
   def dispute_changed, do: "mishka_pay:dispute:changed"
+
+  @doc """
+  The event fired after a resource of `kind` wrote what its provider answered:
+  `"mishka_pay:<kind>:changed"`, with `%{<kind> => struct, record: record}`. For the payment,
+  subscription, customer and dispute kinds it is the event of their own function above; for the
+  catalog, coupons, promotion codes, payment links and bills (`MishkaPay.Ash.Object.Spec`) it is
+  the only one.
+  """
+  @spec changed(atom()) :: String.t()
+  def changed(kind) when is_atom(kind), do: "mishka_pay:#{kind}:changed"
 end

@@ -128,13 +128,13 @@ defmodule MishkaPay.Providers.Stripe do
     "charge.dispute.closed" => [:payment, :dispute],
     "charge.dispute.funds_withdrawn" => [:payment, :dispute],
     "charge.dispute.funds_reinstated" => [:payment, :dispute],
-    "invoice.paid" => [:subscription],
-    "invoice.payment_failed" => [:subscription],
-    "invoice.finalized" => [:subscription],
-    "invoice.payment_action_required" => [:subscription],
-    "invoice.voided" => [:subscription],
-    "invoice.marked_uncollectible" => [:subscription],
-    "invoice.overdue" => [:subscription],
+    "invoice.paid" => [:subscription, :invoice],
+    "invoice.payment_failed" => [:subscription, :invoice],
+    "invoice.finalized" => [:subscription, :invoice],
+    "invoice.payment_action_required" => [:subscription, :invoice],
+    "invoice.voided" => [:subscription, :invoice],
+    "invoice.marked_uncollectible" => [:subscription, :invoice],
+    "invoice.overdue" => [:subscription, :invoice],
     "invoice.upcoming" => [:subscription],
     "invoice_payment.paid" => [:payment],
     "customer.subscription.created" => [:subscription],
@@ -143,6 +143,23 @@ defmodule MishkaPay.Providers.Stripe do
     "customer.subscription.paused" => [:subscription],
     "customer.subscription.resumed" => [:subscription],
     "customer.subscription.trial_will_end" => [:subscription],
+    "invoice.created" => [:invoice],
+    "invoice.updated" => [:invoice],
+    "invoice.sent" => [:invoice],
+    "invoice.deleted" => [:invoice],
+    "product.created" => [:product],
+    "product.updated" => [:product],
+    "product.deleted" => [:product],
+    "price.created" => [:price],
+    "price.updated" => [:price],
+    "price.deleted" => [:price],
+    "coupon.created" => [:coupon],
+    "coupon.updated" => [:coupon],
+    "coupon.deleted" => [:coupon],
+    "promotion_code.created" => [:promotion_code],
+    "promotion_code.updated" => [:promotion_code],
+    "payment_link.created" => [:payment_link],
+    "payment_link.updated" => [:payment_link],
     "customer.created" => [:customer],
     "customer.updated" => [:customer],
     "customer.deleted" => [:customer]
@@ -150,7 +167,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   @doc """
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
-  (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer` or `:dispute`. Each is mapped to its
+  (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
+  `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`. Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
