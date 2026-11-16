@@ -24,7 +24,19 @@ defmodule MishkaPay.MixProject do
       docs: [
         main: "readme",
         source_ref: "v#{@version}",
-        extras: ["README.md", LICENSE: [title: "License"]],
+        extras: [
+          "README.md",
+          "guides/getting-started.md",
+          "guides/webhooks.md",
+          "guides/ash.md",
+          "guides/multi-tenant.md",
+          "guides/testing.md",
+          "guides/errors.md",
+          "guides/telemetry.md",
+          "guides/production.md",
+          LICENSE: [title: "License"]
+        ],
+        groups_for_extras: [Guides: ~r/guides\//],
         source_url: @source_url
       ],
       # `test/support` is compiled in the test env, where `mix ci` runs dialyzer. It calls `Mix`,
@@ -45,7 +57,7 @@ defmodule MishkaPay.MixProject do
       licenses: ["Apache-2.0"],
       maintainers: ["Shahryar Tavakkoli"],
       files:
-        ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* usage-rules.md usage-rules),
+        ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* guides usage-rules.md usage-rules),
       links: %{
         "GitHub" => @source_url,
         "Sponsor" => "https://github.com/sponsors/mishka-group",
