@@ -335,6 +335,23 @@ defmodule ShopWeb.ShopLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash}>
+      <.link
+        navigate={~p"/sell"}
+        class="card bg-primary/10 border border-primary/40 hover:bg-primary/20 mb-6"
+        data-testid="sell-page-link"
+      >
+        <div class="card-body flex-row items-center gap-4 py-4">
+          <.icon name="hero-bolt" class="size-8 text-primary" />
+          <div class="flex-1">
+            <div class="font-semibold">Sell a product with one link</div>
+            <div class="text-sm opacity-70">
+              Fill in a product, press one button: Mishka Pay makes it, its price and a payment link
+              at Stripe, shows each step, and gives you the link buyers pay with. Undo takes it all back.
+            </div>
+          </div>
+          <.icon name="hero-arrow-right" class="size-5" />
+        </div>
+      </.link>
       <.status
         providers={@providers}
         keys={@keys}
