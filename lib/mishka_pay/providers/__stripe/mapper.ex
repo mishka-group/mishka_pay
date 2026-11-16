@@ -16,6 +16,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Invoice,
     Money,
     Payment,
+    PaymentLink,
     Price,
     Product,
     PromotionCode,
@@ -61,20 +62,30 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(options(checkout))
+    |> Map.merge(automatic_tax(checkout, settings))
   end
+
+  # The checkout's own choice, else the tenant's default, else the Stripe account's (not sent).
+  defp automatic_tax(%{automatic_tax: choice}, _settings) when is_boolean(choice),
+    do: %{"automatic_tax" => %{"enabled" => choice}}
+
+  defp automatic_tax(_checkout, %{automatic_tax: true}),
+    do: %{"automatic_tax" => %{"enabled" => true}}
+
+  defp automatic_tax(_checkout, _settings), do: %{}
 
   # The checkout's options, each only when it is set.
   defp options(%Checkout{} = checkout) do
     %{
       "discounts" => discounts(checkout.discounts),
       "allow_promotion_codes" => checkout.allow_promotion_codes,
-      "automatic_tax" => enabled(checkout.automatic_tax),
       "customer_creation" => checkout.customer_creation && to_string(checkout.customer_creation),
       "locale" => checkout.locale,
       "expires_at" => checkout.expires_at && DateTime.to_unix(checkout.expires_at),
       "billing_address_collection" =>
         checkout.billing_address && to_string(checkout.billing_address),
-      "tax_id_collection" => enabled(checkout.tax_id_collection)
+      "tax_id_collection" => enabled(checkout.tax_id_collection),
+      "invoice_creation" => (checkout.invoice == true && %{"enabled" => true}) || nil
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -119,8 +130,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         %{
           "currency" => amount.currency |> to_string() |> String.downcase(),
           "unit_amount" => Money.to_minor(amount),
-          "product_data" => %{"name" => name, "tax_code" => tax_code}
+          "product_data" => %{"name" => name, "tax_code" => tax_code},
+          "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
         }
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.merge(recurring(price)),
       "quantity" => quantity
     }
@@ -163,7 +176,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"]),
         amount_discount:
           money(get_in(session, ["total_details", "amount_discount"]), session["currency"]),
-        expires_at: time(session["expires_at"])
+        expires_at: time(session["expires_at"]),
+        invoice_id: id_of(session["invoice"]),
+        payment_link_id: id_of(session["payment_link"])
     }
   end
 
@@ -632,6 +647,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "unit_amount" => Money.to_minor(price.amount),
       "nickname" => price.name,
       "lookup_key" => price.lookup_key,
+      "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior),
       "metadata" => price.metadata
     }
     |> Map.merge(recurring(price))
@@ -653,6 +669,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       active: price["active"],
       interval: interval(get_in(price, ["recurring", "interval"])),
       interval_count: get_in(price, ["recurring", "interval_count"]),
+      tax_behavior: tax_behavior(price["tax_behavior"]),
       tax_code: id_of(expanded(price["product"])["tax_code"]),
       metadata: price["metadata"],
       created_at: time(price["created"])
@@ -660,6 +677,106 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Price.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # Stripe's third choice, "unspecified", is a price that never said.
+  defp tax_behavior(behavior) when behavior in ["inclusive", "exclusive"],
+    do: String.to_existing_atom(behavior)
+
+  defp tax_behavior(_unspecified), do: nil
+
+  @doc """
+  Params of `POST /v1/payment_links`: its prices, where the buyer goes after paying, and the
+  options a checkout has; the tenant's automatic tax when the link does not say.
+  """
+  @spec payment_link_params(PaymentLink.t(), map()) :: map()
+  def payment_link_params(%PaymentLink{} = link, settings \\ %{}) do
+    %{
+      "line_items" => Enum.map(link.items, &link_item(&1, link)),
+      "after_completion" => after_completion(link.success_url),
+      "restrictions" =>
+        link.max_purchases && %{"completed_sessions" => %{"limit" => link.max_purchases}},
+      "inactive_message" => link.inactive_message,
+      "customer_creation" => link.customer_creation && to_string(link.customer_creation),
+      "billing_address_collection" => link.billing_address && to_string(link.billing_address),
+      "tax_id_collection" => enabled(link.tax_id_collection),
+      "allow_promotion_codes" => link.allow_promotion_codes,
+      "invoice_creation" => (link.invoice == true && %{"enabled" => true}) || nil,
+      "subscription_data" => link.trial_days && %{"trial_period_days" => link.trial_days},
+      "metadata" => link.metadata
+    }
+    |> Map.merge(automatic_tax(link, settings))
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  @doc """
+  Params of `POST /v1/payment_links/:id`: every option set on the link, on or off, its limits and
+  messages; its prices and trial stay as made.
+  """
+  @spec payment_link_update_params(PaymentLink.t()) :: map()
+  def payment_link_update_params(%PaymentLink{} = link) do
+    link
+    |> Map.put(:items, [])
+    |> payment_link_params()
+    |> Map.drop(["line_items", "subscription_data"])
+    |> Map.put("active", link.active)
+  end
+
+  # The buyer may change the quantity when the link gives a range.
+  defp link_item(price, %{quantity_min: nil, quantity_max: nil}),
+    do: %{"price" => price.id, "quantity" => price.quantity}
+
+  defp link_item(price, link) do
+    %{
+      "price" => price.id,
+      "quantity" => price.quantity,
+      "adjustable_quantity" => %{
+        "enabled" => true,
+        "minimum" => link.quantity_min,
+        "maximum" => link.quantity_max
+      }
+    }
+  end
+
+  defp after_completion(nil), do: nil
+
+  defp after_completion(url),
+    do: %{"type" => "redirect", "redirect" => %{"url" => url}}
+
+  @doc "A Stripe payment link as a `MishkaPay.PaymentLink`, with its line items when expanded."
+  @spec payment_link(map()) :: {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def payment_link(link) do
+    %{
+      provider: "stripe",
+      id: link["id"],
+      url: link["url"],
+      active: link["active"],
+      items: link_items(link["line_items"]),
+      success_url: get_in(link, ["after_completion", "redirect", "url"]),
+      allow_promotion_codes: link["allow_promotion_codes"],
+      automatic_tax: get_in(link, ["automatic_tax", "enabled"]),
+      invoice: get_in(link, ["invoice_creation", "enabled"]),
+      trial_days: get_in(link, ["subscription_data", "trial_period_days"]),
+      max_purchases: get_in(link, ["restrictions", "completed_sessions", "limit"]),
+      purchases: get_in(link, ["restrictions", "completed_sessions", "count"]),
+      inactive_message: link["inactive_message"],
+      customer_creation: link["customer_creation"],
+      billing_address: link["billing_address_collection"],
+      tax_id_collection: get_in(link, ["tax_id_collection", "enabled"]),
+      metadata: link["metadata"],
+      created_at: time(link["created"])
+    }
+    |> PaymentLink.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # Stripe lists a link's line items only when asked (`expand[]=line_items`).
+  defp link_items(%{"data" => items}) do
+    for %{"price" => price} = item <- items do
+      %{id: id_of(price), quantity: item["quantity"] || 1}
+    end
+  end
+
+  defp link_items(_not_expanded), do: nil
 
   defp blank(""), do: nil
   defp blank(text), do: text

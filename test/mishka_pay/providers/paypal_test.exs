@@ -89,6 +89,16 @@ defmodule MishkaPay.Providers.PayPalTest do
             {%{discounts: [%{coupon_id: "SPRING"}]}, "checkout with discounts"},
             {%{locale: "de"}, "checkout with a page language"},
             {%{automatic_tax: true}, "checkout with automatic tax"},
+            {%{invoice: true}, "checkout with an invoice"},
+            {%{
+               items: [
+                 %{
+                   name: "Ebook",
+                   amount: %{amount: "10", currency: "USD"},
+                   tax_behavior: :exclusive
+                 }
+               ]
+             }, "checkout with a tax behavior"},
             {%{items: [%{id: "price_1"}]}, "checkout by a provider price id"},
             {%{items: [%{name: "Ebook", amount: %{amount: "100", currency: "INR"}}]},
              "checkout in INR"},

@@ -46,6 +46,16 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
 
+## Payment links, invoices and tax
+
+- A payment link's `max_purchases` is Stripe's `restrictions.completed_sessions.limit`; once
+  reached, the link turns itself off and shows `inactive_message`.
+- `invoice: true` is Stripe's `invoice_creation`: an invoice for a one-time payment. Whether
+  Stripe emails receipts and invoices is a Dashboard setting (Customer emails), not code.
+- Stripe Tax must be turned on in the Dashboard (origin address, registrations) before
+  `automatic_tax` counts anything. A price's `tax_behavior` can be set once on a price that had
+  none; otherwise make a new price.
+
 ## Catalog and lists
 
 - A product may take the host's own `id` (`"ebook"`): letters, digits, `_` and `-`.

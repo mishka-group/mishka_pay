@@ -53,6 +53,8 @@ defmodule MishkaPay.Provider do
     * `:portal`: `portal_session/2`;
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
     * `:catalog`: products and prices (`create_product/2` and the rest);
+    * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
+      `update_payment_link/2`;
     * `:webhook`: `verify_webhook/3`.
 
   Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
@@ -78,6 +80,7 @@ defmodule MishkaPay.Provider do
     :portal,
     :discount,
     :catalog,
+    :payment_link,
     :webhook,
     :return_verify
   ]
@@ -94,6 +97,7 @@ defmodule MishkaPay.Provider do
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
+    * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:webhook`: sends signed messages when something changes.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
@@ -107,6 +111,7 @@ defmodule MishkaPay.Provider do
           | :portal
           | :discount
           | :catalog
+          | :payment_link
           | :payment_list
           | :webhook
           | :return_verify
@@ -268,6 +273,22 @@ defmodule MishkaPay.Provider do
   @callback list_prices(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:payment_link`. Makes a payment link and answers it with its `:id` and `:url`."
+  @callback create_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. Reads one payment link again."
+  @callback fetch_payment_link(payment_link_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. One page of payment links, newest first; only `:active` ones when given."
+  @callback list_payment_links(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_link`. Changes the options set on a link (`:active` and the rest); its prices stay."
+  @callback update_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:discount`. Turns a promotion code off or on again (`:active`), and its metadata."
   @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
@@ -316,6 +337,10 @@ defmodule MishkaPay.Provider do
                       fetch_price: 2,
                       update_price: 2,
                       list_prices: 2,
+                      create_payment_link: 2,
+                      fetch_payment_link: 2,
+                      list_payment_links: 2,
+                      update_payment_link: 2,
                       verify_webhook: 3
 
   @operations %{
@@ -350,6 +375,12 @@ defmodule MishkaPay.Provider do
       fetch_price: 2,
       update_price: 2,
       list_prices: 2
+    ],
+    payment_link: [
+      create_payment_link: 2,
+      fetch_payment_link: 2,
+      list_payment_links: 2,
+      update_payment_link: 2
     ],
     webhook: [verify_webhook: 3]
   }

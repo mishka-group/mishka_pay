@@ -174,13 +174,21 @@ defmodule MishkaPay.Providers.PayPal do
     locale: "a page language",
     expires_at: "an expiry",
     billing_address: "billing address collection",
-    tax_id_collection: "tax id collection"
+    tax_id_collection: "tax id collection",
+    invoice: "an invoice"
   ]
 
   defp no_options(checkout) do
     case Enum.find(@options, fn {field, _label} -> set?(Map.get(checkout, field)) end) do
-      nil -> :ok
+      nil -> no_tax_behavior(checkout.items)
       {_field, label} -> unsupported("checkout with #{label}")
+    end
+  end
+
+  defp no_tax_behavior(items) do
+    case Enum.any?(items, &(not is_nil(&1.tax_behavior))) do
+      false -> :ok
+      true -> unsupported("checkout with a tax behavior")
     end
   end
 

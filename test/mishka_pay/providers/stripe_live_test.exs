@@ -416,6 +416,96 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
+  test "a one-time payment link, a checkout with its invoice, and prices that hold or add the tax" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Product{id: product_id}} =
+      MishkaPay.create_product(%{
+        provider: "stripe",
+        id: "live-link-#{run}",
+        name: "Live link #{run}",
+        tax_code: "txcd_10302000"
+      })
+
+    on_exit(fn -> MishkaPay.archive_product("stripe", product_id) end)
+
+    assert {:ok, %MishkaPay.Price{id: price_id, tax_behavior: :exclusive}} =
+             MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: product_id,
+               amount: %{amount: "15.00", currency: "USD"},
+               tax_behavior: :exclusive
+             })
+
+    assert {:ok,
+            %MishkaPay.PaymentLink{
+              id: "plink_" <> _ = link_id,
+              url: "https://buy.stripe.com/" <> _,
+              active: true,
+              max_purchases: 1,
+              purchases: 0,
+              inactive_message: "Sold out",
+              invoice: true
+            } = link} =
+             MishkaPay.create_payment_link(%{
+               provider: "stripe",
+               items: [%{id: price_id, quantity: 1}],
+               success_url: "https://shop.test/thanks",
+               max_purchases: 1,
+               inactive_message: "Sold out",
+               quantity_max: 3,
+               invoice: true,
+               customer_creation: :always
+             })
+
+    assert MishkaPay.PaymentLink.url(link, reference: "order-#{run}") =~
+             "client_reference_id=order-"
+
+    assert {:ok, %MishkaPay.PaymentLink{items: [%MishkaPay.Price{id: ^price_id}]}} =
+             MishkaPay.fetch_payment_link("stripe", link_id)
+
+    assert {:ok, %MishkaPay.PaymentLink{active: false, max_purchases: 5}} =
+             MishkaPay.update_payment_link(%{
+               provider: "stripe",
+               id: link_id,
+               active: false,
+               max_purchases: 5
+             })
+
+    assert {:ok, %Checkout{status: :open, invoice: true}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{id: price_id}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-invoice-#{run}",
+               invoice: true
+             })
+
+    MishkaPay.Test.put_keys("stripe", %{
+      secret_key: System.fetch_env!("STRIPE_SECRET_KEY"),
+      automatic_tax: true
+    })
+
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [
+                 %{
+                   name: "Tax included",
+                   amount: %{amount: "20.00", currency: "EUR"},
+                   tax_code: "txcd_10302000",
+                   tax_behavior: :inclusive
+                 }
+               ],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-inclusive-#{run}"
+             })
+
+    MishkaPay.archive_price("stripe", price_id)
+  end
+
   test "a payment that does not exist is a rejection" do
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_payment("stripe", "pi_doesnotexist")

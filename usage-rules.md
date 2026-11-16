@@ -61,7 +61,8 @@ end
 
 Keys fields: `secret_key` (required), `publishable_key`, `webhook_secret`, `mode` (`:test`
 default, or `:live`), `merchant_of_record` (Stripe Managed Payments, `true`/`false`/absent),
-`refunds` (`:once` default, or `:many`), `extra` (a map). Answer `nil` for a tenant without keys.
+`refunds` (`:once` default, or `:many`), `automatic_tax` (`true` counts the tax of every checkout
+and payment link of this site with Stripe Tax; a checkout's own choice wins), `extra` (a map). Answer `nil` for a tenant without keys.
 
 Mount the webhook endpoint **before** `Plug.Parsers` in the endpoint (it needs the raw body):
 
@@ -96,6 +97,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_promotion_code(attrs)`, `fetch_promotion_code/3`, `list_promotion_codes/3`, `update_promotion_code/1` | `%MishkaPay.PromotionCode{}` |
 | `MishkaPay.create_product(attrs)`, `fetch_product/3`, `update_product/1`, `archive_product/3`, `list_products/3` | `%MishkaPay.Product{}` |
 | `MishkaPay.create_price(attrs)`, `fetch_price/3`, `archive_price/3`, `list_prices/3` | `%MishkaPay.Price{}` |
+| `MishkaPay.create_payment_link(attrs)`, `fetch_payment_link/3`, `update_payment_link/1`, `list_payment_links/3` | `%MishkaPay.PaymentLink{url: url}` |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every
@@ -154,10 +156,13 @@ MishkaPay.checkout(%{
   # or: discounts: [%{promotion_code_id: code.id}]   # applied for them; one way, not both
   automatic_tax: true, locale: "de", billing_address: :required, tax_id_collection: true,
   customer_creation: :always,             # one-time checkouts only
+  invoice: true,                          # an invoice for a one-time payment (subscriptions make their own)
   expires_at: DateTime.add(DateTime.utc_now(), 3600)
 })
 ```
 
+- A price's `tax_behavior` is `:exclusive` (tax added on top) or `:inclusive` (the amount holds
+  the tax), on catalog prices and on checkout items alike.
 - A coupon takes `percent_off` (more than 0, at most 100) or `amount_off` (money), one of them;
   `duration: :repeating` needs `duration_in_months`.
 - A checkout read back has `amount_discount` beside `amount_total` and `amount_tax`.
@@ -182,6 +187,29 @@ MishkaPay.checkout(%{..., items: [%{id: price.id, quantity: 1}]})
 - `archive_product/3` takes a product off sale; a provider never deletes what sold.
 - `lookup_key` names a price for the host (`list_prices(p, t, lookup_key: "ebook")`), so code
   never keeps a `price_...` id by hand.
+
+## Payment links
+
+A page that sells catalog prices to anyone who opens it: made once, put on a page, an email or a
+QR code. Each buyer still gets their own checkout, so sales come in by the same webhooks.
+
+```elixir
+{:ok, link} =
+  MishkaPay.create_payment_link(%{provider: "stripe", tenant: site.id,
+                                  items: [%{id: price.id, quantity: 1}],
+                                  success_url: url(~p"/thanks"),
+                                  max_purchases: 100,           # left out: no limit; 1: one-time
+                                  inactive_message: "Sold out",
+                                  quantity_min: 1, quantity_max: 5,
+                                  invoice: true, allow_promotion_codes: true})
+
+MishkaPay.PaymentLink.url(link, reference: order.id, email: user.email)
+MishkaPay.update_payment_link(%{provider: "stripe", tenant: site.id, id: link.id, active: false})
+```
+
+- Every limit is the caller's choice; an option left out is the provider's default.
+- `url/2` fills one buyer's details; the `reference` comes back as the checkout's `:reference`.
+- A link cannot be deleted: turn it off. `:purchases` counts sales against `:max_purchases`.
 
 ## Customers and the portal
 

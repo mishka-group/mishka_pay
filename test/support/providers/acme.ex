@@ -26,7 +26,8 @@ defmodule MishkaPay.Support.Acme do
       :customer,
       :portal,
       :discount,
-      :catalog
+      :catalog,
+      :payment_link
     ],
     priority: 10
 
@@ -38,6 +39,7 @@ defmodule MishkaPay.Support.Acme do
     Invoice,
     Page,
     Payment,
+    PaymentLink,
     PortalSession,
     Price,
     Product,
@@ -272,4 +274,29 @@ defmodule MishkaPay.Support.Acme do
     {:ok, price} = fetch_price("acme_price_1", keys)
     page([price], opts)
   end
+
+  @impl MishkaPay.Provider
+  def create_payment_link(%PaymentLink{} = link, %{secret_key: "sk_acme"}),
+    do: {:ok, %{link | id: "acme_link_1", url: "https://pay.acme.test/l/1", active: true}}
+
+  @impl MishkaPay.Provider
+  def fetch_payment_link(id, %{secret_key: "sk_acme"}),
+    do:
+      PaymentLink.builder(%{
+        provider: "acme",
+        id: id,
+        url: "https://pay.acme.test/l/1",
+        active: true,
+        max_purchases: 1,
+        purchases: 0
+      })
+
+  @impl MishkaPay.Provider
+  def list_payment_links(opts, %{secret_key: "sk_acme"} = keys) do
+    {:ok, link} = fetch_payment_link("acme_link_1", keys)
+    page(List.duplicate(link, 2), opts)
+  end
+
+  @impl MishkaPay.Provider
+  def update_payment_link(%PaymentLink{} = link, %{secret_key: "sk_acme"}), do: {:ok, link}
 end

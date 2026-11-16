@@ -385,6 +385,104 @@ defmodule MishkaPayTest do
     end
   end
 
+  describe "payment links, invoices and tax behavior" do
+    test "a link sells catalog prices with the limits the caller chose, and is turned off" do
+      assert {:ok,
+              %MishkaPay.PaymentLink{
+                id: "acme_link_1",
+                url: "https://pay.acme.test/l/1",
+                max_purchases: 1,
+                quantity_max: 5,
+                customer_creation: :always
+              } = link} =
+               MishkaPay.create_payment_link(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 items: [%{id: "price_1", quantity: 1}],
+                 success_url: "https://shop.test/thanks",
+                 max_purchases: 1,
+                 inactive_message: "Sold out",
+                 quantity_min: 1,
+                 quantity_max: 5,
+                 customer_creation: "always",
+                 invoice: true
+               })
+
+      assert MishkaPay.PaymentLink.url(link, reference: "order-42", email: "ava@example.com") ==
+               "https://pay.acme.test/l/1?client_reference_id=order-42&prefilled_email=ava%40example.com"
+
+      assert MishkaPay.PaymentLink.url(link) == "https://pay.acme.test/l/1"
+
+      assert_raise ArgumentError, ~r/reference/, fn ->
+        MishkaPay.PaymentLink.url(link, reference: "order 42")
+      end
+
+      assert {:ok, %MishkaPay.PaymentLink{active: false}} =
+               MishkaPay.update_payment_link(%{
+                 provider: "acme",
+                 id: "acme_link_1",
+                 active: false
+               })
+
+      assert {:ok, %MishkaPay.PaymentLink{purchases: 0}} =
+               MishkaPay.fetch_payment_link("acme", "acme_link_1", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [_, _]}} =
+               MishkaPay.list_payment_links("acme", "site-a")
+    end
+
+    test "a link needs catalog prices by id, and an update its id" do
+      for items <- [nil, [], [%{name: "Ebook", amount: %{amount: "1", currency: "USD"}}]] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :items} | _]}} =
+                 MishkaPay.create_payment_link(%{provider: "acme", items: items})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_payment_link(%{provider: "acme", active: false})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :success_url}]}} =
+               MishkaPay.create_payment_link(%{
+                 provider: "acme",
+                 items: [%{id: "price_1"}],
+                 success_url: "http://evil.test/"
+               })
+    end
+
+    test "an invoice is a one-time checkout's choice, and a price says how its tax counts" do
+      assert {:ok, %Checkout{invoice: true}} =
+               MishkaPay.checkout(Map.put(@checkout, :invoice, true))
+
+      plan = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :invoice}]}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{mode: :subscription, items: [plan], invoice: true})
+               )
+
+      assert {:ok, %Checkout{items: [%MishkaPay.Price{tax_behavior: :inclusive}]}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :items, [
+                   %{
+                     name: "Ebook",
+                     amount: %{amount: "20", currency: "EUR"},
+                     tax_behavior: "inclusive"
+                   }
+                 ])
+               )
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :items, [
+                   %{
+                     name: "Ebook",
+                     amount: %{amount: "20", currency: "EUR"},
+                     tax_behavior: "maybe"
+                   }
+                 ])
+               )
+    end
+  end
+
   describe "subscriptions" do
     test "are read, cancelled at the period's end or now, taken back, and their invoices listed" do
       assert {:ok, %MishkaPay.Subscription{id: "acme_sub_active", status: :active, items: [plan]}} =

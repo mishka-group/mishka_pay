@@ -104,6 +104,113 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.list_payments("stripe", "site-a", customer_id: "cus_123")
     end
 
+    test "payment links are made, read, listed and changed as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.PaymentLink{id: "plink_" <> _ = id, url: "https://" <> _}} =
+               MishkaPay.create_payment_link(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 items: [%{id: "price_123", quantity: 1}],
+                 success_url: "https://shop.test/thanks",
+                 max_purchases: 1,
+                 inactive_message: "Sold out",
+                 quantity_min: 1,
+                 quantity_max: 3,
+                 allow_promotion_codes: true,
+                 automatic_tax: true,
+                 invoice: true,
+                 customer_creation: :always,
+                 billing_address: :required,
+                 tax_id_collection: true
+               })
+
+      assert {:ok, %MishkaPay.PaymentLink{}} =
+               MishkaPay.fetch_payment_link("stripe", id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentLink{} | _]}} =
+               MishkaPay.list_payment_links("stripe", "site-a", active: true)
+
+      assert {:ok, %MishkaPay.PaymentLink{}} =
+               MishkaPay.update_payment_link(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: id,
+                 active: false,
+                 max_purchases: 10,
+                 inactive_message: "Back soon"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :items}]}} =
+               MishkaPay.create_payment_link(%{provider: "stripe", items: [%{id: "prod_1"}]})
+    end
+
+    test "a one-time checkout asks for its invoice, and prices carry their tax behavior" do
+      inclusive = [
+        %{
+          name: "Ebook",
+          amount: %{amount: "20", currency: "EUR"},
+          tax_code: "txcd_10302000",
+          tax_behavior: :inclusive
+        }
+      ]
+
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(Map.merge(@checkout, %{items: inclusive, invoice: true}))
+
+      params =
+        Stripe.Mapper.checkout_params(%{
+          params_checkout()
+          | invoice: true,
+            items: [
+              %MishkaPay.Price{
+                name: "E",
+                amount: Money.new(:EUR, "20"),
+                quantity: 1,
+                tax_behavior: :inclusive
+              }
+            ]
+        })
+
+      assert params["invoice_creation"] == %{"enabled" => true}
+
+      assert get_in(params, ["line_items", Access.at(0), "price_data", "tax_behavior"]) ==
+               "inclusive"
+
+      refute Map.has_key?(Stripe.Mapper.checkout_params(params_checkout()), "invoice_creation")
+
+      assert {:ok, %MishkaPay.Price{}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 product_id: "prod_123",
+                 amount: %{amount: "9", currency: "USD"},
+                 tax_behavior: :exclusive
+               })
+    end
+
+    test "the site's automatic tax applies when a checkout or link does not say, and theirs wins" do
+      on = %{automatic_tax: true}
+
+      assert Stripe.Mapper.checkout_params(params_checkout(), on)["automatic_tax"] == %{
+               "enabled" => true
+             }
+
+      refute Map.has_key?(Stripe.Mapper.checkout_params(params_checkout(), %{}), "automatic_tax")
+
+      assert Stripe.Mapper.checkout_params(%{params_checkout() | automatic_tax: false}, on)[
+               "automatic_tax"
+             ] == %{"enabled" => false}
+
+      link = %MishkaPay.PaymentLink{items: [%MishkaPay.Price{id: "price_1", quantity: 1}]}
+      assert Stripe.Mapper.payment_link_params(link, on)["automatic_tax"] == %{"enabled" => true}
+
+      assert %{"restrictions" => %{"completed_sessions" => %{"limit" => 1}}} =
+               Stripe.Mapper.payment_link_params(%{link | max_purchases: 1})
+
+      assert %{"line_items" => [%{"adjustable_quantity" => %{"enabled" => true, "maximum" => 4}}]} =
+               Stripe.Mapper.payment_link_params(%{link | quantity_max: 4})
+
+      refute Map.has_key?(Stripe.Mapper.payment_link_params(link), "restrictions")
+    end
+
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do
       test = self()
 

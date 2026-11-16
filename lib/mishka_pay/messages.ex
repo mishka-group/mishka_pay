@@ -50,6 +50,9 @@ defmodule MishkaPay.Messages do
           | :expires_past
           | :expires_range
           | :plain_id
+          | :link_reference
+          | :link_items
+          | :invoice_mode
           | :rejected_missing
           | :rejected_exists
           | :keys_answer
@@ -224,6 +227,27 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:rejected_exists),
     do: dgettext_noop("mishka_pay", "%{provider} already has one with that code or id")
+
+  defp msgid(:link_reference),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A payment link's reference may hold only letters, digits, underscores and dashes, at most 200"
+      )
+
+  defp msgid(:link_items),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A payment link sells catalog prices: give at least one, each by its price id"
+      )
+
+  defp msgid(:invoice_mode),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "An invoice is asked for only in a one-time checkout: a subscription makes its own"
+      )
 
   defp msgid(:plain_id),
     do:

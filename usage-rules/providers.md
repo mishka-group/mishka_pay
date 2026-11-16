@@ -29,6 +29,8 @@ end
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
     `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,
     `update_promotion_code/2`;
+  - `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
+    `update_payment_link/2`;
   - `:catalog`: `create_product/2`, `fetch_product/2`, `update_product/2`, `list_products/2`,
     `create_price/2`, `fetch_price/2`, `update_price/2`, `list_prices/2`;
   - `:webhook`: `verify_webhook/3`.

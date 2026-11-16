@@ -26,7 +26,8 @@ defmodule MishkaPay.ProviderTest do
              :customer,
              :portal,
              :discount,
-             :catalog
+             :catalog,
+             :payment_link
            ]
   end
 

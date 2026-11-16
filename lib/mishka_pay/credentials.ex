@@ -31,6 +31,9 @@ defmodule MishkaPay.Credentials do
     * `:merchant_of_record`: `true` or `false` turns selling as the merchant of record on or off
       for every checkout of this tenant (Stripe Managed Payments); left out, the provider
       account's own default applies. A checkout's own `:merchant_of_record` still wins.
+    * `:automatic_tax`: `true` has the provider count the tax of this tenant's checkouts and
+      payment links from the buyer's address (Stripe Tax); a checkout's own `:automatic_tax` still
+      wins.
     * `:refunds`: how this tenant refunds a payment. `:once` (the default): one refund, whole or
       in part, and a buyer who wants it again makes a new purchase. `:many`: part refunds until
       the payment is used up, as the provider itself allows; each refund then needs its own
@@ -70,6 +73,7 @@ defmodule MishkaPay.Credentials do
 
     field :publishable_key, String.t(), derives: "sanitize(trim) validate(string)"
     field :merchant_of_record, boolean(), derives: "validate(boolean)"
+    field :automatic_tax, boolean(), derives: "validate(boolean)"
 
     field :refunds, :once | :many,
       default: :once,

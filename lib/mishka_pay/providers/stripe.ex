@@ -68,6 +68,7 @@ defmodule MishkaPay.Providers.Stripe do
       :checkout,
       :payment_list,
       :catalog,
+      :payment_link,
       :expire,
       :refund,
       :subscription,
@@ -85,6 +86,7 @@ defmodule MishkaPay.Providers.Stripe do
     Errors,
     Messages,
     Page,
+    PaymentLink,
     Price,
     Product,
     PromotionCode,
@@ -434,6 +436,58 @@ defmodule MishkaPay.Providers.Stripe do
       page("/v1/prices", filters, opts, keys, &Mapper.price/1)
     end
   end
+
+  @impl MishkaPay.Provider
+  def create_payment_link(%PaymentLink{} = link, keys) do
+    with :ok <- metadata(link.metadata),
+         :ok <- link_prices(link.items),
+         {:ok, answer} <-
+           request(:post, "/v1/payment_links", Mapper.payment_link_params(link, keys), keys) do
+      Mapper.payment_link(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payment_link(payment_link_id, keys) do
+    with :ok <- stripe_id(payment_link_id, "plink_", :payment_link_id),
+         {:ok, answer} <-
+           request(
+             :get,
+             "/v1/payment_links/#{payment_link_id}",
+             [{"expand[]", "line_items"}],
+             keys
+           ) do
+      Mapper.payment_link(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_payment_links(opts, keys),
+    do: page("/v1/payment_links", [active: opts[:active]], opts, keys, &Mapper.payment_link/1)
+
+  @impl MishkaPay.Provider
+  def update_payment_link(%PaymentLink{id: id} = link, keys) do
+    with :ok <- stripe_id(id, "plink_", :id),
+         :ok <- metadata(link.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/payment_links/#{id}",
+             Mapper.payment_link_update_params(link),
+             keys
+           ) do
+      Mapper.payment_link(answer)
+    end
+  end
+
+  defp link_prices(items) do
+    case Enum.find(items, &(not stripe_price?(&1.id))) do
+      nil -> :ok
+      _bad -> stripe_id("not a price", "price_", :items)
+    end
+  end
+
+  defp stripe_price?(id), do: stripe_id(id, "price_", :items) == :ok
 
   # One page of a Stripe list: the list options as Stripe's `limit` and `starting_after`, the
   # filters set, each item mapped; the next cursor is the last item's id when Stripe has more.

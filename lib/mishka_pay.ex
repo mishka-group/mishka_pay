@@ -7,7 +7,8 @@ defmodule MishkaPay do
   The calls a project makes to take money: open a checkout, read a payment, refund one; for a
   subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
   back and list its invoices; keep customers (create, read, update, list) and open their billing
-  portal; keep coupons and promotion codes; keep a catalog of products and prices; end an open
+  portal; keep coupons and promotion codes; keep a catalog of products and prices; make payment
+  links that sell them; end an open
   checkout; list payments, invoices, customers, coupons, codes, products and prices page by page
   (`MishkaPay.Page`).
 
@@ -47,7 +48,8 @@ defmodule MishkaPay do
   `:customer_list`, `:portal`, `:checkout_expire`, `:coupon_create`, `:coupon`, `:coupon_list`,
   `:coupon_delete`, `:promotion_code_create`, `:promotion_code`, `:promotion_code_list` or
   `:promotion_code_update`, `:payment_list`, `:invoices`, `:product_create`, `:product`,
-  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update` or `:price_list`,
+  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update`, `:price_list`, `:payment_link_create`, `:payment_link`, `:payment_link_update`
+  or `:payment_link_list`,
   with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
@@ -62,6 +64,7 @@ defmodule MishkaPay do
     Events,
     Messages,
     Page,
+    PaymentLink,
     PortalSession,
     Price,
     Product,
@@ -391,6 +394,70 @@ defmodule MishkaPay do
   @spec list_prices(String.t(), term(), keyword()) :: {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_prices(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     capable(:catalog, :price_list, provider, tenant, & &1.list_prices(limited(opts), &2))
+  end
+
+  @doc """
+  Makes a payment link from `attrs` (see `MishkaPay.PaymentLink`): catalog prices by id, sold to
+  anyone who opens its `:url`.
+  """
+  @spec create_payment_link(map()) :: {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def create_payment_link(attrs) when is_map(attrs) do
+    made(
+      :payment_link_create,
+      :payment_link,
+      attrs,
+      PaymentLink,
+      [:provider, :items],
+      :create_payment_link
+    )
+  end
+
+  @doc "Reads payment link `payment_link_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_payment_link(String.t(), String.t(), term()) ::
+          {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def fetch_payment_link(provider, payment_link_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_link_id) do
+    capable(
+      :payment_link,
+      :payment_link,
+      provider,
+      tenant,
+      & &1.fetch_payment_link(payment_link_id, &2)
+    )
+  end
+
+  @doc """
+  Changes payment link `attrs.id` at `attrs.provider`: `active: false` turns it off and `true` on
+  again, and any other option given (`:max_purchases`, `:inactive_message`, `:success_url`,
+  `:allow_promotion_codes`...) is changed too; its prices and trial stay as made. A link cannot be
+  deleted; a turned-off one refuses buyers.
+  """
+  @spec update_payment_link(map()) :: {:ok, PaymentLink.t()} | {:error, Splode.Error.t()}
+  def update_payment_link(attrs) when is_map(attrs) do
+    made(
+      :payment_link_update,
+      :payment_link,
+      attrs,
+      PaymentLink,
+      [:provider, :id],
+      :update_payment_link
+    )
+  end
+
+  @doc """
+  One page of payment links at `provider`, newest first (`MishkaPay.Page`): `active:` only those
+  on (or off), plus `limit:` and `after:`.
+  """
+  @spec list_payment_links(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_payment_links(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :payment_link,
+      :payment_link_list,
+      provider,
+      tenant,
+      & &1.list_payment_links(limited(opts), &2)
+    )
   end
 
   # A struct built from the caller's map and handed to the provider's `callback`.
