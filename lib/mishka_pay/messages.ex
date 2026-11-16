@@ -52,6 +52,8 @@ defmodule MishkaPay.Messages do
           | :plain_id
           | :link_reference
           | :change_nothing
+          | :quantity_range
+          | :rejected_param
           | :change_item
           | :pause_behavior
           | :link_items
@@ -230,6 +232,16 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:rejected_exists),
     do: dgettext_noop("mishka_pay", "%{provider} already has one with that code or id")
+
+  defp msgid(:quantity_range),
+    do: dgettext_noop("mishka_pay", "The smallest quantity must not be more than the largest")
+
+  defp msgid(:rejected_param),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} refused the value of %{param} (HTTP %{status})"
+      )
 
   defp msgid(:change_nothing),
     do:

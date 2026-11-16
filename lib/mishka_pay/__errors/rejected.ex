@@ -12,13 +12,14 @@ defmodule MishkaPay.Errors.Rejected do
     * `:code`: its own short code, such as `"resource_missing"`, when it gave one;
       `"idempotency_error"` when a reference was reused with other details, `"already_exists"`
       when a code or id is taken.
+    * `:param`: the field of the request it refused, when it named one.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
 
   alias MishkaPay.Messages
 
-  use Splode.Error, fields: [:provider, :status, :code, :message], class: :provider
+  use Splode.Error, fields: [:provider, :status, :code, :param, :message], class: :provider
 
   @impl true
   def message(%{code: "idempotency_error"}), do: Messages.text(:reference_reused)
@@ -28,6 +29,10 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{provider: provider, code: "already_exists"}),
     do: Messages.text(:rejected_exists, provider: provider)
+
+  def message(%{provider: provider, status: status, code: nil, param: param})
+      when is_binary(param),
+      do: Messages.text(:rejected_param, provider: provider, param: param, status: status)
 
   def message(%{provider: provider, status: status, code: nil}),
     do: Messages.text(:rejected, provider: provider, status: status)

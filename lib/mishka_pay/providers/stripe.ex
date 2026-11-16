@@ -744,6 +744,7 @@ defmodule MishkaPay.Providers.Stripe do
        provider: "stripe",
        status: status,
        code: code_of(error),
+       param: error["param"],
        message: error["message"]
      )}
   end

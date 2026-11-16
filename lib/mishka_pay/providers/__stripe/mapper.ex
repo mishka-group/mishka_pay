@@ -85,7 +85,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "billing_address_collection" =>
         checkout.billing_address && to_string(checkout.billing_address),
       "tax_id_collection" => enabled(checkout.tax_id_collection),
-      "invoice_creation" => (checkout.invoice == true && %{"enabled" => true}) || nil
+      "invoice_creation" => enabled(checkout.invoice)
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -108,7 +108,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp mode_data(_payment, reference), do: %{"payment_intent_data" => %{"metadata" => reference}}
 
   # The checkout's own choice, else the tenant's setting, else nil: the Stripe account's default.
-  defp merchant_of_record(%Checkout{merchant_of_record: choice}, _settings)
+  defp merchant_of_record(%{merchant_of_record: choice}, _settings)
        when is_boolean(choice),
        do: choice
 
@@ -773,11 +773,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "billing_address_collection" => link.billing_address && to_string(link.billing_address),
       "tax_id_collection" => enabled(link.tax_id_collection),
       "allow_promotion_codes" => link.allow_promotion_codes,
-      "invoice_creation" => (link.invoice == true && %{"enabled" => true}) || nil,
+      "invoice_creation" => enabled(link.invoice),
       "subscription_data" => link.trial_days && %{"trial_period_days" => link.trial_days},
       "metadata" => link.metadata
     }
     |> Map.merge(automatic_tax(link, settings))
+    |> Map.merge(managed_payments(merchant_of_record(link, settings)))
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 

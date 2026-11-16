@@ -209,6 +209,43 @@ defmodule MishkaPay.Providers.StripeTest do
                Stripe.Mapper.payment_link_params(%{link | quantity_max: 4})
 
       refute Map.has_key?(Stripe.Mapper.payment_link_params(link), "restrictions")
+
+      assert %{"invoice_creation" => %{"enabled" => false}} =
+               Stripe.Mapper.payment_link_params(%{link | invoice: false})
+
+      refute Map.has_key?(Stripe.Mapper.payment_link_params(link), "invoice_creation")
+
+      assert %{"managed_payments" => %{"enabled" => false}} =
+               Stripe.Mapper.payment_link_params(link, %{merchant_of_record: false})
+
+      assert %{"managed_payments" => %{"enabled" => true}} =
+               Stripe.Mapper.payment_link_params(%{link | merchant_of_record: true}, %{
+                 merchant_of_record: false
+               })
+    end
+
+    test "a refusal that names a field says which, never Stripe's own words" do
+      MishkaPay.Test.stub_http(fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{
+          "error" => %{
+            "type" => "invalid_request_error",
+            "param" => "subscription_data[trial_period_days]",
+            "message" => "Trials need a recurring price, plink secret xyz"
+          }
+        })
+      end)
+
+      assert {:error, %Errors.Rejected{param: "subscription_data[trial_period_days]"} = error} =
+               MishkaPay.create_payment_link(%{
+                 provider: "stripe",
+                 items: [%{id: "price_1"}],
+                 trial_days: 7
+               })
+
+      assert Exception.message(error) ==
+               "stripe refused the value of subscription_data[trial_period_days] (HTTP 400)"
     end
 
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do

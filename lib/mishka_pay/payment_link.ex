@@ -25,8 +25,10 @@ defmodule MishkaPay.PaymentLink do
     * `:inactive_message`: what a buyer reads on it once it is off or used up.
     * `:quantity_min`, `:quantity_max`: let the buyer change how many they take, within these.
     * `:allow_promotion_codes`, `:automatic_tax`, `:invoice`, `:trial_days`,
-      `:customer_creation`, `:billing_address`, `:tax_id_collection`: as on a
-      `MishkaPay.Checkout`.
+      `:customer_creation`, `:billing_address`, `:tax_id_collection`, `:merchant_of_record`: as
+      on a `MishkaPay.Checkout`; the tenant's settings give `:automatic_tax` and
+      `:merchant_of_record` when the link does not. A provider that is the merchant of record
+      (Stripe Managed Payments) always makes an invoice.
     * `:metadata`: extra pairs, string keys to string values.
 
   Every option left out is the provider's own default.
@@ -76,6 +78,7 @@ defmodule MishkaPay.PaymentLink do
       validator: {MishkaPay.Checkout, :billing_address}
 
     field :tax_id_collection, boolean(), derives: "validate(boolean)"
+    field :merchant_of_record, boolean(), derives: "validate(boolean)"
     dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
@@ -84,7 +87,7 @@ defmodule MishkaPay.PaymentLink do
   @doc false
   def catalog_items(%{items: items} = attrs) when is_list(items) and items != [] do
     case Enum.all?(items, &known_price?/1) do
-      true -> {:ok, attrs}
+      true -> quantity_range(attrs)
       false -> {:error, %{field: :items, action: :items, message: Messages.text(:link_items)}}
     end
   end
@@ -94,7 +97,15 @@ defmodule MishkaPay.PaymentLink do
   def catalog_items(%{items: _empty_or_not_a_list}),
     do: {:error, %{field: :items, action: :items, message: Messages.text(:link_items)}}
 
-  def catalog_items(attrs), do: {:ok, attrs}
+  def catalog_items(attrs), do: quantity_range(attrs)
+
+  defp quantity_range(%{quantity_min: min, quantity_max: max})
+       when is_integer(min) and is_integer(max) and min > max,
+       do:
+         {:error,
+          %{field: :quantity_min, action: :quantity, message: Messages.text(:quantity_range)}}
+
+  defp quantity_range(attrs), do: {:ok, attrs}
 
   defp known_price?(%{id: id}) when is_binary(id), do: true
   defp known_price?(%{"id" => id}) when is_binary(id), do: true

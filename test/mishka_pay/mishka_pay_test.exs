@@ -440,6 +440,14 @@ defmodule MishkaPayTest do
       assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
                MishkaPay.update_payment_link(%{provider: "acme", active: false})
 
+      assert {:error, %Errors.Invalid{errors: [%{field: :quantity_min}]}} =
+               MishkaPay.create_payment_link(%{
+                 provider: "acme",
+                 items: [%{id: "price_1"}],
+                 quantity_min: 5,
+                 quantity_max: 2
+               })
+
       assert {:error, %Errors.Invalid{errors: [%{field: :success_url}]}} =
                MishkaPay.create_payment_link(%{
                  provider: "acme",
