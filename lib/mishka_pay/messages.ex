@@ -109,6 +109,7 @@ defmodule MishkaPay.Messages do
           | :fields_three
           | :merchant_of_record_off
           | :portal_feature_off
+          | :subscription_of_another
           | :dropdown_options
           | :declined
           | :declined_reason
@@ -559,6 +560,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
+      )
+
+  defp msgid(:subscription_of_another),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "That subscription belongs to another customer: open the portal for the customer who has it"
       )
 
   defp msgid(:portal_feature_off),

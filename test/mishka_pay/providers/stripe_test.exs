@@ -1239,6 +1239,24 @@ defmodule MishkaPay.Providers.StripeTest do
                })
 
       assert Exception.message(error) =~ "portal's settings"
+
+      MishkaPay.Test.stub_http(fn conn ->
+        error = %{
+          "type" => "invalid_request_error",
+          "message" => "The session's customer does not match the subscription's customer."
+        }
+
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      assert {:error, %Errors.Rejected{code: "subscription_of_another"}} =
+               MishkaPay.portal_session(%{
+                 provider: "stripe",
+                 customer_id: "cus_123",
+                 return_url: "https://shop.test/account",
+                 flow: :subscription_cancel,
+                 subscription_id: "sub_123"
+               })
     end
 
     test "a portal session opens on one task, as Stripe's spec accepts, and a subscription task needs its subscription" do
