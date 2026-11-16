@@ -129,7 +129,10 @@ defmodule ShopWeb.CustomersComponent do
 
   def handle_event("portal", %{"id" => id}, socket) do
     Customer
-    |> Ash.ActionInput.for_action(:portal, %{id: id, return_url: url(~p"/?portal=back")})
+    |> Ash.ActionInput.for_action(:portal, %{
+      id: id,
+      return_url: portal_return(socket.assigns.buyer)
+    })
     |> Ash.run_action(authorize?: false)
     |> case do
       {:ok, session} -> {:noreply, redirect(socket, external: session.url)}
@@ -526,9 +529,10 @@ defmodule ShopWeb.CustomersComponent do
           <button
             :if={!deleted?(@selected)}
             class="btn btn-sm"
-            phx-click="buy_as"
-            phx-value-id={@selected.id}
-            phx-target={@myself}
+            phx-click={
+              JS.push("buy_as", value: %{id: @selected.id}, target: @myself)
+              |> JS.focus_first(to: "[data-testid=one-time-products]")
+            }
             disabled={buyer?(@selected, @buyer)}
             data-testid="customer-buy-as"
           >
@@ -644,6 +648,10 @@ defmodule ShopWeb.CustomersComponent do
       {String.to_existing_atom(name), String.trim(params[name])}
     end
   end
+
+  # The portal sends the buyer back here; a buyer picked before keeps buying after.
+  defp portal_return(%{id: buyer}), do: url(~p"/?#{[portal: "back", buyer: buyer]}")
+  defp portal_return(_no_buyer), do: url(~p"/?portal=back")
 
   defp needs_email(%{email: _email} = args), do: {:ok, args}
   defp needs_email(_args), do: {:error, "Type the customer's email first."}

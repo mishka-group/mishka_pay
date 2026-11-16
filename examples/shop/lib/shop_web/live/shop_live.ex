@@ -117,13 +117,13 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  def handle_params(%{"portal" => "back"}, _uri, socket) do
+  def handle_params(%{"portal" => "back"} = params, _uri, socket) do
     case connected?(socket) do
       true ->
         {:noreply,
          socket
          |> flash(:info, "Back from the customer portal. Changes there come in by webhook.")
-         |> push_patch(to: ~p"/")}
+         |> push_patch(to: home(params["buyer"]))}
 
       false ->
         {:noreply, socket}
@@ -288,7 +288,10 @@ defmodule ShopWeb.ShopLive do
     {:noreply,
      socket
      |> push_patch(to: ~p"/?buyer=#{customer.id}")
-     |> flash(:info, "The next checkout pays as #{customer.name || customer.email}.")}
+     |> flash(
+       :info,
+       "Buying as #{customer.name || customer.email}. Press Buy on a product or plan below to pay as them."
+     )}
   end
 
   def handle_info({:flash, kind, message}, socket), do: {:noreply, flash(socket, kind, message)}
