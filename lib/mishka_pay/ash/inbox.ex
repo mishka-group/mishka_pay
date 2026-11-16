@@ -34,8 +34,9 @@ if Code.ensure_loaded?(AshOban) do
 
     ## What it holds
 
-    The event's provider, tenant, id, type, object, payment, mode and time (see `MishkaPay.Event`), its
-    `:status` (`:pending`, `:processed`, `:failed`), the `:last_error` and when it was processed. An
+    The event's provider, tenant, id, type, object, payment, subscription, mode and time (see
+    `MishkaPay.Event`), its `:status` (`:pending`, `:processed`, `:failed`), the `:last_error` (kept
+    from each failed try, while it is still tried again) and when it was processed. An
     identity on provider and event id keeps each event once, however often the provider sends it.
 
     ## How an event is worked
@@ -62,6 +63,7 @@ if Code.ensure_loaded?(AshOban) do
       attribute :object_id, :string, public?: true
       attribute :object_type, :string, public?: true
       attribute :payment_id, :string, public?: true
+      attribute :subscription_id, :string, public?: true
       attribute :livemode, :boolean, allow_nil?: false, default: false, public?: true
       attribute :account, :string, public?: true
       attribute :provider_created_at, :utc_datetime_usec, public?: true
@@ -94,6 +96,7 @@ if Code.ensure_loaded?(AshOban) do
           :object_id,
           :object_type,
           :payment_id,
+          :subscription_id,
           :livemode,
           :account,
           :provider_created_at
@@ -108,6 +111,11 @@ if Code.ensure_loaded?(AshOban) do
       update :process do
         require_atomic? false
         change MishkaPay.Ash.Inbox.Process
+      end
+
+      # Keeps why a try failed while the event is still being tried again.
+      update :note_error do
+        accept [:last_error]
       end
 
       update :fail do

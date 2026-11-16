@@ -192,7 +192,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment"
+        "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment."
       )
 
   defp msgid(:refund_nothing_left),

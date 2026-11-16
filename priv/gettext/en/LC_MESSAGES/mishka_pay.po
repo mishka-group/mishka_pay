@@ -206,11 +206,6 @@ msgstr ""
 msgid "The payment is refunded in full: nothing is left to refund"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:193
-#, elixir-autogen, elixir-format
-msgid "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment"
-msgstr ""
-
 #: lib/mishka_pay/messages.ex:153
 #, elixir-autogen, elixir-format
 msgid "The items field has a recurring price: a one-time checkout sells once, use mode subscription"
@@ -224,4 +219,9 @@ msgstr ""
 #: lib/mishka_pay/messages.ex:159
 #, elixir-autogen, elixir-format
 msgid "The trial_days field needs a subscription checkout"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:193
+#, elixir-autogen, elixir-format
+msgid "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment."
 msgstr ""

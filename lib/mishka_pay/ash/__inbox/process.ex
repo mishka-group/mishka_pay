@@ -7,7 +7,8 @@ if Code.ensure_loaded?(Ash) do
     @moduledoc """
     Works one inbox event: fires `mishka_pay:event:process` with it before the action's
     transaction starts, since the listeners may call the provider, and marks it processed when
-    every listener took it. Otherwise the action fails, so its AshOban job tries again.
+    every listener took it. Otherwise it keeps the reason in `:last_error` and the action fails, so
+    its AshOban job tries again.
     """
 
     use Ash.Resource.Change
@@ -33,14 +34,27 @@ if Code.ensure_loaded?(Ash) do
             )
 
           answer ->
+            message = "the event was not processed: #{reason(answer)}"
+            note(changeset.data, message)
+
             Ash.Changeset.add_error(
               changeset,
-              Ash.Error.Changes.InvalidChanges.exception(
-                message: "the event was not processed: #{reason(answer)}"
-              )
+              Ash.Error.Changes.InvalidChanges.exception(message: message)
             )
         end
       end)
+    end
+
+    # Outside the failing action, so the reason stays on the row while AshOban tries again; the row
+    # is still :pending, and the last try marks it :failed.
+    defp note(record, message) do
+      _noted =
+        Ash.update(record, %{last_error: String.slice(message, 0, 2_000)},
+          action: :note_error,
+          authorize?: false
+        )
+
+      :ok
     end
 
     defp event(record) do
@@ -52,6 +66,7 @@ if Code.ensure_loaded?(Ash) do
         object_id: record.object_id,
         object_type: record.object_type,
         payment_id: record.payment_id,
+        subscription_id: record.subscription_id,
         livemode: record.livemode,
         account: record.account,
         created_at: record.provider_created_at

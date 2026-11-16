@@ -15,6 +15,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:webhook:received` | the Ash inbox, or the host | a provider event whose signature was checked |
   | `mishka_pay:event:process` | the host, or a payment resource | works one event the Ash inbox stored |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
+  | `mishka_pay:subscription:changed` | the host | a subscription's state after it was synced, cancelled or resumed |
 
   """
 
@@ -57,4 +58,12 @@ defmodule MishkaPay.Events do
   """
   @spec payment_changed() :: String.t()
   def payment_changed, do: "mishka_pay:payment:changed"
+
+  @doc """
+  Fired after a subscription resource (`MishkaPay.Ash.Subscription`) synced, cancelled or resumed a
+  subscription, with `%{subscription: %MishkaPay.Subscription{}, record: record}`. A host listens
+  here to give or take access, or to push the change to the screens that show it.
+  """
+  @spec subscription_changed() :: String.t()
+  def subscription_changed, do: "mishka_pay:subscription:changed"
 end
