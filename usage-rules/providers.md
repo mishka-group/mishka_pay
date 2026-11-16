@@ -19,15 +19,30 @@ end
 - Capabilities and their callbacks (`MishkaPay.Provider.operations/1`); the module does not
   compile with one missing:
   - `:checkout`: `checkout/2`, `fetch_checkout/2`, `fetch_payment/2`;
+  - `:embedded_checkout`: no callback; `checkout/2` also takes `ui_mode: :embedded`;
+  - `:capture`: `capture_payment/3`, `cancel_payment/2`; `checkout/2` also takes `capture: :manual`;
   - `:expire`: `expire_checkout/2`;
   - `:payment_list`: `list_payments/2`;
   - `:refund`: `refund/2`;
+  - `:refund_read`: `fetch_refund/2`, `list_refunds/2`;
   - `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
     `list_invoices/2`, `fetch_invoice/2`;
   - `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
     `pause_collection/3`, `resume_collection/2`;
+  - `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
+    `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
+  - `:event_list`: `list_events/2`; optional `check_keys/1` (one read that changes nothing);
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
+  - `:tax_id`: `create_tax_id/2`, `list_tax_ids/2` (`:customer_id` in its options),
+    `delete_tax_id/3`;
+  - `:tax`: `calculate_tax/2`, `record_tax/3`;
+  - `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2`; the checkout sends its
+    `:shipping_countries` and `:shipping_rates`, and reads back `:shipping_address`,
+    `:shipping_rate_id` and `:amount_shipping`;
   - `:portal`: `portal_session/2`;
+  - `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
+    `detach_payment_method/2`, `set_default_payment_method/3`; a checkout in `mode: :setup` needs
+    it too;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
     `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,
     `update_promotion_code/2`;
@@ -35,6 +50,13 @@ end
     `update_payment_link/2`;
   - `:catalog`: `create_product/2`, `fetch_product/2`, `update_product/2`, `list_products/2`,
     `create_price/2`, `fetch_price/2`, `update_price/2`, `list_prices/2`;
+  - `:file`: `upload_file/2` (checks the provider's types and size first), `fetch_file/2`,
+    `file_link/3`; an upload is `MishkaPay.Client`'s `multipart` body;
+  - `:usage`: `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2`,
+    `usage_summary/3`;
+  - `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
+  - `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
+  - `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

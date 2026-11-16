@@ -30,7 +30,14 @@ defmodule MishkaPay.Messages do
           | :path_root
           | :params_plain
           | :one_body
+          | :multipart_parts
+          | :filename_plain
+          | :file_empty
+          | :stripe_file_type
+          | :stripe_file_size
+          | :file_content
           | :return_url
+          | :ui_mode_urls
           | :metadata_strings
           | :items_empty
           | :items_currency
@@ -56,6 +63,17 @@ defmodule MishkaPay.Messages do
           | :proration_date
           | :managed_payments_invoice
           | :tax_code_missing
+          | :tax_id_invalid
+          | :tax_not_set_up
+          | :tax_location_invalid
+          | :tax_lines_many
+          | :tax_lines_unique
+          | :tax_address
+          | :shipping_needs
+          | :shipping_days
+          | :managed_payments_shipping
+          | :shipping_countries
+          | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
           | :rejected_param
@@ -63,6 +81,9 @@ defmodule MishkaPay.Messages do
           | :pause_behavior
           | :link_items
           | :invoice_mode
+          | :setup_takes_no
+          | :setup_currency
+          | :currency_setup_only
           | :rejected_missing
           | :rejected_exists
           | :keys_answer
@@ -70,11 +91,26 @@ defmodule MishkaPay.Messages do
           | :paypal_id
           | :refund_currency
           | :refund_left
+          | :capture_over
+          | :capture_invoice
           | :refund_once
           | :refund_nothing_left
           | :refund_reference
           | :stripe_metadata
           | :stripe_three_decimal
+          | :stripe_whole
+          | :meter_interval
+          | :usage_value
+          | :usage_window
+          | :stripe_usage_time
+          | :due_sent_only
+          | :stripe_event_types
+          | :search_needs
+          | :fields_three
+          | :merchant_of_record_off
+          | :portal_feature_off
+          | :subscription_of_another
+          | :dropdown_options
           | :declined
           | :declined_reason
           | :missing_keys
@@ -154,16 +190,53 @@ defmodule MishkaPay.Messages do
     do: dgettext_noop("mishka_pay", "The params field must hold plain values only")
 
   defp msgid(:one_body),
-    do: dgettext_noop("mishka_pay", "Send form or json, not both")
+    do: dgettext_noop("mishka_pay", "Send one body: form, json or multipart")
+
+  defp msgid(:multipart_parts),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The multipart field must be a list of names with bytes, and a filename and content type for a file"
+      )
+
+  defp msgid(:filename_plain),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The filename field must be a plain name, with no folder or control character"
+      )
+
+  defp msgid(:file_empty),
+    do: dgettext_noop("mishka_pay", "The content field must hold the file's bytes")
+
+  defp msgid(:stripe_file_type),
+    do: dgettext_noop("mishka_pay", "Stripe takes this file only as %{types}")
+
+  defp msgid(:stripe_file_size),
+    do: dgettext_noop("mishka_pay", "The file is over Stripe's limit of %{megabytes} MB")
+
+  defp msgid(:file_content),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The file's bytes are not the %{content_type} its content_type field names"
+      )
 
   defp msgid(:return_url),
     do: dgettext_noop("mishka_pay", "The %{field} field must be an https address")
+
+  defp msgid(:ui_mode_urls),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A hosted checkout needs success_url and cancel_url; an embedded one needs return_url instead"
+      )
 
   defp msgid(:metadata_strings),
     do: dgettext_noop("mishka_pay", "The metadata field must map string keys to string values")
 
   defp msgid(:items_empty),
-    do: dgettext_noop("mishka_pay", "A checkout needs at least one item")
+    do: dgettext_noop("mishka_pay", "Give at least one item")
 
   defp msgid(:items_currency),
     do: dgettext_noop("mishka_pay", "All items must be in one currency")
@@ -219,11 +292,11 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "Making a customer at checkout works only in a one-time checkout"
+        "Making a customer at checkout works only in a one-time or a setup checkout"
       )
 
   defp msgid(:expires_past),
-    do: dgettext_noop("mishka_pay", "The checkout's expiry must be a time still to come")
+    do: dgettext_noop("mishka_pay", "The expiry must be a time still to come")
 
   defp msgid(:expires_range),
     do:
@@ -257,6 +330,71 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "A merchant of record sells only products with a tax category: give the product one, or turn merchant of record off"
+      )
+
+  defp msgid(:tax_id_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The tax id number does not have the form its kind needs: check the number and its country"
+      )
+
+  defp msgid(:tax_not_set_up),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The provider's tax service is not turned on for this account: set it up in the provider's dashboard first"
+      )
+
+  defp msgid(:tax_location_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The buyer's address is not enough to count the tax: give its country, and its postal code in the US"
+      )
+
+  defp msgid(:tax_lines_many),
+    do: dgettext_noop("mishka_pay", "A tax calculation takes at most 100 lines")
+
+  defp msgid(:tax_lines_unique),
+    do: dgettext_noop("mishka_pay", "Each line of a tax calculation needs its own reference")
+
+  defp msgid(:tax_address),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax calculation needs the buyer's address or a customer whose address the provider keeps"
+      )
+
+  defp msgid(:shipping_needs),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A shipping rate needs the provider's rate id, or a name and an amount"
+      )
+
+  defp msgid(:shipping_days),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The fewest days of a delivery estimate must not be more than the most days"
+      )
+
+  defp msgid(:shipping_countries),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The shipping countries must be a list of two-letter country codes, such as NL"
+      )
+
+  defp msgid(:stripe_shipping_five),
+    do: dgettext_noop("mishka_pay", "A Stripe checkout offers at most 5 shipping rates")
+
+  defp msgid(:managed_payments_shipping),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A merchant of record does not ship goods: turn merchant of record off to charge for shipping"
       )
 
   defp msgid(:one_time_only),
@@ -325,6 +463,27 @@ defmodule MishkaPay.Messages do
         "An invoice is asked for only in a one-time checkout: a subscription makes its own"
       )
 
+  defp msgid(:setup_takes_no),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} does not go with a setup checkout: it saves a payment method and charges nothing"
+      )
+
+  defp msgid(:setup_currency),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A setup checkout needs a currency: it decides which payment methods the page offers"
+      )
+
+  defp msgid(:currency_setup_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The currency field goes only with a setup checkout: a sale takes its currency from its items"
+      )
+
   defp msgid(:plain_id),
     do:
       dgettext_noop(
@@ -369,6 +528,16 @@ defmodule MishkaPay.Messages do
         "The amount field is more than is left to refund on the payment"
       )
 
+  defp msgid(:capture_invoice),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Holding the money to capture later does not go with an invoice made at payment, and a merchant of record always makes one: turn both off for this checkout"
+      )
+
+  defp msgid(:capture_over),
+    do: dgettext_noop("mishka_pay", "The amount field is more than the payment holds")
+
   defp msgid(:refund_once),
     do:
       dgettext_noop(
@@ -390,8 +559,75 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The metadata field is over Stripe's limits: 49 keys of 40 characters, values of 500"
+        "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
       )
+
+  defp msgid(:subscription_of_another),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "That subscription belongs to another customer: open the portal for the customer who has it"
+      )
+
+  defp msgid(:portal_feature_off),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The customer portal has this task turned off: turn it on in the portal's settings at the provider, or use another portal configuration"
+      )
+
+  defp msgid(:merchant_of_record_off),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{param} goes only with merchant of record off: set merchant_of_record to false for this checkout"
+      )
+
+  defp msgid(:fields_three),
+    do: dgettext_noop("mishka_pay", "A checkout asks at most three questions")
+
+  defp msgid(:dropdown_options),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A dropdown needs its options, each a value and a label; other fields take none"
+      )
+
+  defp msgid(:search_needs),
+    do: dgettext_noop("mishka_pay", "Search needs an email, a name or a reference")
+
+  defp msgid(:stripe_event_types),
+    do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
+
+  defp msgid(:meter_interval),
+    do: dgettext_noop("mishka_pay", "A price on a meter needs an interval to bill its usage")
+
+  defp msgid(:usage_value),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The value field must be an exact number: an integer, a Decimal or a string"
+      )
+
+  defp msgid(:usage_window),
+    do: dgettext_noop("mishka_pay", "The end of a usage window must come after its start")
+
+  defp msgid(:stripe_usage_time),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe takes usage from the last 35 days and up to 5 minutes ahead"
+      )
+
+  defp msgid(:due_sent_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Days to pay go only with a bill that is sent (collection: send_invoice)"
+      )
+
+  defp msgid(:stripe_whole),
+    do: dgettext_noop("mishka_pay", "Stripe takes %{currency} only in whole units")
 
   defp msgid(:stripe_three_decimal),
     do:

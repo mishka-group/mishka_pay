@@ -37,7 +37,8 @@ if Code.ensure_loaded?(Ash) do
         announce? = Info.mishka_pay_announce?(dsl)
 
         chosen =
-          for {name, _type, _opts} = action <- Kinds.actions(kind, announce?: announce?),
+          for {name, _type, _opts} = action <-
+                Kinds.actions(kind, announce?: announce?, user: Info.user_attribute(dsl)),
               name in actions,
               do: action
 
@@ -50,7 +51,7 @@ if Code.ensure_loaded?(Ash) do
         |> Builder.add_new_update_timestamp(:updated_at)
         |> identity(Kinds.identity(kind))
         |> each(Kinds.calculations(kind), fn dsl, {name, type, calculation} ->
-          Builder.add_new_calculation(dsl, name, type, calculation)
+          Builder.add_new_calculation(dsl, name, type, calculation, public?: true)
         end)
         |> user(Info.mishka_pay_belongs_to_user(dsl))
         |> read()
@@ -60,6 +61,8 @@ if Code.ensure_loaded?(Ash) do
         |> interfaces(Info.mishka_pay_code_interface?(dsl), actions)
         |> tenant_change(tenant_from)
         |> trigger(kind, module)
+        |> forget(kind, module, Info.mishka_pay_keep_events_for!(dsl))
+        |> resync(kind, module, Info.mishka_pay_resync_after(dsl))
         |> listener(Info.mishka_pay_listen?(dsl), kind, module)
       end
     end
@@ -238,6 +241,58 @@ if Code.ensure_loaded?(Ash) do
 
     defp trigger(result, _kind, _module), do: result
 
+    defp forget({:ok, dsl}, :inbox, module, days) when is_integer(days) do
+      case Enum.any?(Transformer.get_entities(dsl, [:oban, :triggers]), &(&1.name == :forget)) do
+        true ->
+          {:ok, dsl}
+
+        false ->
+          with {:ok, trigger} <-
+                 Transformer.build_entity(
+                   AshOban,
+                   [:oban, :triggers],
+                   :trigger,
+                   Kinds.forget_trigger(module, days)
+                 ),
+               do: {:ok, Transformer.add_entity(dsl, [:oban, :triggers], trigger, type: :append)}
+      end
+    end
+
+    defp forget(result, _kind, _module, _keep), do: result
+
+    defp resync({:ok, dsl}, kind, module, {:ok, hours}) do
+      with trigger when not is_nil(trigger) <- Kinds.resync_trigger(module, kind, hours),
+           true <- AshOban in Transformer.get_persisted(dsl, :spark_extensions, []),
+           false <-
+             Enum.any?(Transformer.get_entities(dsl, [:oban, :triggers]), &(&1.name == :resync)),
+           {:ok, entity} <-
+             Transformer.build_entity(AshOban, [:oban, :triggers], :trigger, trigger) do
+        {:ok, Transformer.add_entity(dsl, [:oban, :triggers], entity, type: :append)}
+      else
+        nil ->
+          error(
+            module,
+            [:mishka_pay, :resync_after],
+            "A #{inspect(kind)} row is never open at its provider: leave `resync_after` out."
+          )
+
+        false ->
+          error(
+            module,
+            [:mishka_pay, :resync_after],
+            "`resync_after` runs as an AshOban trigger: add AshOban to the resource's extensions."
+          )
+
+        true ->
+          {:ok, dsl}
+
+        error ->
+          error
+      end
+    end
+
+    defp resync(result, _kind, _module, _off), do: result
+
     # sobelow_skip ["DOS.ModuleConcat"]
     defp listener({:ok, dsl}, true, kind, module) do
       listener = Module.concat(module, MishkaPayListener)
@@ -254,7 +309,7 @@ if Code.ensure_loaded?(Ash) do
          quote do
            defmodule unquote(listener) do
              @moduledoc unquote(doc)
-             use unquote(using), resource: unquote(module)
+             use unquote(using), resource: unquote(module), kind: unquote(kind)
            end
          end
        )}

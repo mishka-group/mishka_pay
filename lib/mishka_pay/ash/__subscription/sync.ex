@@ -17,15 +17,11 @@ if Code.ensure_loaded?(Ash) do
 
     @impl true
     def change(changeset, opts, _context) do
-      changeset
-      |> Ash.Changeset.before_transaction(&fetch/1)
-      |> MishkaPay.Ash.announce(opts, &announce/2)
+      MishkaPay.Ash.provider_change(changeset, opts, &fetch/1, &announce/2)
     end
 
     defp fetch(changeset) do
-      provider = Ash.Changeset.get_argument(changeset, :provider)
-      subscription_id = Ash.Changeset.get_argument(changeset, :subscription_id)
-      tenant = MishkaPay.Ash.Tenant.of(changeset)
+      {provider, subscription_id, tenant} = MishkaPay.Ash.object_ref(changeset, :subscription_id)
 
       changeset
       |> Ash.Changeset.force_change_attribute(:tenant, tenant)
@@ -36,6 +32,7 @@ if Code.ensure_loaded?(Ash) do
     def write(changeset, {:ok, %Subscription{} = subscription}) do
       changeset
       |> Ash.Changeset.force_change_attributes(attributes(subscription))
+      |> MishkaPay.Ash.Owner.write(subscription.owner)
       |> Ash.Changeset.put_context(:mishka_pay_subscription, subscription)
     end
 
@@ -53,6 +50,8 @@ if Code.ensure_loaded?(Ash) do
         status: subscription.status,
         plan:
           subscription.items |> Enum.map(& &1.name) |> Enum.reject(&is_nil/1) |> Enum.join(", "),
+        price_ids: ids(subscription.items, :id),
+        product_ids: ids(subscription.items, :product_id),
         amount: total(subscription.items),
         currency: first.amount && to_string(first.amount.currency),
         interval: first.interval,
@@ -72,6 +71,9 @@ if Code.ensure_loaded?(Ash) do
         synced_at: DateTime.utc_now()
       }
     end
+
+    defp ids(items, field),
+      do: items |> Enum.map(&Map.get(&1, field)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     defp total([]), do: nil
 

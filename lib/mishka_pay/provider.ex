@@ -44,22 +44,43 @@ defmodule MishkaPay.Provider do
   them does not compile:
 
     * `:checkout`: `checkout/2`, `fetch_checkout/2` and `fetch_payment/2`;
+    * `:embedded_checkout`: nothing more; `checkout/2` also takes `ui_mode: :embedded`;
+    * `:capture`: `capture_payment/3`, `cancel_payment/2` (`checkout/2` also takes
+      `capture: :manual`);
     * `:expire`: `expire_checkout/2`;
     * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
+    * `:refund_read`: `fetch_refund/2`, `list_refunds/2`;
     * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
-      `list_invoices/2` and `fetch_invoice/2` (a subscription starts with a checkout in
+      `list_invoices/2`, `fetch_invoice/2` and `upcoming_invoice/2` (a subscription starts with a checkout in
       `mode: :subscription`);
     * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
       `pause_collection/3`, `resume_collection/2`;
-    * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
+    * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
+      `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
+    * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
+      `search_customers/2`;
+    * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
+    * `:tax`: `calculate_tax/2`, `record_tax/3`;
+    * `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2` (and a checkout's
+      `:shipping_countries` and `:shipping_rates`);
     * `:portal`: `portal_session/2`;
+    * `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
+      `detach_payment_method/2`, `set_default_payment_method/3` (a checkout in `mode: :setup`
+      saves one);
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
     * `:catalog`: products and prices (`create_product/2` and the rest);
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
       `update_payment_link/2`;
     * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
-    * `:webhook`: `verify_webhook/3`.
+    * `:file`: `upload_file/2`, `fetch_file/2`, `file_link/3`;
+    * `:usage`: `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2`,
+      `usage_summary/3`;
+    * `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
+    * `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
+    * `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
+    * `:webhook`: `verify_webhook/3`;
+    * `:event_list`: `list_events/2`.
 
   Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
   page before; and its own filters) and answers one `MishkaPay.Page`.
@@ -76,18 +97,32 @@ defmodule MishkaPay.Provider do
 
   @capabilities [
     :checkout,
+    :embedded_checkout,
+    :capture,
     :expire,
     :payment_list,
     :refund,
+    :refund_read,
     :subscription,
     :subscription_change,
+    :invoice,
     :customer,
+    :tax_id,
+    :tax,
+    :shipping,
     :portal,
+    :payment_method,
     :discount,
     :catalog,
     :payment_link,
     :dispute,
+    :file,
+    :usage,
+    :entitlement,
+    :balance,
+    :customer_balance,
     :webhook,
+    :event_list,
     :return_verify
   ]
 
@@ -95,36 +130,69 @@ defmodule MishkaPay.Provider do
   What a provider can do:
 
     * `:checkout`: sends the buyer to pay, or embeds a payment form.
+    * `:embedded_checkout`: shows its checkout form inside the site's own page
+      (`ui_mode: :embedded`).
+    * `:capture`: holds the money on a card at checkout (`capture: :manual`), then takes it, all
+      or part, or lets it go.
     * `:expire`: ends an open checkout before the buyer pays, so its stock is free again.
     * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
+    * `:refund_read`: reads a refund again, and lists refunds page by page.
     * `:subscription`: charges again on a schedule.
     * `:subscription_change`: changes a running subscription's plan or quantity with proration,
       previews what that bills, and pauses or resumes its collection.
+    * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:customer`: keeps buyers (create, read, update, list).
+    * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
+    * `:tax`: counts the tax on a sale made outside its checkout, and records the sale for the
+      site's tax reports.
+    * `:shipping`: keeps shipping rates, and its checkout asks for a shipping address and
+      charges the rate the buyer picks.
     * `:portal`: has a hosted page where a customer manages their own billing.
+    * `:payment_method`: keeps a customer's saved payment methods (read, list, take off, make
+      the default), and saves one with a checkout in `mode: :setup`.
     * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
+    * `:file`: keeps files, such as dispute evidence, and makes public links to them.
+    * `:usage`: counts what customers use on meters, for prices billed by usage.
+    * `:entitlement`: attaches features to products and tells which ones a customer may use.
+    * `:balance`: reads the seller's balance and the movements that made it.
+    * `:customer_balance`: keeps a customer's store credit, taken off their next bills.
     * `:webhook`: sends signed messages when something changes.
+    * `:event_list`: lists the messages it sent, to deliver again those a site missed.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
   """
   @type capability ::
           :checkout
+          | :embedded_checkout
+          | :capture
           | :expire
           | :refund
+          | :refund_read
           | :subscription
           | :subscription_change
+          | :invoice
           | :customer
+          | :tax_id
+          | :tax
+          | :shipping
           | :portal
+          | :payment_method
           | :discount
           | :catalog
           | :payment_link
           | :dispute
+          | :file
+          | :usage
+          | :entitlement
+          | :balance
+          | :customer_balance
           | :payment_list
           | :webhook
+          | :event_list
           | :return_verify
 
   @doc "The provider's id, such as `\"stripe\"`. Set by `use`."
@@ -165,6 +233,75 @@ defmodule MishkaPay.Provider do
   @doc "With `:refund`. Gives money back on a payment and answers the refund as the provider made it."
   @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:capture`. Takes the money held on an `:authorized` payment: all of it, or `:amount`
+  (a `Money` in the payment's currency) when given. The rest is let go. Answers the payment after.
+  """
+  @callback capture_payment(
+              payment_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) ::
+              {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:capture`. Lets the money held on an `:authorized` payment go; it ends `:canceled`."
+  @callback cancel_payment(payment_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:refund_read`. Reads one refund again, with its status."
+  @callback fetch_refund(refund_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:refund_read`. One page of refunds, newest first; `:payment_id` filters to one payment."
+  @callback list_refunds(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Makes a draft bill with its items, and answers it."
+  @callback create_invoice(MishkaPay.InvoiceDraft.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Opens a draft for payment: it gets its number and can be paid."
+  @callback finalize_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Emails an open bill to its customer."
+  @callback send_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Charges an open bill now, or marks it paid outside the provider (`out_of_band: true`)."
+  @callback pay_invoice(invoice_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Ends an open bill that should never have been sent."
+  @callback void_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Marks an open bill as one that will not be paid."
+  @callback mark_invoice_uncollectible(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice`. Deletes a draft bill."
+  @callback delete_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              :ok | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:event_list`. One page of the provider's events, newest first: `:since` (a `DateTime`)
+  and `:types` (a list of event types) filter them.
+  """
+  @callback list_events(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:customer`. One page of customers that match every filter given: `:email`, `:name`,
+  `:reference` (the host's own id kept on the customer).
+  """
+  @callback search_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription`. The bill a subscription will make next, as the provider counts it now."
+  @callback upcoming_invoice(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:subscription`. Reads one subscription again from the provider."
   @callback fetch_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -248,9 +385,71 @@ defmodule MishkaPay.Provider do
   @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:tax_id`. Adds a tax id to the customer it names (`:customer_id`), and answers it."
+  @callback create_tax_id(MishkaPay.TaxId.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxId.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. One page of the tax ids of customer `:customer_id`."
+  @callback list_tax_ids(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:tax`. Counts the tax on the calculation's lines and shipping for the buyer's address or
+  customer, and answers it with its `:id`, totals and the tax of each line.
+  """
+  @callback calculate_tax(MishkaPay.TaxCalculation.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxCalculation.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax`. Records the sale of a calculation under the caller's `reference`, for the tax reports."
+  @callback record_tax(
+              calculation_id :: String.t(),
+              reference :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.TaxTransaction.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:shipping`. Makes a shipping rate and answers it with its `:id`."
+  @callback create_shipping_rate(MishkaPay.ShippingRate.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ShippingRate.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:shipping`. One page of shipping rates, newest first; only `:active` ones when given."
+  @callback list_shipping_rates(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. Removes one tax id from a customer."
+  @callback delete_tax_id(
+              customer_id :: String.t(),
+              tax_id_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: :ok | {:error, Splode.Error.t()}
+
   @doc "With `:portal`. Opens the provider's billing page for a customer and answers its `:url`."
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PortalSession.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_method`. One page of a customer's saved payment methods (`:customer_id`)."
+  @callback list_payment_methods(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_method`. Reads one saved payment method again."
+  @callback fetch_payment_method(payment_method_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentMethod.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:payment_method`. Takes a payment method off its customer for good, and answers it
+  after, with no `:customer_id`.
+  """
+  @callback detach_payment_method(payment_method_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentMethod.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:payment_method`. Makes a saved payment method the one a customer's invoices and
+  subscriptions charge, and answers the customer after (`:default_payment_method`).
+  """
+  @callback set_default_payment_method(
+              customer_id :: String.t(),
+              payment_method_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:discount`. Makes a coupon and answers it with its `:id`."
   @callback create_coupon(MishkaPay.Coupon.t(), MishkaPay.Credentials.t()) ::
@@ -334,6 +533,18 @@ defmodule MishkaPay.Provider do
   @callback accept_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:file`. Uploads a file, after checking the provider takes its type and size."
+  @callback upload_file(MishkaPay.FileUpload.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:file`. Reads one file the provider keeps."
+  @callback fetch_file(file_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:file`. Makes a public link to a file; `:expires_at` ends it."
+  @callback file_link(file_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:payment_link`. Makes a payment link and answers it with its `:id` and `:url`."
   @callback create_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
@@ -354,6 +565,65 @@ defmodule MishkaPay.Provider do
   @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:usage`. Makes a meter that counts usage reported under its event name."
+  @callback create_meter(MishkaPay.Meter.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. One page of meters; only those of `:status` (`:active`, `:inactive`) when given."
+  @callback list_meters(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. Turns a meter off: it takes no more usage and no new price."
+  @callback deactivate_meter(meter_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. Reports one use by a customer, once for each reference."
+  @callback report_usage(MishkaPay.Usage.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Usage.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:usage`. What a meter counted for `:customer_id` from `:from` to `:to` (both
+  `DateTime`, `:to` after `:from`).
+  """
+  @callback usage_summary(meter_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:entitlement`. Makes a feature a product can give."
+  @callback create_feature(MishkaPay.Feature.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:entitlement`. Attaches a feature to a catalog product, and answers the feature."
+  @callback attach_feature(
+              product_id :: String.t(),
+              feature_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:entitlement`. One page of the features `:customer_id` may use now."
+  @callback list_entitlements(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:balance`. The seller's balance, available and pending, in each currency."
+  @callback fetch_balance(MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Balance.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:balance`. One page of the balance's movements, newest first; only those a `:payout_id`
+  paid out, or of `:type`, when given.
+  """
+  @callback list_balance_transactions(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:customer_balance`. Changes a customer's balance: below zero gives credit."
+  @callback adjust_customer_balance(
+              MishkaPay.CustomerBalanceTransaction.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:customer_balance`. One page of the changes to `:customer_id`'s balance, newest first."
+  @callback list_customer_balance(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
   the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
@@ -366,12 +636,33 @@ defmodule MishkaPay.Provider do
             ) ::
               {:ok, MishkaPay.Event.t()} | {:error, Splode.Error.t()}
 
+  @doc """
+  Optional. Whether the provider takes `keys`, with one read call that changes nothing
+  (`MishkaPay.Check`).
+  """
+  @callback check_keys(MishkaPay.Credentials.t()) :: :ok | {:error, Splode.Error.t()}
+
   @optional_callbacks offered?: 0,
+                      check_keys: 1,
                       checkout: 2,
                       fetch_checkout: 2,
                       fetch_payment: 2,
                       expire_checkout: 2,
                       refund: 2,
+                      fetch_refund: 2,
+                      capture_payment: 3,
+                      cancel_payment: 2,
+                      search_customers: 2,
+                      upcoming_invoice: 2,
+                      list_events: 2,
+                      create_invoice: 2,
+                      finalize_invoice: 2,
+                      send_invoice: 2,
+                      pay_invoice: 3,
+                      void_invoice: 2,
+                      mark_invoice_uncollectible: 2,
+                      delete_invoice: 2,
+                      list_refunds: 2,
                       fetch_subscription: 2,
                       cancel_subscription: 3,
                       resume_subscription: 2,
@@ -385,7 +676,18 @@ defmodule MishkaPay.Provider do
                       fetch_customer: 2,
                       update_customer: 2,
                       list_customers: 2,
+                      create_tax_id: 2,
+                      list_tax_ids: 2,
+                      delete_tax_id: 3,
+                      calculate_tax: 2,
+                      record_tax: 3,
+                      create_shipping_rate: 2,
+                      list_shipping_rates: 2,
                       portal_session: 2,
+                      list_payment_methods: 2,
+                      fetch_payment_method: 2,
+                      detach_payment_method: 2,
+                      set_default_payment_method: 3,
                       create_coupon: 2,
                       fetch_coupon: 2,
                       list_coupons: 2,
@@ -407,10 +709,25 @@ defmodule MishkaPay.Provider do
                       list_disputes: 2,
                       update_dispute: 2,
                       accept_dispute: 2,
+                      upload_file: 2,
+                      fetch_file: 2,
+                      file_link: 3,
                       create_payment_link: 2,
                       fetch_payment_link: 2,
                       list_payment_links: 2,
                       update_payment_link: 2,
+                      create_meter: 2,
+                      list_meters: 2,
+                      deactivate_meter: 2,
+                      report_usage: 2,
+                      usage_summary: 3,
+                      create_feature: 2,
+                      attach_feature: 3,
+                      list_entitlements: 2,
+                      fetch_balance: 1,
+                      list_balance_transactions: 2,
+                      adjust_customer_balance: 2,
+                      list_customer_balance: 2,
                       verify_webhook: 3
 
   @operations %{
@@ -418,12 +735,15 @@ defmodule MishkaPay.Provider do
     expire: [expire_checkout: 2],
     payment_list: [list_payments: 2],
     refund: [refund: 2],
+    capture: [capture_payment: 3, cancel_payment: 2],
+    refund_read: [fetch_refund: 2, list_refunds: 2],
     subscription: [
       fetch_subscription: 2,
       cancel_subscription: 3,
       resume_subscription: 2,
       list_invoices: 2,
-      fetch_invoice: 2
+      fetch_invoice: 2,
+      upcoming_invoice: 2
     ],
     subscription_change: [
       change_subscription: 2,
@@ -431,8 +751,32 @@ defmodule MishkaPay.Provider do
       pause_collection: 3,
       resume_collection: 2
     ],
-    customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
+    invoice: [
+      create_invoice: 2,
+      finalize_invoice: 2,
+      send_invoice: 2,
+      pay_invoice: 3,
+      void_invoice: 2,
+      mark_invoice_uncollectible: 2,
+      delete_invoice: 2
+    ],
+    customer: [
+      create_customer: 2,
+      fetch_customer: 2,
+      update_customer: 2,
+      list_customers: 2,
+      search_customers: 2
+    ],
+    tax_id: [create_tax_id: 2, list_tax_ids: 2, delete_tax_id: 3],
+    tax: [calculate_tax: 2, record_tax: 3],
+    shipping: [create_shipping_rate: 2, list_shipping_rates: 2],
     portal: [portal_session: 2],
+    payment_method: [
+      list_payment_methods: 2,
+      fetch_payment_method: 2,
+      detach_payment_method: 2,
+      set_default_payment_method: 3
+    ],
     discount: [
       create_coupon: 2,
       fetch_coupon: 2,
@@ -453,13 +797,25 @@ defmodule MishkaPay.Provider do
       update_price: 2,
       list_prices: 2
     ],
+    event_list: [list_events: 2],
     dispute: [fetch_dispute: 2, list_disputes: 2, update_dispute: 2, accept_dispute: 2],
+    file: [upload_file: 2, fetch_file: 2, file_link: 3],
     payment_link: [
       create_payment_link: 2,
       fetch_payment_link: 2,
       list_payment_links: 2,
       update_payment_link: 2
     ],
+    usage: [
+      create_meter: 2,
+      list_meters: 2,
+      deactivate_meter: 2,
+      report_usage: 2,
+      usage_summary: 3
+    ],
+    entitlement: [create_feature: 2, attach_feature: 3, list_entitlements: 2],
+    balance: [fetch_balance: 1, list_balance_transactions: 2],
+    customer_balance: [adjust_customer_balance: 2, list_customer_balance: 2],
     webhook: [verify_webhook: 3]
   }
 
@@ -563,6 +919,20 @@ defmodule MishkaPay.Provider do
   @doc "The installed providers this installation offers: every one, unless its `offered?/0` says not."
   @spec offered() :: [module()]
   def offered, do: offered_of(all())
+
+  @doc """
+  The name a person reads for provider `id`: its `label/0` when it is installed (`"Stripe"`,
+  `"PayPal"`), else the id with a capital.
+  """
+  @spec label_of(String.t() | nil) :: String.t()
+  def label_of(id) when is_binary(id) do
+    case fetch(id) do
+      {:ok, provider} -> provider.label()
+      {:error, _unknown} -> String.capitalize(id)
+    end
+  end
+
+  def label_of(_none), do: "The provider"
 
   @doc "The offered provider whose id is `id`."
   @spec fetch(String.t()) :: {:ok, module()} | {:error, Splode.Error.t()}

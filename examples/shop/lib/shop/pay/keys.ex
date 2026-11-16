@@ -8,6 +8,9 @@ defmodule Shop.Pay.Keys do
   webhooks `PAYPAL_WEBHOOK_ID`. The merchant-of-record setting is Stripe's, so PayPal gets only the
   refund rule.
 
+  Stripe's publishable key, `STRIPE_PUBLISHABLE_KEY` (`pk_test_...`), is what the page gives
+  Stripe.js to show an embedded checkout; it is meant for the browser, the secret key never is.
+
   The webhook secret is `STRIPE_WEBHOOK_SECRET` (the one `stripe listen` prints), or a local one the
   page's webhook simulator signs with when it is not set.
   """
@@ -30,7 +33,11 @@ defmodule Shop.Pay.Keys do
 
   def credentials("stripe", tenant) do
     with key when is_binary(key) <- System.get_env("STRIPE_SECRET_KEY") do
-      %{secret_key: key, webhook_secret: webhook_secret()}
+      %{
+        secret_key: key,
+        publishable_key: System.get_env("STRIPE_PUBLISHABLE_KEY"),
+        webhook_secret: webhook_secret()
+      }
       |> Map.merge(settings(tenant))
       |> Map.reject(fn {_name, value} -> is_nil(value) end)
     end

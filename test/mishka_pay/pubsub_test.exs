@@ -39,7 +39,7 @@ defmodule MishkaPay.PubSubTest do
   end
 
   test "every kind has its plugin, and a change without a tenant goes to the kind's topic only" do
-    assert length(Broadcast.plugins()) == 4
+    assert length(Broadcast.plugins()) == length(MishkaPay.PubSub.kinds())
 
     for kind <- MishkaPay.PubSub.kinds() do
       Phoenix.PubSub.subscribe(MishkaPay.Support.PubSub, MishkaPay.PubSub.topic(kind))

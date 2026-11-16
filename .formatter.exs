@@ -9,8 +9,10 @@ spark_locals_without_parens = [
   announce?: 1,
   belongs_to_user: 1,
   code_interface?: 1,
+  keep_events_for: 1,
   kind: 1,
   listen?: 1,
+  resync_after: 1,
   tenant_from: 1
 ]
 

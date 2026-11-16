@@ -5,6 +5,12 @@ the core starts mishka_installer's registry before any extension, and Mishka Pay
 starts its providers itself (listed in its `plugins/0`, as every CMS package does), so an
 extension that uses it lists only its own plugins: its keys plugin, listeners and broadcast.
 
+An extension with Mishka Pay resources lists, in its application's `plugins/0` and children,
+`MishkaPay.Ash.listeners(MyExtension.Pay)` (each resource's `<Resource>.MishkaPayListener`), and
+adds `mishka_pay_inbox` to Oban's queues; AshOban refuses to start without that queue. In its
+tests, `MishkaPay.Test.setup!()` and `MishkaPay.Test.await_plugin!(MishkaPay.Providers.Stripe)`
+in `test_helper.exs` give the keys table and wait for Stripe to register.
+
 1. **Keys per site.** The keys plugin answers each site's own keys and settings (refunds once or
    many, merchant of record, Stripe Tax) from its database, at runtime. Changing a site's keys
    needs no restart.

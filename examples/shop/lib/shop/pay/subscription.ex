@@ -8,6 +8,7 @@ defmodule Shop.Pay.Subscription do
 
   mishka_pay do
     kind :subscription
+    belongs_to_user Shop.Accounts.Member
   end
 
   postgres do

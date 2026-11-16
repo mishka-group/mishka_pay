@@ -9,6 +9,8 @@ defmodule MishkaPay.Ash.InboxTest do
   import Plug.Conn
   import Plug.Test
 
+  require Ecto.Query
+
   alias MishkaPay.{Event, Webhook}
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.Support.{EventWorker, WebhookEvent}
@@ -90,6 +92,44 @@ defmodule MishkaPay.Ash.InboxTest do
 
     assert [%{status: :pending, last_error: "the event was not processed: the store is down"}] =
              stored()
+  end
+
+  test "a processed event older than the days it is kept is forgotten daily; a failed one stays" do
+    MishkaPay.Test.start_plugin!(EventWorker)
+    test_pid = self()
+
+    :telemetry.attach_many(
+      "inbox-test",
+      [[:mishka_pay, :inbox, :process, :stop], [:mishka_pay, :inbox, :failed]],
+      fn name, measurements, meta, _config -> send(test_pid, {name, measurements, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("inbox-test") end)
+
+    for {id, type} <- [{"evt_old", "x.y"}, {"evt_new", "x.y"}, {"evt_bad", "work.fails"}],
+        do: deliver(%{"id" => id, "type" => type})
+
+    work()
+
+    assert_received {[:mishka_pay, :inbox, :process, :stop], %{lag: lag},
+                     %{outcome: :processed, tenant: "site-a", provider: "stripe"}}
+
+    assert is_integer(lag) and lag >= 0
+    assert_received {[:mishka_pay, :inbox, :process, :stop], _, %{outcome: :retry}}
+    assert_received {[:mishka_pay, :inbox, :failed], %{count: 1}, %{event_id: "evt_bad"}}
+
+    old = DateTime.add(DateTime.utc_now(), -31, :day)
+
+    MishkaPay.Support.Repo.update_all(
+      Ecto.Query.from(e in "pay_webhook_events", where: e.event_id in ["evt_old", "evt_bad"]),
+      set: [processed_at: old]
+    )
+
+    assert %{failure: 0, discard: 0} =
+             AshOban.Test.schedule_and_run_triggers({WebhookEvent, :forget})
+
+    assert stored() |> Enum.map(& &1.event_id) |> Enum.sort() == ["evt_bad", "evt_new"]
   end
 
   test "with no host listener the event is still worked and marked processed" do

@@ -23,6 +23,8 @@ defmodule MishkaPay.Price do
     * `:interval`, `:interval_count`: a price charged again on a schedule, for a subscription:
       every `:interval_count` (1 by default) `:day`, `:week`, `:month` or `:year`. Left out, the
       price is paid once.
+    * `:meter_id`: a `MishkaPay.Meter` the price bills by usage: each `:interval`, the customer
+      pays `:amount` for each unit the meter counted. It needs an `:interval`.
 
   In the catalog (`MishkaPay.create_price/1`, `MishkaPay.list_prices/3`) a price also has:
 
@@ -41,7 +43,7 @@ defmodule MishkaPay.Price do
 
   use GuardedStruct
 
-  guardedstruct authorized_fields: true, main_validator: {__MODULE__, :named_or_known} do
+  guardedstruct authorized_fields: true, main_validator: {__MODULE__, :checked} do
     field :provider, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
     field :tenant, term()
     field :id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
@@ -56,6 +58,7 @@ defmodule MishkaPay.Price do
       validator: {__MODULE__, :interval}
 
     field :interval_count, pos_integer(), derives: "validate(integer, min_len=1)"
+    field :meter_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
 
     field :tax_behavior, :inclusive | :exclusive,
       derives: "validate(enum=Atom[inclusive::exclusive])",
@@ -87,16 +90,31 @@ defmodule MishkaPay.Price do
   def tax_behavior(field, value),
     do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inclusive exclusive))
 
+  # A price on a meter bills each period's usage, so it needs the period.
   @doc false
-  def named_or_known(%{id: id} = attrs) when is_binary(id), do: {:ok, attrs}
+  # It sees only the fields the caller gave.
+  def checked(%{meter_id: meter} = attrs) when is_binary(meter) do
+    case Map.get(attrs, :interval) do
+      nil ->
+        {:error,
+         %{field: :interval, action: :price, message: MishkaPay.Messages.text(:meter_interval)}}
 
-  def named_or_known(%{name: name, amount: %Money{}} = attrs) when is_binary(name),
+      _interval ->
+        named_or_known(attrs)
+    end
+  end
+
+  def checked(attrs), do: named_or_known(attrs)
+
+  defp named_or_known(%{id: id} = attrs) when is_binary(id), do: {:ok, attrs}
+
+  defp named_or_known(%{name: name, amount: %Money{}} = attrs) when is_binary(name),
     do: {:ok, attrs}
 
-  def named_or_known(%{product_id: product, amount: %Money{}} = attrs) when is_binary(product),
+  defp named_or_known(%{product_id: product, amount: %Money{}} = attrs) when is_binary(product),
     do: {:ok, attrs}
 
-  def named_or_known(_attrs) do
+  defp named_or_known(_attrs) do
     {:error,
      %{
        field: :amount,

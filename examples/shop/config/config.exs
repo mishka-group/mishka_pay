@@ -23,7 +23,7 @@ end
 
 config :shop,
   ecto_repos: [Shop.Repo],
-  ash_domains: [Shop.Pay],
+  ash_domains: [Shop.Pay, Shop.Accounts],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
 # The inbox works each Stripe webhook as an AshOban job on this queue.

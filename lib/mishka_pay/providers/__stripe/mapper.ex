@@ -9,6 +9,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   """
 
   alias MishkaPay.{
+    Address,
     Checkout,
     Coupon,
     Customer,
@@ -17,16 +18,57 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Money,
     Payment,
     PaymentLink,
+    PaymentMethod,
     Price,
     Product,
     PromotionCode,
     Refund,
-    Subscription
+    ShippingRate,
+    Subscription,
+    TaxCalculation,
+    TaxId,
+    TaxLine,
+    TaxTransaction
   }
 
   @reference "mishka_pay_reference"
+  @owner "mishka_pay_owner"
+
+  # Where Stripe counts a currency in other places than ISO 4217: ISK and UGX as two-decimal
+  # amounts ending in 00, MGA as zero-decimal (docs.stripe.com/currencies).
+  @digits %{ISK: 2, UGX: 2, MGA: 0}
+
+  @doc """
+  The decimal places Stripe counts `currency` in when they differ from ISO 4217 (ISK and UGX: 2,
+  MGA: 0), or `nil` for the ISO ones.
+  """
+  @spec digits(atom()) :: non_neg_integer() | nil
+  def digits(currency), do: Map.get(@digits, currency)
+
+  @doc "Stripe's integer `amount` for `money`, in the places Stripe counts its currency in."
+  @spec minor(Elixir.Money.t()) :: integer()
+  def minor(%{currency: currency} = money) do
+    case digits(currency) do
+      nil -> Money.to_minor(money)
+      digits -> Money.to_minor(money, digits)
+    end
+  end
+
+  # Money from Stripe's integer amount, read in the places Stripe counts the currency in. Stripe
+  # names currencies in lower case.
+  defp from_stripe(minor, currency) when is_integer(minor) and is_binary(currency) do
+    case Enum.find(@digits, fn {code, _digits} ->
+           Atom.to_string(code) == String.upcase(currency)
+         end) do
+      nil -> Money.from_minor(minor, currency)
+      {_code, digits} -> Money.from_minor(minor, currency, digits)
+    end
+  end
+
+  defp from_stripe(minor, currency), do: Money.from_minor(minor, currency)
 
   @checkout_statuses %{"open" => :open, "complete" => :complete, "expired" => :expired}
+  @ui_modes %{"hosted_page" => :hosted, "embedded_page" => :embedded}
 
   @refund_reasons %{
     "requested_by_customer" => :requested_by_customer,
@@ -43,27 +85,57 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   }
 
   @doc """
-  Params of `POST /v1/checkout/sessions`: a one-time payment, or a subscription with its trial.
-  The reference goes on the payment or the subscription too, so it comes back on either.
+  Params of `POST /v1/checkout/sessions`: a one-time payment, a subscription with its trial, or
+  a setup that saves a payment method. The reference and the owner go on the payment, the
+  subscription or the setup too, so they come back on each.
   """
   @spec checkout_params(Checkout.t(), map()) :: map()
   def checkout_params(%Checkout{} = checkout, settings \\ %{}) do
-    reference = %{@reference => checkout.reference}
+    reference =
+      Map.reject(%{@reference => checkout.reference, @owner => checkout.owner}, fn {_key, value} ->
+        is_nil(value)
+      end)
 
     %{
       "mode" => Atom.to_string(checkout.mode),
-      "line_items" => Enum.map(checkout.items, &line_item/1),
-      "success_url" => checkout.success_url,
-      "cancel_url" => checkout.cancel_url,
       "client_reference_id" => checkout.reference,
       "metadata" => Map.merge(checkout.metadata || %{}, reference)
     }
+    |> Map.merge(ui_params(checkout))
     |> Map.merge(mode_data(checkout, reference))
     |> Map.merge(buyer_params(checkout.customer))
-    |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(options(checkout))
+    |> Map.merge(shipping(checkout))
+    |> Map.merge(sale_params(checkout, settings))
+  end
+
+  # A setup sells nothing: no items or tax, only the currency that picks the payment methods
+  # offered. Managed Payments takes no setup mode, so it is off even on an account where it is on
+  # by default. Without a known customer Stripe makes one, so the card is kept.
+  defp sale_params(%Checkout{mode: :setup} = checkout, _settings) do
+    %{"currency" => checkout.currency |> Atom.to_string() |> String.downcase()}
+    |> Map.merge(managed_payments(false))
+    |> Map.merge(setup_customer(checkout))
+  end
+
+  defp sale_params(checkout, settings) do
+    %{"line_items" => Enum.map(checkout.items, &line_item/1)}
+    |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(automatic_tax(checkout, settings))
   end
+
+  defp setup_customer(%Checkout{customer: %{id: id}}) when is_binary(id), do: %{}
+
+  defp setup_customer(%Checkout{customer_creation: nil}),
+    do: %{"customer_creation" => "always"}
+
+  defp setup_customer(_chosen), do: %{}
+  # A hosted page sends the buyer back to one of two pages; an embedded form to its return page.
+  defp ui_params(%Checkout{ui_mode: :embedded} = checkout),
+    do: %{"ui_mode" => "embedded_page", "return_url" => checkout.return_url}
+
+  defp ui_params(checkout),
+    do: %{"success_url" => checkout.success_url, "cancel_url" => checkout.cancel_url}
 
   # The checkout's own choice, else the tenant's default, else the Stripe account's (not sent).
   defp automatic_tax(%{automatic_tax: choice}, _settings) when is_boolean(choice),
@@ -85,10 +157,87 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "billing_address_collection" =>
         checkout.billing_address && to_string(checkout.billing_address),
       "tax_id_collection" => enabled(checkout.tax_id_collection),
-      "invoice_creation" => enabled(checkout.invoice)
+      "invoice_creation" => enabled(checkout.invoice),
+      "consent_collection" => checkout.terms && %{"terms_of_service" => "required"},
+      "phone_number_collection" => enabled(checkout.phone),
+      "custom_fields" => custom_fields(checkout.fields),
+      "submit_type" => checkout.submit_type && Atom.to_string(checkout.submit_type),
+      "payment_method_collection" => (checkout.card_required == false && "if_required") || nil
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
+
+  # Where the checkout ships, and the rates the buyer picks from; each only when it is set.
+  defp shipping(%Checkout{} = checkout) do
+    reject_nil(%{
+      "shipping_address_collection" =>
+        checkout.shipping_countries && %{"allowed_countries" => checkout.shipping_countries},
+      "shipping_options" =>
+        checkout.shipping_rates && Enum.map(checkout.shipping_rates, &shipping_option/1)
+    })
+  end
+
+  # A rate Stripe keeps, by its id, or a new one made with the session.
+  defp shipping_option(%ShippingRate{id: id}) when is_binary(id), do: %{"shipping_rate" => id}
+  defp shipping_option(rate), do: %{"shipping_rate_data" => shipping_rate_params(rate)}
+
+  @doc """
+  Params of `POST /v1/shipping_rates` (and of a checkout's `shipping_rate_data`): a fixed amount
+  for the order, with its delivery estimate in business days.
+  """
+  @spec shipping_rate_params(ShippingRate.t()) :: map()
+  def shipping_rate_params(%ShippingRate{} = rate) do
+    reject_nil(%{
+      "display_name" => rate.name,
+      "type" => "fixed_amount",
+      "fixed_amount" => %{
+        "amount" => minor(rate.amount),
+        "currency" => lower_currency(rate.amount)
+      },
+      "delivery_estimate" => delivery_estimate(rate),
+      "tax_code" => rate.tax_code,
+      "tax_behavior" => rate.tax_behavior && Atom.to_string(rate.tax_behavior),
+      "metadata" => rate.metadata
+    })
+  end
+
+  defp delivery_estimate(%{min_days: nil, max_days: nil}), do: nil
+
+  defp delivery_estimate(rate) do
+    reject_nil(%{
+      "minimum" => rate.min_days && %{"unit" => "business_day", "value" => rate.min_days},
+      "maximum" => rate.max_days && %{"unit" => "business_day", "value" => rate.max_days}
+    })
+  end
+
+  @doc "A Stripe shipping rate as a `MishkaPay.ShippingRate`."
+  @spec shipping_rate(map()) :: {:ok, ShippingRate.t()} | {:error, Splode.Error.t()}
+  def shipping_rate(rate) do
+    fixed = rate["fixed_amount"] || %{}
+    estimate = rate["delivery_estimate"] || %{}
+
+    %{
+      provider: "stripe",
+      id: rate["id"],
+      name: rate["display_name"],
+      amount: money(fixed["amount"], fixed["currency"]),
+      min_days: days(estimate["minimum"]),
+      max_days: days(estimate["maximum"]),
+      tax_code: id_of(rate["tax_code"]),
+      tax_behavior: tax_behavior(rate["tax_behavior"]),
+      active: rate["active"],
+      metadata: rate["metadata"],
+      created_at: time(rate["created"])
+    }
+    |> ShippingRate.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # An estimate in days or business days; Stripe's hours, weeks and months have no such field.
+  defp days(%{"unit" => unit, "value" => value}) when unit in ["business_day", "day"],
+    do: value
+
+  defp days(_other), do: nil
 
   defp discounts(nil), do: nil
   defp discounts([]), do: nil
@@ -100,19 +249,84 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
-  defp mode_data(%Checkout{mode: :subscription, trial_days: days}, reference),
+  defp mode_data(%Checkout{mode: :subscription, trial_days: days} = checkout, reference),
     do: %{
-      "subscription_data" => %{"metadata" => reference, "trial_period_days" => days}
+      "subscription_data" =>
+        reject_nil(%{
+          "metadata" => reference,
+          "trial_period_days" => days,
+          "description" => checkout.description
+        })
     }
 
-  defp mode_data(_payment, reference), do: %{"payment_intent_data" => %{"metadata" => reference}}
+  defp mode_data(%Checkout{mode: :setup} = checkout, reference),
+    do: %{
+      "setup_intent_data" =>
+        reject_nil(%{"metadata" => reference, "description" => checkout.description})
+    }
 
-  # The checkout's own choice, else the tenant's setting, else nil: the Stripe account's default.
-  defp merchant_of_record(%{merchant_of_record: choice}, _settings)
-       when is_boolean(choice),
-       do: choice
+  defp mode_data(checkout, reference),
+    do: %{
+      "payment_intent_data" =>
+        reject_nil(%{
+          "metadata" => reference,
+          "description" => checkout.description,
+          "statement_descriptor_suffix" => checkout.statement_suffix,
+          "capture_method" => checkout.capture && Atom.to_string(checkout.capture)
+        })
+    }
 
-  defp merchant_of_record(_checkout, settings), do: Map.get(settings, :merchant_of_record)
+  defp reject_nil(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
+
+  defp custom_fields(nil), do: nil
+  defp custom_fields([]), do: nil
+
+  defp custom_fields(fields) do
+    for field <- fields do
+      reject_nil(%{
+        "key" => field.key,
+        "label" => %{"type" => "custom", "custom" => field.label},
+        "type" => Atom.to_string(field.type),
+        "optional" => field.optional,
+        "dropdown" =>
+          (field.type == :dropdown &&
+             %{
+               "options" =>
+                 Enum.map(
+                   field.options,
+                   &%{"value" => opt(&1, :value), "label" => opt(&1, :label)}
+                 )
+             }) ||
+            nil
+      })
+    end
+  end
+
+  defp opt(option, name), do: Map.get(option, name) || Map.get(option, Atom.to_string(name))
+
+  # The buyer's answers: each field's key to its value, whatever its type.
+  defp field_values(fields) when is_list(fields) do
+    Map.new(fields, fn field ->
+      value =
+        get_in(field, ["text", "value"]) || get_in(field, ["numeric", "value"]) ||
+          get_in(field, ["dropdown", "value"])
+
+      {field["key"], value}
+    end)
+  end
+
+  defp field_values(_none), do: nil
+
+  @doc """
+  Whether a checkout sells with Stripe as the merchant of record: its own choice, else the
+  tenant's setting, else `nil`, the Stripe account's default.
+  """
+  @spec merchant_of_record(Checkout.t() | PaymentLink.t(), map()) :: boolean() | nil
+  def merchant_of_record(%{merchant_of_record: choice}, _settings)
+      when is_boolean(choice),
+      do: choice
+
+  def merchant_of_record(_checkout, settings), do: Map.get(settings, :merchant_of_record)
 
   # Stripe Managed Payments is Stripe selling as the merchant of record; nil leaves the account's
   # own default.
@@ -129,7 +343,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "price_data" =>
         %{
           "currency" => amount.currency |> to_string() |> String.downcase(),
-          "unit_amount" => Money.to_minor(amount),
+          "unit_amount" => minor(amount),
           "product_data" => %{"name" => name, "tax_code" => tax_code},
           "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
         }
@@ -148,15 +362,37 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp buyer_params(%{email: email}) when is_binary(email), do: %{"customer_email" => email}
   defp buyer_params(_none), do: %{}
 
+  @doc "The `flow_data` of a portal session: the one task it opens on, then back to the site."
+  @spec portal_flow(MishkaPay.PortalSession.t()) :: map() | nil
+  def portal_flow(%{flow: nil}), do: nil
+
+  def portal_flow(%{flow: flow} = session) do
+    type = Atom.to_string(flow)
+
+    %{
+      "type" => type,
+      "after_completion" => %{
+        "type" => "redirect",
+        "redirect" => %{"return_url" => session.return_url}
+      }
+    }
+    |> Map.merge(flow_target(flow, session.subscription_id))
+  end
+
+  defp flow_target(:payment_method_update, _subscription_id), do: %{}
+
+  defp flow_target(flow, subscription_id),
+    do: %{Atom.to_string(flow) => %{"subscription" => subscription_id}}
+
   @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
   @spec checkout(map()) :: Checkout.t()
   def checkout(session) do
     read_back =
       struct(Checkout,
         provider: "stripe",
-        items: [],
+        items: sold(session["line_items"]),
         reference: session["client_reference_id"],
-        customer: buyer(get_in(session, ["customer_details", "email"]))
+        customer: buyer(session)
       )
 
     checkout(session, read_back)
@@ -169,8 +405,13 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       checkout
       | id: session["id"],
         url: session["url"],
+        ui_mode: Map.get(@ui_modes, session["ui_mode"], checkout.ui_mode),
+        client_secret: session["client_secret"],
+        return_url: session["return_url"] || checkout.return_url,
         status: Map.get(@checkout_statuses, session["status"]),
         payment_id: id_of(session["payment_intent"]),
+        setup_intent_id: id_of(session["setup_intent"]),
+        payment_method_id: id_of(expanded(session["setup_intent"])["payment_method"]),
         subscription_id: id_of(session["subscription"]),
         amount_total: money(session["amount_total"], session["currency"]),
         amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"]),
@@ -178,15 +419,40 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           money(get_in(session, ["total_details", "amount_discount"]), session["currency"]),
         expires_at: time(session["expires_at"]),
         invoice_id: id_of(session["invoice"]),
-        payment_link_id: id_of(session["payment_link"])
+        payment_link_id: id_of(session["payment_link"]),
+        phone_number: get_in(session, ["customer_details", "phone"]),
+        field_values: field_values(session["custom_fields"]),
+        terms_accepted:
+          (is_map(session["consent"]) && session["consent"]["terms_of_service"] == "accepted") ||
+            nil,
+        shipping_address: shipping_address(session),
+        amount_shipping:
+          money(get_in(session, ["total_details", "amount_shipping"]), session["currency"]),
+        shipping_rate_id: id_of(get_in(session, ["shipping_cost", "shipping_rate"]))
     }
   end
 
-  defp buyer(email) when is_binary(email), do: struct(MishkaPay.Customer, email: email)
-  defp buyer(_none), do: nil
+  # The buyer as Stripe has them after the checkout: the customer it sold to or made, and the
+  # email they typed.
+  defp buyer(session) do
+    case {id_of(session["customer"]), get_in(session, ["customer_details", "email"])} do
+      {nil, nil} -> nil
+      {id, email} -> struct(MishkaPay.Customer, id: id, email: email)
+    end
+  end
+
+  # Where the buyer asked it shipped, with the recipient's name.
+  defp shipping_address(session) do
+    details = get_in(session, ["collected_information", "shipping_details"]) || %{}
+
+    case address(details["address"]) do
+      nil -> nil
+      address -> struct(Address, Map.put(address, :name, blank(details["name"])))
+    end
+  end
 
   defp money(minor, currency) when is_integer(minor) and is_binary(currency) do
-    case Money.from_minor(minor, currency) do
+    case from_stripe(minor, currency) do
       {:ok, money} -> money
       {:error, _odd} -> nil
     end
@@ -195,7 +461,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp money(_minor, _currency), do: nil
 
   defp signed_money(minor, currency) when is_integer(minor) and is_binary(currency) do
-    case Money.signed_from_minor(minor, currency) do
+    case from_stripe(abs(minor), currency) do
+      {:ok, money} when minor < 0 -> Elixir.Money.negate!(money)
       {:ok, money} -> money
       {:error, _odd} -> nil
     end
@@ -210,18 +477,21 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec payment(map()) :: {:ok, Payment.t()} | {:error, Splode.Error.t()}
   def payment(intent) do
     charge = expanded(intent["latest_charge"])
+    captured = captured(intent)
 
-    with {:ok, amount} <- Money.from_minor(intent["amount"], intent["currency"]),
-         {:ok, refunded} <- Money.from_minor(charge["amount_refunded"] || 0, intent["currency"]) do
+    with {:ok, amount} <- from_stripe(intent["amount"], intent["currency"]),
+         {:ok, refunded} <- from_stripe(charge["amount_refunded"] || 0, intent["currency"]) do
       %{
         provider: "stripe",
         id: intent["id"],
         amount: amount,
         amount_refunded: refunded,
-        status: payment_status(intent, refunded, amount),
+        amount_captured: captured,
+        status: payment_status(intent, refunded, captured || amount),
         reference: get_in(intent, ["metadata", @reference]),
+        owner: get_in(intent, ["metadata", @owner]),
         description: intent["description"],
-        metadata: Map.delete(intent["metadata"] || %{}, @reference),
+        metadata: Map.drop(intent["metadata"] || %{}, [@reference, @owner]),
         refunds: refunds(charge, intent["id"]),
         disputed: charge["disputed"] == true,
         created_at: time(intent["created"])
@@ -292,7 +562,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
       resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),
       reference: get_in(sub, ["metadata", @reference]),
-      metadata: Map.delete(sub["metadata"] || %{}, @reference),
+      owner: get_in(sub, ["metadata", @owner]),
+      metadata: Map.drop(sub["metadata"] || %{}, [@reference, @owner]),
       created_at: time(sub["created"])
     }
     |> Subscription.builder()
@@ -309,6 +580,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           %{
             id: price["id"],
             item_id: item["id"],
+            product_id: id_of(price["product"]),
             name: expanded(price["product"])["name"] || price["nickname"],
             amount: amount,
             quantity: item["quantity"] || 1,
@@ -376,6 +648,145 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  @tax_id_checks %{
+    "pending" => :pending,
+    "verified" => :verified,
+    "unverified" => :unverified,
+    "unavailable" => :unavailable
+  }
+
+  @doc "Params of `POST /v1/customers/:id/tax_ids`: its kind and its number."
+  @spec tax_id_params(TaxId.t()) :: map()
+  def tax_id_params(%TaxId{} = tax_id), do: %{"type" => tax_id.type, "value" => tax_id.value}
+
+  @doc "A Stripe tax id (`object: \"tax_id\"`) as a `MishkaPay.TaxId`, with its register check."
+  @spec tax_id(map()) :: {:ok, TaxId.t()} | {:error, Splode.Error.t()}
+  def tax_id(tax_id) do
+    check = tax_id["verification"] || %{}
+
+    %{
+      provider: "stripe",
+      id: tax_id["id"],
+      customer_id: id_of(tax_id["customer"]),
+      type: tax_id["type"],
+      value: tax_id["value"],
+      country: tax_id["country"],
+      verification: Map.get(@tax_id_checks, check["status"]),
+      verified_name: blank(check["verified_name"]),
+      verified_address: blank(check["verified_address"]),
+      created_at: time(tax_id["created"])
+    }
+    |> TaxId.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/tax/calculations`: the lines (each its whole amount), the buyer's address
+  or customer, the shipping cost, and the lines asked back with their tax.
+  """
+  @spec tax_calculation_params(TaxCalculation.t()) :: map()
+  def tax_calculation_params(%TaxCalculation{items: [first | _]} = calculation) do
+    reject_nil(%{
+      "currency" => lower_currency(first.amount),
+      "line_items" => Enum.map(calculation.items, &tax_line_params/1),
+      "customer" => calculation.customer_id,
+      "customer_details" =>
+        calculation.address &&
+          %{
+            "address" => address_params(calculation.address),
+            "address_source" => Atom.to_string(calculation.address_source)
+          },
+      "shipping_cost" => calculation.shipping && %{"amount" => minor(calculation.shipping)},
+      "expand" => ["line_items"]
+    })
+  end
+
+  defp tax_line_params(%TaxLine{} = line) do
+    reject_nil(%{
+      "reference" => line.reference,
+      "amount" => minor(line.amount),
+      "quantity" => line.quantity,
+      "tax_code" => line.tax_code,
+      "tax_behavior" => line.tax_behavior && Atom.to_string(line.tax_behavior),
+      "product" => line.product_id
+    })
+  end
+
+  defp address_params(%Address{} = address) do
+    address
+    |> Map.take([:country, :postal_code, :line1, :line2, :city, :state])
+    |> Map.new(fn {field, value} -> {Atom.to_string(field), value} end)
+    |> reject_nil()
+  end
+
+  @doc "A Stripe Tax Calculation (`tax.calculation`) as a `MishkaPay.TaxCalculation`."
+  @spec tax_calculation(map()) :: {:ok, TaxCalculation.t()} | {:error, Splode.Error.t()}
+  def tax_calculation(calculation) do
+    currency = calculation["currency"]
+    details = calculation["customer_details"] || %{}
+
+    %{
+      provider: "stripe",
+      id: calculation["id"],
+      items:
+        calculation
+        |> get_in(["line_items", "data"])
+        |> List.wrap()
+        |> Enum.map(&tax_line(&1, currency)),
+      customer_id: id_of(calculation["customer"]),
+      address: address(details["address"]),
+      address_source: details["address_source"],
+      shipping: money(get_in(calculation, ["shipping_cost", "amount"]), currency),
+      amount_total: money(calculation["amount_total"], currency),
+      tax_amount_exclusive: money(calculation["tax_amount_exclusive"], currency),
+      tax_amount_inclusive: money(calculation["tax_amount_inclusive"], currency),
+      expires_at: time(calculation["expires_at"])
+    }
+    |> reject_nil()
+    |> TaxCalculation.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp tax_line(line, currency) do
+    reject_nil(%{
+      id: line["id"],
+      reference: line["reference"],
+      amount: money(line["amount"], currency),
+      quantity: line["quantity"],
+      tax_code: id_of(line["tax_code"]),
+      tax_behavior: tax_behavior(line["tax_behavior"]),
+      product_id: id_of(line["product"]),
+      amount_tax: money(line["amount_tax"], currency)
+    })
+  end
+
+  # A Stripe address, its empty fields left out; none without a country.
+  defp address(%{"country" => country} = address) when is_binary(country) do
+    address
+    |> Map.take(~w(country postal_code line1 line2 city state))
+    |> Map.new(fn {field, value} -> {String.to_existing_atom(field), blank(value)} end)
+    |> reject_nil()
+  end
+
+  defp address(_none), do: nil
+
+  @doc "A Stripe Tax Transaction as a `MishkaPay.TaxTransaction`, made from `calculation_id`."
+  @spec tax_transaction(map(), String.t()) ::
+          {:ok, TaxTransaction.t()} | {:error, Splode.Error.t()}
+  def tax_transaction(transaction, calculation_id) do
+    %{
+      provider: "stripe",
+      id: transaction["id"],
+      reference: transaction["reference"],
+      calculation_id: calculation_id,
+      customer_id: id_of(transaction["customer"]),
+      posted_at: time(transaction["posted_at"]),
+      created_at: time(transaction["created"])
+    }
+    |> TaxTransaction.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   @doc "An Invoice as a `MishkaPay.Invoice`."
   @spec invoice(map()) :: {:ok, Invoice.t()} | {:error, Splode.Error.t()}
   def invoice(invoice) do
@@ -398,11 +809,81 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       period_end: time(invoice["period_end"]),
       hosted_url: invoice["hosted_invoice_url"],
       pdf_url: invoice["invoice_pdf"],
-      payment_id: id_of(invoice["payment_intent"]),
+      payment_id: id_of(invoice["payment_intent"]) || paid_by(invoice),
+      number: invoice["number"],
+      collection: known(invoice["collection_method"], ~w(charge_automatically send_invoice)),
+      due_at: time(invoice["due_date"]),
+      description: invoice["description"],
+      reference: get_in(invoice, ["metadata", @reference]),
       created_at: time(invoice["created"])
     }
     |> Invoice.builder()
     |> MishkaPay.Errors.from_builder()
+  end
+
+  # In this API version an invoice names what paid it in its payments list.
+  defp paid_by(%{"payments" => %{"data" => [_ | _] = payments}}) do
+    Enum.find_value(payments, &id_of(get_in(&1, ["payment", "payment_intent"])))
+  end
+
+  defp paid_by(_invoice), do: nil
+
+  @doc """
+  Params of `POST /v1/invoices` for a draft: its customer, how it is collected, and the reference
+  in its metadata. Its items are added after, each on its own (`invoice_item_params/3`).
+  """
+  @spec invoice_params(MishkaPay.InvoiceDraft.t()) :: map()
+  def invoice_params(draft) do
+    %{
+      "customer" => draft.customer_id,
+      "collection_method" => Atom.to_string(draft.collection),
+      "days_until_due" =>
+        (draft.collection == :send_invoice && (draft.days_until_due || 30)) || nil,
+      "description" => draft.description,
+      "footer" => draft.footer,
+      "auto_advance" => false,
+      "pending_invoice_items_behavior" => "exclude",
+      "currency" => draft_currency(draft.items),
+      "metadata" =>
+        Map.merge(
+          draft.metadata || %{},
+          (draft.reference && %{@reference => draft.reference}) || %{}
+        )
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp draft_currency(items) do
+    Enum.find_value(items, fn
+      %Price{amount: %{currency: currency}} -> currency |> to_string() |> String.downcase()
+      _catalog -> nil
+    end)
+  end
+
+  @doc "Params of `POST /v1/invoiceitems` for one item of a draft, on `invoice_id`."
+  @spec invoice_item_params(Price.t(), String.t(), String.t()) :: map()
+  def invoice_item_params(%Price{id: id, quantity: quantity}, invoice_id, customer_id)
+      when is_binary(id) do
+    %{
+      "invoice" => invoice_id,
+      "customer" => customer_id,
+      "pricing" => %{"price" => id},
+      "quantity" => quantity
+    }
+  end
+
+  def invoice_item_params(%Price{} = price, invoice_id, customer_id) do
+    %{
+      "invoice" => invoice_id,
+      "customer" => customer_id,
+      "description" => price.name,
+      "currency" => price.amount.currency |> to_string() |> String.downcase(),
+      "unit_amount_decimal" => price.amount |> minor() |> Integer.to_string(),
+      "quantity" => price.quantity,
+      "tax_code" => price.tax_code,
+      "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   # Stripe sums an invoice's taxes in `total_taxes`.
@@ -502,6 +983,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   defp payment_status(%{"status" => "requires_action"}, _refunded, _amount), do: :requires_action
+  defp payment_status(%{"status" => "requires_capture"}, _refunded, _amount), do: :authorized
   defp payment_status(%{"status" => "canceled"}, _refunded, _amount), do: :canceled
 
   defp payment_status(
@@ -513,21 +995,58 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp payment_status(_waiting, _refunded, _amount), do: :pending
 
+  # What Stripe took on a paid PaymentIntent; less than its amount after a capture in part.
+  defp captured(%{"status" => "succeeded", "amount_received" => received} = intent)
+       when is_integer(received) and received > 0,
+       do: money(received, intent["currency"])
+
+  defp captured(_not_paid), do: nil
+
+  @doc """
+  Params of `POST /v1/payment_intents/:id/capture`: the part to take, or none for all that is
+  held.
+  """
+  @spec capture_params(Elixir.Money.t() | nil) :: map()
+  def capture_params(nil), do: %{}
+  def capture_params(amount), do: %{"amount_to_capture" => minor(amount)}
+
   @doc "Params of `POST /v1/refunds`: the payment, and the amount when it is not the whole."
   @spec refund_params(Refund.t()) :: map()
   def refund_params(%Refund{} = refund) do
     %{
       "payment_intent" => refund.payment_id,
-      "amount" => refund.amount && Money.to_minor(refund.amount),
+      "amount" => refund.amount && minor(refund.amount),
       "reason" => refund.reason && Atom.to_string(refund.reason),
       "metadata" => refund.reference && %{@reference => refund.reference}
     }
   end
 
+  @doc """
+  A Stripe refund read on its own, as a `MishkaPay.Refund`; its payment is the PaymentIntent, or
+  the charge for a refund of a payment made without one.
+  """
+  @spec refund(map()) :: {:ok, Refund.t()} | {:error, Splode.Error.t()}
+  def refund(refund) do
+    with {:ok, amount} <- from_stripe(refund["amount"], refund["currency"]) do
+      %{
+        provider: "stripe",
+        payment_id: id_of(refund["payment_intent"]) || id_of(refund["charge"]),
+        id: refund["id"],
+        amount: amount,
+        status: Map.get(@refund_statuses, refund["status"]),
+        reason: Map.get(@refund_reasons, refund["reason"]),
+        reference: get_in(refund, ["metadata", @reference]),
+        created_at: time(refund["created"])
+      }
+      |> Refund.builder()
+      |> MishkaPay.Errors.from_builder()
+    end
+  end
+
   @doc "The refund with Stripe's answer: its id, status, amount and time."
   @spec refund(map(), Refund.t()) :: {:ok, Refund.t()} | {:error, Splode.Error.t()}
   def refund(answer, %Refund{} = refund) do
-    with {:ok, amount} <- Money.from_minor(answer["amount"], answer["currency"]) do
+    with {:ok, amount} <- from_stripe(answer["amount"], answer["currency"]) do
       {:ok,
        %{
          refund
@@ -539,7 +1058,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     end
   end
 
-  @doc "A Stripe event (`object: \"event\"`) as a `MishkaPay.Event`, with what it is about."
+  @doc """
+  A Stripe event (`object: "event"`) as a `MishkaPay.Event`, with what it is about. A saved
+  payment method's or a setup's event is about the customer it names (a detached payment method
+  names it in `previous_attributes`), since that customer is what changes.
+  """
   @spec event(map()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
   def event(event) do
     object = object_of(event)
@@ -553,6 +1076,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       payment_id: payment_of(object),
       subscription_id: subscription_of(object),
       dispute_id: dispute_of(object),
+      customer_id: customer_of(event, object),
       livemode: event["livemode"],
       account: event["account"],
       created_at: time(event["created"])
@@ -584,7 +1108,41 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp dispute_of(%{"object" => "dispute", "id" => id}) when is_binary(id), do: id
   defp dispute_of(_other), do: nil
 
+  # The customer itself, or the one a tax id belongs to. A payment or a subscription names its
+  # customer too, but the event is about them, not about the customer.
+  # The customer an event changes: the customer itself, or the one a tax id, a saved payment
+  # method, a setup or an entitlement summary belongs to. A detached payment method has lost its
+  # customer, and names it in the event's previous attributes.
+  defp customer_of(_event, %{"object" => "customer", "id" => id}) when is_binary(id), do: id
+
+  defp customer_of(event, %{"object" => type} = object)
+       when type in ~w(tax_id payment_method setup_intent entitlements.active_entitlement_summary) do
+    id_of(object["customer"]) || id_of(get_in(event, ["data", "previous_attributes", "customer"]))
+  end
+
+  defp customer_of(_event, _other), do: nil
+
   @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)
+
+  @doc "A Stripe PaymentMethod as a `MishkaPay.PaymentMethod`, with its card when it is one."
+  @spec payment_method(map()) :: {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+  def payment_method(method) do
+    card = method["card"] || %{}
+
+    %{
+      provider: "stripe",
+      id: method["id"],
+      customer_id: id_of(method["customer"]),
+      type: method["type"],
+      card_brand: card["brand"],
+      card_last4: card["last4"],
+      card_exp_month: card["exp_month"],
+      card_exp_year: card["exp_year"],
+      created_at: time(method["created"])
+    }
+    |> PaymentMethod.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
 
   @doc "A Stripe dispute as a `MishkaPay.Dispute`."
   @spec dispute(map()) :: {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
@@ -610,6 +1168,65 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  # The dispute evidence fields that take the id of an uploaded file, not text.
+  @evidence_files ~w(cancellation_policy customer_communication customer_signature duplicate_charge_documentation receipt refund_policy service_documentation shipping_documentation uncategorized_file)
+
+  @doc "The dispute evidence fields that take a file id (`file_...`) instead of text."
+  @spec evidence_files() :: [String.t()]
+  def evidence_files, do: @evidence_files
+
+  @doc """
+  Params of `POST /v1/files`, as multipart parts: the purpose, and the file with its name and
+  content type.
+  """
+  @spec file_params(MishkaPay.FileUpload.t()) :: [{String.t(), term()}]
+  def file_params(%MishkaPay.FileUpload{} = upload) do
+    [
+      {"purpose", Atom.to_string(upload.purpose)},
+      {"file", {upload.content, filename: upload.filename, content_type: upload.content_type}}
+    ]
+  end
+
+  @doc "A Stripe file as a `MishkaPay.File`."
+  @spec file(map()) :: {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+  def file(file) do
+    %{
+      provider: "stripe",
+      id: file["id"],
+      purpose: known(file["purpose"], ~w(dispute_evidence)) || :other,
+      filename: file["filename"],
+      size: file["size"],
+      type: file["type"],
+      url: file["url"],
+      expires_at: time(file["expires_at"]),
+      created_at: time(file["created"])
+    }
+    |> MishkaPay.File.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "Params of `POST /v1/file_links`: the file, and when the link ends."
+  @spec file_link_params(String.t(), keyword()) :: map()
+  def file_link_params(file_id, opts) do
+    %{"file" => file_id, "expires_at" => opts[:expires_at] && DateTime.to_unix(opts[:expires_at])}
+  end
+
+  @doc "A Stripe file link as a `MishkaPay.FileLink`."
+  @spec file_link(map()) :: {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+  def file_link(link) do
+    %{
+      provider: "stripe",
+      id: link["id"],
+      file_id: id_of(link["file"]),
+      url: link["url"],
+      expires_at: time(link["expires_at"]),
+      expired: link["expired"] == true,
+      created_at: time(link["created"])
+    }
+    |> MishkaPay.FileLink.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   defp object_of(%{"data" => %{"object" => %{} = object}}), do: object
   defp object_of(_no_object), do: %{}
 
@@ -627,7 +1244,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "id" => coupon.id,
       "name" => coupon.name,
       "percent_off" => coupon.percent_off && Decimal.to_string(coupon.percent_off, :normal),
-      "amount_off" => coupon.amount_off && Money.to_minor(coupon.amount_off),
+      "amount_off" => coupon.amount_off && minor(coupon.amount_off),
       "currency" => coupon.amount_off && lower_currency(coupon.amount_off),
       "duration" => Atom.to_string(coupon.duration),
       "duration_in_months" => coupon.duration_in_months,
@@ -681,7 +1298,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp restrictions(%PromotionCode{first_time_transaction: first, minimum_amount: minimum}) do
     %{
       "first_time_transaction" => first,
-      "minimum_amount" => minimum && Money.to_minor(minimum),
+      "minimum_amount" => minimum && minor(minimum),
       "minimum_amount_currency" => minimum && lower_currency(minimum)
     }
   end
@@ -753,14 +1370,24 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     %{
       "product" => price.product_id,
       "currency" => lower_currency(price.amount),
-      "unit_amount" => Money.to_minor(price.amount),
+      "unit_amount" => minor(price.amount),
       "nickname" => price.name,
       "lookup_key" => price.lookup_key,
       "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior),
       "metadata" => price.metadata
     }
     |> Map.merge(recurring(price))
+    |> metered(price.meter_id)
   end
+
+  # A price on a meter bills each period's usage the meter counted, not a quantity.
+  defp metered(params, nil), do: params
+
+  defp metered(%{"recurring" => recurring} = params, meter_id),
+    do: %{
+      params
+      | "recurring" => Map.merge(recurring, %{"usage_type" => "metered", "meter" => meter_id})
+    }
 
   @doc """
   A Stripe price as a catalog `MishkaPay.Price`: named after its product when the product is
@@ -778,6 +1405,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       active: price["active"],
       interval: interval(get_in(price, ["recurring", "interval"])),
       interval_count: get_in(price, ["recurring", "interval_count"]),
+      meter_id: get_in(price, ["recurring", "meter"]),
       tax_behavior: tax_behavior(price["tax_behavior"]),
       tax_code: id_of(expanded(price["product"])["tax_code"]),
       metadata: price["metadata"],
@@ -881,6 +1509,40 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  @doc """
+  What a checkout sold, from its line items (asked for with `expand[]=line_items`): each a
+  `MishkaPay.Price` with its price and product ids, name, unit amount and quantity.
+  """
+  @spec sold(map() | nil) :: [Price.t()]
+  def sold(%{"data" => items}) do
+    for %{"price" => %{} = price} = item <- items,
+        {:ok, sold} <- [sold_item(item, price)],
+        do: sold
+  end
+
+  def sold(_not_expanded), do: []
+
+  defp sold_item(item, price) do
+    %{
+      id: price["id"],
+      product_id: id_of(price["product"]),
+      name: item["description"],
+      amount: money(price["unit_amount"], price["currency"]),
+      quantity: item["quantity"] || 1,
+      interval: interval(get_in(price, ["recurring", "interval"])),
+      interval_count: get_in(price, ["recurring", "interval_count"])
+    }
+    |> Price.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "The payment with the checkout that took it and what it sold, from Stripe's list of sessions."
+  @spec with_checkout(Payment.t(), map() | nil) :: Payment.t()
+  def with_checkout(%Payment{} = payment, %{} = session),
+    do: %{payment | checkout_id: session["id"], items: sold(session["line_items"])}
+
+  def with_checkout(%Payment{} = payment, nil), do: payment
+
   # Stripe lists a link's line items only when asked (`expand[]=line_items`).
   defp link_items(%{"data" => items}) do
     for %{"price" => price} = item <- items do
@@ -900,6 +1562,224 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   defp link_quantity(_not_expanded, _bound), do: nil
+
+  @doc """
+  Params of `POST /v1/billing/meters`: its name (the event name when it has none), the event name
+  and how usage adds up. A report names its customer and value under Stripe's default payload
+  keys, `stripe_customer_id` and `value`.
+  """
+  @spec meter_params(MishkaPay.Meter.t()) :: map()
+  def meter_params(meter) do
+    %{
+      "display_name" => meter.name || meter.event_name,
+      "event_name" => meter.event_name,
+      "default_aggregation" => %{"formula" => Atom.to_string(meter.aggregation)}
+    }
+  end
+
+  @doc "A Stripe billing meter as a `MishkaPay.Meter`."
+  @spec meter(map()) :: {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+  def meter(meter) do
+    %{
+      provider: "stripe",
+      id: meter["id"],
+      name: meter["display_name"],
+      event_name: meter["event_name"],
+      aggregation: known(get_in(meter, ["default_aggregation", "formula"]), ~w(sum count last)),
+      status: known(meter["status"], ~w(active inactive)),
+      created_at: time(meter["created"])
+    }
+    |> reject_nil()
+    |> MishkaPay.Meter.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/billing/meter_events`: the customer and the value in its payload, when it
+  happened, and `identifier`, Stripe's id of the report, which never counts twice.
+  """
+  @spec usage_params(MishkaPay.Usage.t(), String.t() | nil) :: map()
+  def usage_params(usage, identifier) do
+    reject_nil(%{
+      "event_name" => usage.event_name,
+      "payload" => %{
+        "stripe_customer_id" => usage.customer_id,
+        "value" => usage_value(usage.value)
+      },
+      "identifier" => identifier,
+      "timestamp" => usage.at && DateTime.to_unix(usage.at)
+    })
+  end
+
+  defp usage_value(%Decimal{} = value), do: Decimal.to_string(value, :normal)
+  defp usage_value(value), do: Integer.to_string(value)
+
+  @doc "The usage with Stripe's answer: its `identifier` as the report's id."
+  @spec usage(map(), MishkaPay.Usage.t()) :: MishkaPay.Usage.t()
+  def usage(answer, usage), do: %{usage | id: answer["identifier"]}
+
+  @doc """
+  Params of `GET /v1/billing/meters/:id/event_summaries` for one customer: Stripe counts from and
+  to whole minutes, so the window widens to them, `to` rounded up.
+  """
+  @spec usage_summary_params(String.t(), DateTime.t(), DateTime.t()) :: [{String.t(), String.t()}]
+  def usage_summary_params(customer_id, from, to) do
+    [
+      {"customer", customer_id},
+      {"start_time", from |> minute(0) |> Integer.to_string()},
+      {"end_time", to |> minute(59) |> Integer.to_string()}
+    ]
+  end
+
+  # Unix seconds at the minute `time` falls in, or the next one when `up` is 59.
+  defp minute(time, up), do: div(DateTime.to_unix(time) + up, 60) * 60
+
+  @doc """
+  Stripe's summaries of a window as one `MishkaPay.UsageSummary`. Asked for without grouping,
+  Stripe answers one summary for the whole window, or none when nothing was reported.
+  """
+  @spec usage_summary(map(), String.t(), String.t(), [{String.t(), String.t()}]) ::
+          {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+  def usage_summary(%{"data" => data}, meter_id, customer_id, params) do
+    summary = List.first(data) || %{}
+    window = Map.new(params)
+
+    %{
+      provider: "stripe",
+      meter_id: meter_id,
+      customer_id: customer_id,
+      value: summary["aggregated_value"] || 0,
+      from: time(summary["start_time"] || String.to_integer(window["start_time"])),
+      to: time(summary["end_time"] || String.to_integer(window["end_time"]))
+    }
+    |> MishkaPay.UsageSummary.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "Params of `POST /v1/entitlements/features`."
+  @spec feature_params(MishkaPay.Feature.t()) :: map()
+  def feature_params(feature) do
+    %{
+      "name" => feature.name,
+      "lookup_key" => feature.lookup_key,
+      "metadata" => feature.metadata
+    }
+  end
+
+  @doc "A Stripe feature as a `MishkaPay.Feature`; a product feature answers the feature it attached."
+  @spec feature(map()) :: {:ok, MishkaPay.Feature.t()} | {:error, Splode.Error.t()}
+  def feature(%{"object" => "product_feature", "entitlement_feature" => feature}),
+    do: feature(feature)
+
+  def feature(feature) do
+    %{
+      provider: "stripe",
+      id: feature["id"],
+      name: feature["name"],
+      lookup_key: feature["lookup_key"],
+      active: feature["active"],
+      metadata: feature["metadata"]
+    }
+    |> reject_nil()
+    |> MishkaPay.Feature.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "A Stripe active entitlement as a `MishkaPay.Entitlement`."
+  @spec entitlement(map()) :: {:ok, MishkaPay.Entitlement.t()} | {:error, Splode.Error.t()}
+  def entitlement(entitlement) do
+    %{
+      provider: "stripe",
+      id: entitlement["id"],
+      feature_id: id_of(entitlement["feature"]),
+      lookup_key: entitlement["lookup_key"]
+    }
+    |> MishkaPay.Entitlement.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  The Stripe balance as a `MishkaPay.Balance`: its payments balance, available and pending, one
+  money per currency, each below zero when Stripe's is.
+  """
+  @spec balance(map()) :: {:ok, MishkaPay.Balance.t()} | {:error, Splode.Error.t()}
+  def balance(balance) do
+    %{
+      provider: "stripe",
+      available: funds(balance["available"]),
+      pending: funds(balance["pending"])
+    }
+    |> MishkaPay.Balance.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp funds(funds) when is_list(funds) do
+    for fund <- funds,
+        money = signed_money(fund["amount"], fund["currency"]),
+        not is_nil(money),
+        do: money
+  end
+
+  defp funds(_none), do: []
+
+  @doc "A Stripe balance transaction as a `MishkaPay.BalanceTransaction`."
+  @spec balance_transaction(map()) ::
+          {:ok, MishkaPay.BalanceTransaction.t()} | {:error, Splode.Error.t()}
+  def balance_transaction(txn) do
+    currency = txn["currency"]
+
+    %{
+      provider: "stripe",
+      id: txn["id"],
+      amount: signed_money(txn["amount"], currency),
+      fee: signed_money(txn["fee"], currency),
+      net: signed_money(txn["net"], currency),
+      type: txn["type"],
+      source_id: id_of(txn["source"]),
+      status: known(txn["status"], ~w(available pending)),
+      description: txn["description"],
+      available_at: time(txn["available_on"]),
+      created_at: time(txn["created"])
+    }
+    |> MishkaPay.BalanceTransaction.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/customers/:id/balance_transactions`: the signed amount in Stripe's places
+  (below zero is credit), why, and the reference in its metadata.
+  """
+  @spec customer_balance_params(MishkaPay.CustomerBalanceTransaction.t()) :: map()
+  def customer_balance_params(txn) do
+    reject_nil(%{
+      "amount" => minor(txn.amount),
+      "currency" => lower_currency(txn.amount),
+      "description" => txn.description,
+      "metadata" => txn.reference && %{@reference => txn.reference}
+    })
+  end
+
+  @doc "A Stripe customer balance transaction as a `MishkaPay.CustomerBalanceTransaction`."
+  @spec customer_balance_transaction(map()) ::
+          {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+  def customer_balance_transaction(txn) do
+    currency = txn["currency"]
+
+    %{
+      provider: "stripe",
+      id: txn["id"],
+      customer_id: id_of(txn["customer"]),
+      amount: signed_money(txn["amount"], currency),
+      ending_balance: signed_money(txn["ending_balance"], currency),
+      type: txn["type"],
+      description: txn["description"],
+      invoice_id: id_of(txn["invoice"]),
+      reference: get_in(txn, ["metadata", @reference]),
+      created_at: time(txn["created"])
+    }
+    |> MishkaPay.CustomerBalanceTransaction.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
 
   defp positive(number) when is_integer(number) and number > 0, do: number
   defp positive(_none), do: nil

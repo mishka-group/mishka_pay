@@ -9,9 +9,14 @@ defmodule MishkaPay.Payment do
 
     * `:id`: the provider's id (`pi_...` at Stripe).
     * `:amount`: what was asked, a `Money`; `:amount_refunded`: what went back so far.
+    * `:amount_captured`: what the provider took, once paid; less than `:amount` when a held
+      payment was captured in part (`MishkaPay.capture_payment/4`).
     * `:status`: `:pending` (not paid yet), `:requires_action` (the buyer must do something, such
-      as 3-D Secure), `:paid`, `:partially_refunded`, `:refunded`, `:failed` or `:canceled`.
-    * `:reference`: the caller's own id given at checkout.
+      as 3-D Secure), `:authorized` (the money is held on the card and waits for
+      `MishkaPay.capture_payment/4` or `MishkaPay.cancel_payment/3`), `:paid`,
+      `:partially_refunded`, `:refunded`, `:failed` or `:canceled`.
+    * `:reference`: the caller's own id given at checkout; `:owner`: who the sale is for, as the
+      checkout named them (`MishkaPay.Checkout`).
     * `:customer_id`, `:customer_email`, `:customer_name`: the buyer, as far as the provider knows
       them.
     * `:description`: the provider's description of the payment; `:metadata`: the extra pairs
@@ -22,20 +27,27 @@ defmodule MishkaPay.Payment do
     * `:failure_code`, `:failure_message`: why the last try failed, such as `"insufficient_funds"`.
     * `:disputed`: the buyer's bank has asked for it back (`MishkaPay.Dispute`).
     * `:refunds`: every `MishkaPay.Refund` made on it, newest first.
+    * `:checkout_id`, `:items`: the checkout that took it and what it sold, each a
+      `MishkaPay.Price` with its provider `:id`, `:product_id`, `:name`, unit `:amount` and
+      `:quantity`; what a shop delivers. Read by `MishkaPay.fetch_payment/3`; a payment made
+      outside a checkout (a subscription's renewal, a bill) has none, and `list_payments/3` leaves
+      them out.
     * `:created_at`: when the provider made it, a `DateTime`.
   """
 
   use GuardedStruct
 
-  @statuses "Atom[pending::requires_action::paid::partially_refunded::refunded::failed::canceled]"
+  @statuses "Atom[pending::requires_action::authorized::paid::partially_refunded::refunded::failed::canceled]"
 
   guardedstruct authorized_fields: true do
     field :provider, String.t(), enforce: true, derives: "validate(not_nil_value, string)"
     field :id, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
     field :amount, Money.t(), enforce: true, validator: {MishkaPay.Money, :field}
     field :amount_refunded, Money.t(), validator: {MishkaPay.Money, :field}
+    field :amount_captured, Money.t(), validator: {MishkaPay.Money, :field}
     field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@statuses})"
     field :reference, String.t(), derives: "validate(string)"
+    field :owner, String.t(), derives: "validate(string)"
     field :customer_id, String.t(), derives: "validate(string)"
     field :customer_email, String.t(), derives: "validate(string)"
     field :customer_name, String.t(), derives: "validate(string)"
@@ -49,6 +61,8 @@ defmodule MishkaPay.Payment do
     field :failure_message, String.t(), derives: "validate(string)"
     field :disputed, boolean(), default: false, derives: "validate(boolean)"
     field :refunds, list(), structs: MishkaPay.Refund, default: []
+    field :checkout_id, String.t(), derives: "validate(string)"
+    field :items, list(), structs: MishkaPay.Price, default: []
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 end

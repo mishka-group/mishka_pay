@@ -273,4 +273,13 @@ defmodule MishkaPay.Ash.PaymentTest do
                MishkaPay.Ash.to_ash_error(refused)
     end
   end
+
+  test "an admin page reads a payment row's refunds from its provider" do
+    {:ok, row} = sync()
+
+    assert {:ok, [%MishkaPay.Refund{} | _]} =
+             @payment
+             |> Ash.ActionInput.for_action(:refunds, %{id: row.id})
+             |> Ash.run_action(authorize?: false)
+  end
 end

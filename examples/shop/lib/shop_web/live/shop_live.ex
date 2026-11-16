@@ -20,6 +20,9 @@ defmodule ShopWeb.ShopLive do
     * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
+    * members and access by subscription, refunds and held payments, more checkout options
+      (embedded too), saved cards and portal links, one-off bills, customer search and bill
+      previews, each in its own component;
     * reading a checkout or a payment back by its id;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
@@ -52,8 +55,11 @@ defmodule ShopWeb.ShopLive do
 
   @statuses ~w(paid partially_refunded refunded pending requires_action failed canceled)
 
+  # The kinds a site manages from its admin (`ShopWeb.AdminRowsComponent`).
+  @admin_kinds MishkaPay.Ash.Object.Spec.kinds()
+
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     if connected?(socket) do
       # Mishka Pay's own PubSub plugin (Shop.Pay.Broadcast): this site's changes only.
       for kind <- MishkaPay.PubSub.kinds(),
@@ -69,6 +75,7 @@ defmodule ShopWeb.ShopLive do
     {:ok,
      socket
      |> assign(page_title: "Mishka Pay demo shop", tenant: @tenant, statuses: @statuses)
+     |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
      |> assign(
@@ -285,6 +292,8 @@ defmodule ShopWeb.ShopLive do
 
   @impl true
   def handle_info({:mishka_pay, :payment, %{record: record}}, socket) do
+    send_update(ShopWeb.PaymentToolsComponent, id: "payment-tools", changed: record)
+
     {:noreply,
      socket
      |> put_payment(record)
@@ -296,6 +305,7 @@ defmodule ShopWeb.ShopLive do
 
   def handle_info({:mishka_pay, :subscription, %{record: record}}, socket) do
     send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", changed: record)
+    send_update(ShopWeb.AccessComponent, id: "access", changed: record)
     {:noreply, socket}
   end
 
@@ -307,6 +317,13 @@ defmodule ShopWeb.ShopLive do
 
   def handle_info({:mishka_pay, :dispute, %{record: record}}, socket) do
     send_update(ShopWeb.DisputesComponent, id: "disputes", changed: record)
+    {:noreply, socket}
+  end
+
+  # What the site manages from its admin: products, prices, coupons, codes, links and bills.
+  def handle_info({:mishka_pay, kind, %{record: record}}, socket)
+      when kind in @admin_kinds do
+    send_update(ShopWeb.AdminRowsComponent, id: "admin-rows", changed: {kind, record})
     {:noreply, socket}
   end
 
@@ -435,6 +452,34 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.AdminRowsComponent} id="admin-rows" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.FilesComponent} id="files" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.TaxComponent} id="tax" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.UsageComponent} id="usage" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.EntitlementsComponent} id="entitlements" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.BalanceComponent} id="balance" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.OperationsComponent} id="operations" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.CurrenciesComponent} id="currencies" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.AccessComponent} id="access" tenant={@tenant} member={@member} />
+
+      <.live_component module={ShopWeb.PaymentToolsComponent} id="payment-tools" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.CheckoutOptionsComponent} id="checkout-more" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.SavedCardsComponent} id="saved-cards" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.BillsComponent} id="bills" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.LookupsComponent} id="lookups" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
@@ -496,7 +541,7 @@ defmodule ShopWeb.ShopLive do
       tenant: @tenant,
       mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
       trial_days: product.trial_days,
-      items: [item(product, count)],
+      items: [item(provider, product, count)],
       success_url: success_url(provider, params["buyer"]),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
@@ -507,12 +552,13 @@ defmodule ShopWeb.ShopLive do
     |> Map.merge(options(params))
   end
 
-  # A product published to Stripe's catalog sells its Stripe price by id; one not published yet
-  # sends its name, amount and schedule.
-  defp item(%{stripe_price_id: price_id}, count) when is_binary(price_id),
+  # A product published to Stripe's catalog sells its Stripe price by id with Stripe; one not
+  # published yet, or sold with PayPal (which has no Stripe catalog), sends its name, amount and
+  # schedule.
+  defp item("stripe", %{stripe_price_id: price_id}, count) when is_binary(price_id),
     do: %{id: price_id, quantity: count}
 
-  defp item(product, count) do
+  defp item(_provider, product, count) do
     %{
       name: product.name,
       amount: %{amount: product.price, currency: "USD"},
@@ -545,6 +591,17 @@ defmodule ShopWeb.ShopLive do
     case MishkaPay.fetch_checkout(provider_of(id), id, @tenant) do
       {:ok, checkout} -> assign(socket, checkout_read: checkout)
       {:error, _gone} -> socket
+    end
+  end
+
+  # The member signed in by email (ShopWeb.MemberController); a member gone from the table is
+  # nobody.
+  defp member(nil), do: nil
+
+  defp member(id) do
+    case Ash.get(Shop.Accounts.Member, id, authorize?: false) do
+      {:ok, member} -> member
+      {:error, _gone} -> nil
     end
   end
 
@@ -655,6 +712,11 @@ defmodule ShopWeb.ShopLive do
           {:error, error} ->
             flash(socket, :error, MishkaPay.Ash.message(error))
         end
+
+      {:ok, %{setup_intent_id: setup_id} = checkout} when is_binary(setup_id) ->
+        socket
+        |> assign(checkout_read: checkout)
+        |> flash(:info, "Card saved. List the customer's cards under Saved cards.")
 
       {:ok, checkout} ->
         socket

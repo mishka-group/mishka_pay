@@ -33,11 +33,43 @@ defmodule MishkaPay.Providers.Stripe do
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription.
     * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` keep
-      Customers (`cus_...`), with the reference in their metadata; `portal_session/2` opens a
+      Customers (`cus_...`), with the reference in their metadata; `create_tax_id/2`,
+      `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids (`txi_...`);
+      `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
+    * A checkout in `mode: :setup` opens a session in Stripe's `setup` mode that saves a card
+      without a charge, with Managed Payments off (Stripe takes no setup mode with it) and, without
+      a known customer, `customer_creation: always`. `list_payment_methods/2`,
+      `fetch_payment_method/2`, `detach_payment_method/2` and `set_default_payment_method/3` keep
+      a customer's PaymentMethods (`pm_...`); the default is the customer's
+      `invoice_settings.default_payment_method`.
+    * `create_shipping_rate/2` and `list_shipping_rates/2` keep Shipping Rates (`shr_...`). A
+      checkout's `:shipping_countries` is `shipping_address_collection` and its `:shipping_rates`
+      are `shipping_options` (a rate by id, or `shipping_rate_data`), up to 5, in payment mode
+      only. Stripe refuses shipping where Managed Payments is on.
+    * `calculate_tax/2` asks Stripe Tax for the tax on a sale made outside Checkout
+      (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
+      (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
+      An account without Stripe Tax turned on is refused with code `"tax_not_set_up"`.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
+    * `upload_file/2` sends a file to `files.stripe.com` as `multipart/form-data`; dispute
+      evidence only as PDF, JPEG or PNG, up to 5 MB, and its bytes must be the type it names.
+      `fetch_file/2` reads one, and `file_link/3` makes a FileLink, a public address of it.
+      `update_dispute/2` takes only a file id (`file_...`) in the evidence fields that hold a
+      file, such as `receipt` and `uncategorized_file`.
+    * `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2` and
+      `usage_summary/3` use Billing Meters (`mtr_...`) and meter events, Stripe's basic usage
+      billing; a price with `:meter_id` is a metered price on one. A report's reference makes its
+      `identifier`; Stripe takes reports from the last 35 days and up to 5 minutes ahead, and
+      counts summaries from and to whole minutes.
+    * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
+      (`feat_...`) on products, and the active entitlements of a customer.
+    * `fetch_balance/1` reads the payments balance, and `list_balance_transactions/2` its
+      balance transactions (`txn_...`), by payout (`po_...`) or type.
+    * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
+      (`cbtxn_...`): below zero is credit.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
@@ -48,9 +80,10 @@ defmodule MishkaPay.Providers.Stripe do
   Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
   and other errors as `MishkaPay.Errors.Rejected` with its code and status.
 
-  Stripe counts a few currencies differently from ISO 4217 (HUF, TWD, ISK, UGX, MGA); a checkout or
-  refund in one of them is refused as `MishkaPay.Errors.Unsupported` rather than charged wrong. It
-  takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 49 keys of 40
+  Stripe counts a few currencies differently from ISO 4217: ISK and UGX as two-decimal amounts
+  ending in 00, and MGA as zero-decimal. Mishka Pay sends and reads them as Stripe counts them,
+  and refuses a fraction of one before any request. HUF and TWD charge with two decimals like
+  other currencies (Stripe pays them out in whole units). It takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 48 keys of 40
   characters with values of 500; anything past that is an `:invalid` error before any request.
 
   A refund first reads the payment. A tenant that refunds once is refused a second refund, and a
@@ -58,7 +91,8 @@ defmodule MishkaPay.Providers.Stripe do
   Stripe counts a refund in the payment's own currency.
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
-  another address, such as Stripe's own mock server in tests.
+  another address, such as Stripe's own mock server in tests. Uploads go to `files_url` when it is
+  set, else to `base_url` when that is set, else to `https://files.stripe.com`.
   """
 
   use MishkaPay.Provider,
@@ -66,18 +100,32 @@ defmodule MishkaPay.Providers.Stripe do
     label: "Stripe",
     capabilities: [
       :checkout,
+      :embedded_checkout,
+      :capture,
       :payment_list,
       :catalog,
       :payment_link,
       :dispute,
+      :file,
       :expire,
       :refund,
+      :refund_read,
       :subscription,
       :subscription_change,
+      :invoice,
       :customer,
+      :tax_id,
+      :tax,
+      :shipping,
       :portal,
+      :payment_method,
       :discount,
-      :webhook
+      :usage,
+      :entitlement,
+      :balance,
+      :customer_balance,
+      :webhook,
+      :event_list
     ]
 
   alias MishkaPay.{
@@ -99,8 +147,21 @@ defmodule MishkaPay.Providers.Stripe do
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
+  @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
-  @odd_currencies ~w(HUF TWD ISK UGX MGA)a
+  @files_url "https://files.stripe.com"
+
+  # What Stripe takes for each purpose of a file: its most bytes and its types, with the first
+  # bytes of each type (docs.stripe.com/file-upload).
+  @file_rules %{
+    dispute_evidence:
+      {5_000_000,
+       %{
+         "application/pdf" => "%PDF-",
+         "image/jpeg" => <<0xFF, 0xD8, 0xFF>>,
+         "image/png" => <<0x89, "PNG">>
+       }}
+  }
   @three_decimal ~w(BHD JOD KWD OMR TND)a
 
   @handled %{
@@ -113,9 +174,12 @@ defmodule MishkaPay.Providers.Stripe do
     "payment_intent.canceled" => [:payment],
     "payment_intent.processing" => [:payment],
     "payment_intent.requires_action" => [:payment],
+    "payment_intent.amount_capturable_updated" => [:payment],
     "charge.succeeded" => [:payment],
     "charge.failed" => [:payment],
     "charge.refunded" => [:payment],
+    "charge.captured" => [:payment],
+    "charge.expired" => [:payment],
     "refund.created" => [:payment],
     "refund.updated" => [:payment],
     "refund.failed" => [:payment],
@@ -124,9 +188,14 @@ defmodule MishkaPay.Providers.Stripe do
     "charge.dispute.closed" => [:payment, :dispute],
     "charge.dispute.funds_withdrawn" => [:payment, :dispute],
     "charge.dispute.funds_reinstated" => [:payment, :dispute],
-    "invoice.paid" => [:subscription],
-    "invoice.payment_failed" => [:subscription],
-    "invoice.finalized" => [:subscription],
+    "invoice.paid" => [:subscription, :invoice],
+    "invoice.payment_failed" => [:subscription, :invoice],
+    "invoice.finalized" => [:subscription, :invoice],
+    "invoice.payment_action_required" => [:subscription, :invoice],
+    "invoice.voided" => [:subscription, :invoice],
+    "invoice.marked_uncollectible" => [:subscription, :invoice],
+    "invoice.overdue" => [:subscription, :invoice],
+    "invoice.upcoming" => [:subscription],
     "invoice_payment.paid" => [:payment],
     "customer.subscription.created" => [:subscription],
     "customer.subscription.updated" => [:subscription],
@@ -134,14 +203,42 @@ defmodule MishkaPay.Providers.Stripe do
     "customer.subscription.paused" => [:subscription],
     "customer.subscription.resumed" => [:subscription],
     "customer.subscription.trial_will_end" => [:subscription],
+    "invoice.created" => [:invoice],
+    "invoice.updated" => [:invoice],
+    "invoice.sent" => [:invoice],
+    "invoice.deleted" => [:invoice],
+    "product.created" => [:product],
+    "product.updated" => [:product],
+    "product.deleted" => [:product],
+    "price.created" => [:price],
+    "price.updated" => [:price],
+    "price.deleted" => [:price],
+    "coupon.created" => [:coupon],
+    "coupon.updated" => [:coupon],
+    "coupon.deleted" => [:coupon],
+    "promotion_code.created" => [:promotion_code],
+    "promotion_code.updated" => [:promotion_code],
+    "payment_link.created" => [:payment_link],
+    "payment_link.updated" => [:payment_link],
     "customer.created" => [:customer],
     "customer.updated" => [:customer],
-    "customer.deleted" => [:customer]
+    "customer.deleted" => [:customer],
+    "setup_intent.succeeded" => [:customer],
+    "setup_intent.setup_failed" => [:customer],
+    "payment_method.attached" => [:customer],
+    "payment_method.detached" => [:customer],
+    "payment_method.updated" => [:customer],
+    "payment_method.automatically_updated" => [:customer],
+    "entitlements.active_entitlement_summary.updated" => [:customer],
+    "customer.tax_id.created" => [:customer],
+    "customer.tax_id.updated" => [:customer],
+    "customer.tax_id.deleted" => [:customer]
   }
 
   @doc """
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
-  (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer` or `:dispute`. Each is mapped to its
+  (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
+  `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`. Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -152,11 +249,38 @@ defmodule MishkaPay.Providers.Stripe do
   @spec version() :: String.t()
   def version, do: @version
 
+  @doc """
+  The API version of Stripe's newest published OpenAPI spec (github.com/stripe/openapi): its
+  `info.version`, the first value in Stripe's version form (`2026-10-28.endive`) in the file's
+  first bytes. `mix mishka_pay.stripe.check_version` compares it with `version/0`.
+  """
+  @spec latest_version() :: {:ok, String.t()} | {:error, Splode.Error.t()}
+  def latest_version do
+    with {:ok, %Req.Response{status: status, body: head}} when status in [200, 206] <-
+           Client.request(%{
+             provider: "stripe",
+             method: :get,
+             base_url: "https://raw.githubusercontent.com",
+             path: "/stripe/openapi/master/latest/openapi.spec3.json",
+             headers: %{"range" => "bytes=0-4095"},
+             options: [decode_body: false]
+           }),
+         [_head, version] <- Regex.run(~r/"version"\s*:\s*"(\d{4}-\d{2}-\d{2}\.[a-z]+)"/, head) do
+      {:ok, version}
+    else
+      {:error, _unreachable} = error -> error
+      _other -> {:error, Errors.Rejected.exception(provider: "stripe", code: "spec_unreadable")}
+    end
+  end
+
   @impl MishkaPay.Provider
   def checkout(%Checkout{} = checkout, keys) do
-    with :ok <- currencies(checkout.items, :checkout),
+    with :ok <- currencies(checkout.items),
          :ok <- metadata(checkout.metadata),
+         :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
+         :ok <- held(checkout, keys),
+         :ok <- shipping_rates(checkout.shipping_rates),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -165,10 +289,28 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # Stripe refuses to hold the money where it makes an invoice after payment: with `invoice: true`,
+  # or as the merchant of record (Managed Payments), which always makes one. An account whose
+  # default is Managed Payments is refused by Stripe itself (`capture_invoice`).
+  defp held(%Checkout{capture: :manual} = checkout, keys) do
+    case checkout.invoice == true or Mapper.merchant_of_record(checkout, keys) == true do
+      true -> invalid(:capture, Messages.text(:capture_invoice))
+      false -> :ok
+    end
+  end
+
+  defp held(_checkout, _keys), do: :ok
+
   @impl MishkaPay.Provider
   def fetch_checkout(checkout_id, keys) do
     with :ok <- stripe_id(checkout_id, "cs_", :checkout_id),
-         {:ok, session} <- request(:get, "/v1/checkout/sessions/#{checkout_id}", [], keys) do
+         {:ok, session} <-
+           request(
+             :get,
+             "/v1/checkout/sessions/#{checkout_id}",
+             [{"expand[]", "line_items"}, {"expand[]", "setup_intent"}],
+             keys
+           ) do
       {:ok, Mapper.checkout(session)}
     end
   end
@@ -184,17 +326,87 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def fetch_payment(payment_id, keys) do
-    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
-         {:ok, intent} <-
+    with {:ok, payment} <- read_payment(payment_id, keys),
+         {:ok, %{"data" => sessions}} <-
            request(
              :get,
-             "/v1/payment_intents/#{payment_id}",
+             "/v1/checkout/sessions",
              [
-               {"expand[]", "latest_charge"},
-               {"expand[]", "latest_charge.refunds"},
-               {"expand[]", "customer"}
+               {"payment_intent", payment_id},
+               {"limit", "1"},
+               {"expand[]", "data.line_items"}
              ],
              keys
+           ) do
+      {:ok, Mapper.with_checkout(payment, List.first(sessions))}
+    end
+  end
+
+  # The PaymentIntent alone, with its charge, refunds and customer: what a refund checks against.
+  defp read_payment(payment_id, keys) do
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
+         {:ok, intent} <-
+           request(:get, "/v1/payment_intents/#{payment_id}", payment_expand(), keys) do
+      Mapper.payment(intent)
+    end
+  end
+
+  defp payment_expand,
+    do: [
+      {"expand[]", "latest_charge"},
+      {"expand[]", "latest_charge.refunds"},
+      {"expand[]", "customer"}
+    ]
+
+  # A part is checked against the payment first: Stripe reads `amount_to_capture` in the
+  # payment's own currency, so money in another one would be taken as the wrong sum.
+  @impl MishkaPay.Provider
+  def capture_payment(payment_id, opts, keys) do
+    amount = opts[:amount]
+
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
+         :ok <- capturable(payment_id, amount, keys),
+         {:ok, intent} <-
+           request(
+             :post,
+             "/v1/payment_intents/#{payment_id}/capture",
+             form(Mapper.capture_params(amount)) ++ payment_expand(),
+             keys,
+             key:
+               ProviderKit.idempotency_key(
+                 "capture",
+                 keys.tenant,
+                 {payment_id, amount && Mapper.minor(amount)}
+               )
+           ) do
+      Mapper.payment(intent)
+    end
+  end
+
+  defp capturable(_payment_id, nil, _keys), do: :ok
+
+  defp capturable(payment_id, amount, keys) do
+    with :ok <- currencies([%{amount: amount}]),
+         {:ok, payment} <- read_payment(payment_id, keys) do
+      cond do
+        amount.currency != payment.amount.currency ->
+          invalid(:amount, Messages.text(:refund_currency, currency: payment.amount.currency))
+
+        Decimal.gt?(amount.amount, payment.amount.amount) ->
+          invalid(:amount, Messages.text(:capture_over))
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def cancel_payment(payment_id, keys) do
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
+         {:ok, intent} <-
+           request(:post, "/v1/payment_intents/#{payment_id}/cancel", payment_expand(), keys,
+             key: ProviderKit.idempotency_key("payment-cancel", keys.tenant, payment_id)
            ) do
       Mapper.payment(intent)
     end
@@ -203,15 +415,34 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def refund(%Refund{} = refund, keys) do
     with :ok <- stripe_id(refund.payment_id, "pi_", :payment_id),
-         :ok <- currencies([refund], :refund),
+         :ok <- currencies([refund]),
          {:ok, key} <- ProviderKit.refund_key(refund, keys),
-         {:ok, payment} <- fetch_payment(refund.payment_id, keys),
+         {:ok, payment} <- read_payment(refund.payment_id, keys),
          :ok <- ProviderKit.refundable(refund, payment, keys),
          {:ok, answer} <-
            request(:post, "/v1/refunds", Mapper.refund_params(refund), keys, key: key) do
       Mapper.refund(answer, refund)
     end
   end
+
+  @impl MishkaPay.Provider
+  def fetch_refund(refund_id, keys) do
+    with :ok <- refund_id(refund_id),
+         {:ok, refund} <- request(:get, "/v1/refunds/#{refund_id}", [], keys) do
+      Mapper.refund(refund)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_refunds(opts, keys) do
+    with :ok <- maybe_id(opts[:payment_id], "pi_", :payment_id) do
+      page("/v1/refunds", [payment_intent: opts[:payment_id]], opts, keys, &Mapper.refund/1)
+    end
+  end
+
+  # Stripe's refund ids start with `re_`, and `pyr_` for some payment methods.
+  defp refund_id("pyr_" <> _ = id), do: stripe_id(id, "pyr_", :refund_id)
+  defp refund_id(id), do: stripe_id(id, "re_", :refund_id)
 
   @impl MishkaPay.Provider
   def fetch_subscription(subscription_id, keys) do
@@ -274,6 +505,91 @@ defmodule MishkaPay.Providers.Stripe do
   def fetch_invoice(invoice_id, keys) do
     with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
          {:ok, invoice} <- request(:get, "/v1/invoices/#{invoice_id}", [], keys) do
+      Mapper.invoice(invoice)
+    end
+  end
+
+  # A draft bill, then each item on it; a draft left half made is deleted, so a retry with the
+  # same reference starts clean.
+  @impl MishkaPay.Provider
+  def create_invoice(%MishkaPay.InvoiceDraft{} = draft, keys) do
+    with :ok <- stripe_id(draft.customer_id, "cus_", :customer_id),
+         :ok <- invoice_prices(draft.items),
+         :ok <- currencies(draft.items),
+         :ok <- metadata(draft.metadata),
+         {:ok, %{"id" => invoice_id}} <-
+           request(:post, "/v1/invoices", Mapper.invoice_params(draft), keys,
+             key: ProviderKit.idempotency_key("invoice", draft.tenant, draft.reference)
+           ) do
+      case add_items(draft, invoice_id, keys) do
+        :ok ->
+          fetch_invoice(invoice_id, keys)
+
+        {:error, _refused} = error ->
+          _deleted = request(:delete, "/v1/invoices/#{invoice_id}", [], keys)
+          error
+      end
+    end
+  end
+
+  # A catalog item is sold by a Stripe price id.
+  defp invoice_prices(items) do
+    case Enum.find(items, &(is_binary(&1.id) and not stripe_price?(&1.id))) do
+      nil -> :ok
+      %{id: id} -> stripe_id(id, "price_", :items)
+    end
+  end
+
+  defp add_items(draft, invoice_id, keys) do
+    draft.items
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {item, index}, :ok ->
+      params = Mapper.invoice_item_params(item, invoice_id, draft.customer_id)
+
+      case request(:post, "/v1/invoiceitems", params, keys,
+             key: ProviderKit.idempotency_key("invoice-item", draft.tenant, {invoice_id, index})
+           ) do
+        {:ok, _item} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  @impl MishkaPay.Provider
+  def finalize_invoice(invoice_id, keys),
+    do: invoice_step(invoice_id, "finalize", %{"auto_advance" => false}, keys)
+
+  @impl MishkaPay.Provider
+  def send_invoice(invoice_id, keys), do: invoice_step(invoice_id, "send", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def pay_invoice(invoice_id, opts, keys) do
+    params =
+      case Keyword.get(opts, :out_of_band, false) do
+        true -> %{"paid_out_of_band" => true}
+        false -> %{}
+      end
+
+    invoice_step(invoice_id, "pay", params, keys)
+  end
+
+  @impl MishkaPay.Provider
+  def void_invoice(invoice_id, keys), do: invoice_step(invoice_id, "void", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def mark_invoice_uncollectible(invoice_id, keys),
+    do: invoice_step(invoice_id, "mark_uncollectible", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def delete_invoice(invoice_id, keys) do
+    with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
+         {:ok, _deleted} <- request(:delete, "/v1/invoices/#{invoice_id}", [], keys),
+         do: :ok
+  end
+
+  defp invoice_step(invoice_id, step, params, keys) do
+    with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
+         {:ok, invoice} <- request(:post, "/v1/invoices/#{invoice_id}/#{step}", params, keys) do
       Mapper.invoice(invoice)
     end
   end
@@ -407,9 +723,151 @@ defmodule MishkaPay.Providers.Stripe do
   def list_customers(opts, keys),
     do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
 
+  # A tax id has no reference of its own, so it goes without a fixed idempotency key: the same
+  # number added again after a delete must make a new one.
+  @impl MishkaPay.Provider
+  def create_tax_id(%MishkaPay.TaxId{customer_id: customer_id} = tax_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/customers/#{customer_id}/tax_ids",
+             Mapper.tax_id_params(tax_id),
+             keys
+           ) do
+      Mapper.tax_id(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_tax_ids(opts, keys) do
+    with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
+      page("/v1/customers/#{opts[:customer_id]}/tax_ids", [], opts, keys, &Mapper.tax_id/1)
+    end
+  end
+
+  # Stripe Tax on its own: a calculation (`taxcalc_...`) changes nothing until it is recorded as a
+  # Tax Transaction under the caller's reference.
+  @impl MishkaPay.Provider
+  def calculate_tax(%MishkaPay.TaxCalculation{} = calculation, keys) do
+    shipping = (calculation.shipping && [%{amount: calculation.shipping}]) || []
+
+    with :ok <- maybe_id(calculation.customer_id, "cus_", :customer_id),
+         :ok <- currencies(calculation.items ++ shipping),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/calculations",
+             Mapper.tax_calculation_params(calculation),
+             keys
+           ) do
+      Mapper.tax_calculation(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def record_tax(calculation_id, reference, keys) do
+    with :ok <- stripe_id(calculation_id, "taxcalc_", :calculation_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/transactions/create_from_calculation",
+             %{"calculation" => calculation_id, "reference" => reference},
+             keys,
+             key: ProviderKit.idempotency_key("tax-record", keys.tenant, reference)
+           ) do
+      Mapper.tax_transaction(answer, calculation_id)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_shipping_rate(%MishkaPay.ShippingRate{} = rate, keys) do
+    with :ok <- currencies([rate]),
+         :ok <- metadata(rate.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/shipping_rates", Mapper.shipping_rate_params(rate), keys) do
+      Mapper.shipping_rate(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_shipping_rates(opts, keys),
+    do: page("/v1/shipping_rates", [active: opts[:active]], opts, keys, &Mapper.shipping_rate/1)
+
+  # Stripe offers up to 5 rates on a checkout: its own by id (`shr_`), or new ones in a currency
+  # it takes.
+  defp shipping_rates(nil), do: :ok
+
+  defp shipping_rates(rates) do
+    case Enum.drop(rates, 5) do
+      [] -> with :ok <- currencies(rates), do: shipping_rate_ids(rates)
+      _more -> invalid(:shipping_rates, Messages.text(:stripe_shipping_five))
+    end
+  end
+
+  defp shipping_rate_ids(rates) do
+    case Enum.find(rates, &(is_binary(&1.id) and not shipping_rate?(&1.id))) do
+      nil -> :ok
+      %{id: id} -> stripe_id(id, "shr_", :shipping_rates)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def delete_tax_id(customer_id, tax_id_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         :ok <- stripe_id(tax_id_id, "txi_", :tax_id_id),
+         {:ok, _deleted} <-
+           request(:delete, "/v1/customers/#{customer_id}/tax_ids/#{tax_id_id}", [], keys),
+         do: :ok
+  end
+
+  # Stripe's search language: each filter quoted, a quote inside escaped; the reference is kept
+  # in the customer's metadata. Search pages on its own `next_page` cursor.
+  @impl MishkaPay.Provider
+  def search_customers(opts, keys) do
+    clauses =
+      for {field, key} <- [email: "email", name: "name", reference: "metadata['#{@reference}']"],
+          value = opts[field],
+          is_binary(value),
+          do: "#{key}:'#{String.replace(value, ~S('), ~S(\'))}'"
+
+    case clauses do
+      [] ->
+        invalid(:query, Messages.text(:search_needs))
+
+      clauses ->
+        params =
+          [query: Enum.join(clauses, " AND "), limit: opts[:limit], page: opts[:after]]
+          |> Enum.reject(fn {_name, value} -> is_nil(value) end)
+          |> Enum.map(fn {name, value} -> {Atom.to_string(name), to_string(value)} end)
+
+        with {:ok, %{"data" => data} = answer} <-
+               request(:get, "/v1/customers/search", params, keys),
+             {:ok, items} <- data |> Enum.map(&Mapper.customer/1) |> all_ok() do
+          next = answer["has_more"] == true && answer["next_page"]
+          {:ok, struct(Page, items: items, has_more: is_binary(next), next: next || nil)}
+        end
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def upcoming_invoice(subscription_id, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, invoice} <-
+           request(
+             :post,
+             "/v1/invoices/create_preview",
+             %{"subscription" => subscription_id},
+             keys
+           ) do
+      Mapper.invoice(invoice)
+    end
+  end
+
   @impl MishkaPay.Provider
   def portal_session(%MishkaPay.PortalSession{} = session, keys) do
     with :ok <- stripe_id(session.customer_id, "cus_", :customer_id),
+         :ok <- maybe_id(session.subscription_id, "sub_", :subscription_id),
          {:ok, answer} <-
            request(
              :post,
@@ -417,13 +875,65 @@ defmodule MishkaPay.Providers.Stripe do
              %{
                "customer" => session.customer_id,
                "return_url" => session.return_url,
-               "configuration" => session.configuration
+               "configuration" => session.configuration,
+               "flow_data" => Mapper.portal_flow(session)
              },
              keys
            ) do
       {:ok, %{session | id: answer["id"], url: answer["url"]}}
     end
   end
+
+  @impl MishkaPay.Provider
+  def list_payment_methods(opts, keys) do
+    customer_id = opts[:customer_id]
+
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id) do
+      page(
+        "/v1/customers/#{customer_id}/payment_methods",
+        [],
+        opts,
+        keys,
+        &Mapper.payment_method/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payment_method(payment_method_id, keys) do
+    with :ok <- payment_method_id(payment_method_id),
+         {:ok, method} <- request(:get, "/v1/payment_methods/#{payment_method_id}", [], keys) do
+      Mapper.payment_method(method)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def detach_payment_method(payment_method_id, keys) do
+    with :ok <- payment_method_id(payment_method_id),
+         {:ok, method} <-
+           request(:post, "/v1/payment_methods/#{payment_method_id}/detach", %{}, keys) do
+      Mapper.payment_method(method)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def set_default_payment_method(customer_id, payment_method_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         :ok <- payment_method_id(payment_method_id),
+         {:ok, customer} <-
+           request(
+             :post,
+             "/v1/customers/#{customer_id}",
+             %{"invoice_settings" => %{"default_payment_method" => payment_method_id}},
+             keys
+           ) do
+      Mapper.customer(customer)
+    end
+  end
+
+  # Stripe's payment method ids start with `pm_`, and `card_` for a card saved before them.
+  defp payment_method_id("card_" <> _ = id), do: stripe_id(id, "card_", :payment_method_id)
+  defp payment_method_id(id), do: stripe_id(id, "pm_", :payment_method_id)
 
   @impl MishkaPay.Provider
   def create_coupon(%Coupon{} = coupon, keys) do
@@ -527,7 +1037,8 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def create_price(%Price{} = price, keys) do
     with :ok <- plain_id(price.product_id, :product_id),
-         :ok <- currencies([price], :price),
+         :ok <- maybe_id(price.meter_id, "mtr_", :meter_id),
+         :ok <- currencies([price]),
          :ok <- metadata(price.metadata),
          {:ok, answer} <- request(:post, "/v1/prices", Mapper.price_params(price), keys) do
       Mapper.price(answer)
@@ -591,6 +1102,7 @@ defmodule MishkaPay.Providers.Stripe do
   def update_dispute(evidence, keys) do
     with :ok <- dispute_id(evidence.dispute_id),
          :ok <- metadata(evidence.metadata),
+         :ok <- evidence_files(evidence.evidence),
          {:ok, answer} <-
            request(
              :post,
@@ -604,6 +1116,74 @@ defmodule MishkaPay.Providers.Stripe do
            ) do
       Mapper.dispute(answer)
     end
+  end
+
+  @impl MishkaPay.Provider
+  def upload_file(%MishkaPay.FileUpload{} = upload, keys) do
+    with :ok <- file_fits(upload),
+         {:ok, answer} <-
+           request(:post, "/v1/files", Mapper.file_params(upload), keys, upload: true) do
+      Mapper.file(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_file(file_id, keys) do
+    with :ok <- stripe_id(file_id, "file_", :file_id),
+         {:ok, answer} <- request(:get, "/v1/files/#{file_id}", [], keys) do
+      Mapper.file(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def file_link(file_id, opts, keys) do
+    with :ok <- stripe_id(file_id, "file_", :file_id),
+         :ok <- link_expiry(opts[:expires_at]),
+         {:ok, answer} <-
+           request(:post, "/v1/file_links", Mapper.file_link_params(file_id, opts), keys) do
+      Mapper.file_link(answer)
+    end
+  end
+
+  # A file of a type Stripe takes for its purpose, within its size, whose bytes are that type.
+  defp file_fits(%{purpose: purpose, content_type: type, content: bytes}) do
+    {most, types} = Map.fetch!(@file_rules, purpose)
+
+    case Map.fetch(types, type) do
+      :error ->
+        invalid(:content_type, Messages.text(:stripe_file_type, types: "PDF, JPEG or PNG"))
+
+      {:ok, _magic} when byte_size(bytes) > most ->
+        invalid(:content, Messages.text(:stripe_file_size, megabytes: div(most, 1_000_000)))
+
+      {:ok, magic} ->
+        case String.starts_with?(bytes, magic) do
+          true -> :ok
+          false -> invalid(:content, Messages.text(:file_content, content_type: type))
+        end
+    end
+  end
+
+  defp link_expiry(nil), do: :ok
+
+  defp link_expiry(%DateTime{} = at) do
+    case DateTime.after?(at, DateTime.utc_now()) do
+      true -> :ok
+      false -> invalid(:expires_at, Messages.text(:expires_past))
+    end
+  end
+
+  defp link_expiry(_not_a_time), do: invalid(:expires_at, Messages.text(:expires_past))
+
+  # The evidence fields that hold a file take only a Stripe file id.
+  defp evidence_files(nil), do: :ok
+
+  defp evidence_files(evidence) do
+    evidence
+    |> Map.take(Mapper.evidence_files())
+    |> Enum.find_value(:ok, fn {_name, id} ->
+      with :ok <- stripe_id(id, "file_", :evidence), do: nil
+    end)
   end
 
   @impl MishkaPay.Provider
@@ -664,6 +1244,157 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  @impl MishkaPay.Provider
+  def create_meter(%MishkaPay.Meter{} = meter, keys) do
+    with {:ok, answer} <- request(:post, "/v1/billing/meters", Mapper.meter_params(meter), keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_meters(opts, keys),
+    do: page("/v1/billing/meters", [status: opts[:status]], opts, keys, &Mapper.meter/1)
+
+  @impl MishkaPay.Provider
+  def deactivate_meter(meter_id, keys) do
+    with :ok <- stripe_id(meter_id, "mtr_", :meter_id),
+         {:ok, answer} <-
+           request(:post, "/v1/billing/meters/#{meter_id}/deactivate", %{}, keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  # The reference makes the report's `identifier`, which Stripe never counts twice, and the
+  # request's idempotency key, so a report sent again after a lost answer gets the same answer.
+  @impl MishkaPay.Provider
+  def report_usage(%MishkaPay.Usage{} = usage, keys) do
+    identifier = ProviderKit.idempotency_key("usage", usage.tenant, usage.reference)
+
+    with :ok <- stripe_id(usage.customer_id, "cus_", :customer_id),
+         :ok <- usage_time(usage.at),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/billing/meter_events",
+             Mapper.usage_params(usage, identifier),
+             keys,
+             key: identifier
+           ) do
+      {:ok, Mapper.usage(answer, usage)}
+    end
+  end
+
+  # Stripe takes usage from the last 35 days, and up to 5 minutes ahead for clocks that drift.
+  defp usage_time(nil), do: :ok
+
+  defp usage_time(%DateTime{} = at) do
+    seconds = DateTime.diff(at, DateTime.utc_now())
+
+    case seconds >= -35 * 24 * 60 * 60 and seconds <= 5 * 60 do
+      true -> :ok
+      false -> invalid(:at, Messages.text(:stripe_usage_time))
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def usage_summary(meter_id, opts, keys) do
+    params = Mapper.usage_summary_params(opts[:customer_id], opts[:from], opts[:to])
+
+    with :ok <- stripe_id(meter_id, "mtr_", :meter_id),
+         :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id),
+         {:ok, answer} <-
+           request(:get, "/v1/billing/meters/#{meter_id}/event_summaries", params, keys) do
+      Mapper.usage_summary(answer, meter_id, opts[:customer_id], params)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_feature(%MishkaPay.Feature{} = feature, keys) do
+    with :ok <- metadata(feature.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/entitlements/features", Mapper.feature_params(feature), keys) do
+      Mapper.feature(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def attach_feature(product_id, feature_id, keys) do
+    with :ok <- plain_id(product_id, :product_id),
+         :ok <- stripe_id(feature_id, "feat_", :feature_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/products/#{product_id}/features",
+             %{"entitlement_feature" => feature_id},
+             keys
+           ) do
+      Mapper.feature(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_entitlements(opts, keys) do
+    with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
+      page(
+        "/v1/entitlements/active_entitlements",
+        [customer: opts[:customer_id]],
+        opts,
+        keys,
+        &Mapper.entitlement/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_balance(keys) do
+    with {:ok, answer} <- request(:get, "/v1/balance", [], keys), do: Mapper.balance(answer)
+  end
+
+  @impl MishkaPay.Provider
+  def list_balance_transactions(opts, keys) do
+    with :ok <- maybe_id(opts[:payout_id], "po_", :payout_id),
+         :ok <- maybe_id(opts[:type], "", :type) do
+      page(
+        "/v1/balance_transactions",
+        [payout: opts[:payout_id], type: opts[:type]],
+        opts,
+        keys,
+        &Mapper.balance_transaction/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def adjust_customer_balance(%MishkaPay.CustomerBalanceTransaction{} = txn, keys) do
+    with :ok <- stripe_id(txn.customer_id, "cus_", :customer_id),
+         :ok <- currencies([txn]),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/customers/#{txn.customer_id}/balance_transactions",
+             Mapper.customer_balance_params(txn),
+             keys,
+             key: ProviderKit.idempotency_key("customer-balance", txn.tenant, txn.reference)
+           ) do
+      Mapper.customer_balance_transaction(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_customer_balance(opts, keys) do
+    customer_id = opts[:customer_id]
+
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id) do
+      page(
+        "/v1/customers/#{customer_id}/balance_transactions",
+        [],
+        opts,
+        keys,
+        &Mapper.customer_balance_transaction/1
+      )
+    end
+  end
+
   defp link_prices(items) do
     case Enum.find(items, &(not stripe_price?(&1.id))) do
       nil -> :ok
@@ -672,6 +1403,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp stripe_price?(id), do: stripe_id(id, "price_", :items) == :ok
+  defp shipping_rate?(id), do: stripe_id(id, "shr_", :shipping_rates) == :ok
 
   # One page of a Stripe list: the list options as Stripe's `limit` and `starting_after`, the
   # filters set, each item mapped; the next cursor is the last item's id when Stripe has more.
@@ -699,6 +1431,30 @@ defmodule MishkaPay.Providers.Stripe do
   defp maybe_id(nil, _prefix, _field), do: :ok
   defp maybe_id(id, "", field), do: plain_id(id, field)
   defp maybe_id(id, prefix, field), do: stripe_id(id, prefix, field)
+
+  # The lightest read every key may make: one customer, or none.
+  @impl MishkaPay.Provider
+  def check_keys(keys) do
+    with {:ok, _page} <- request(:get, "/v1/customers", [{"limit", "1"}], keys), do: :ok
+  end
+
+  # Stripe keeps events for 30 days and filters them by type, up to 20 types a call.
+  @impl MishkaPay.Provider
+  def list_events(opts, keys) do
+    types = List.wrap(opts[:types])
+
+    case Enum.drop(types, 20) != [] do
+      true ->
+        invalid(:types, Messages.text(:stripe_event_types))
+
+      false ->
+        filters =
+          [{:"created[gte]", opts[:since] && DateTime.to_unix(opts[:since])}] ++
+            Enum.map(types, &{:"types[]", &1})
+
+        page("/v1/events", filters, opts, keys, &Mapper.event/1)
+    end
+  end
 
   @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do
@@ -801,12 +1557,13 @@ defmodule MishkaPay.Providers.Stripe do
     do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
   # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
+  # `upload: true` sends `params` as multipart parts to Stripe's files host.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
     base = %{
       provider: "stripe",
       method: method,
-      base_url: base_url(),
+      base_url: base_url(opts[:upload] == true),
       path: path,
       auth: {:bearer, keys.secret_key},
       headers: %{"stripe-version" => @version},
@@ -815,13 +1572,14 @@ defmodule MishkaPay.Providers.Stripe do
     }
 
     base
-    |> Map.put(body_key(method), form(params))
+    |> put_body(method, params, opts[:upload] == true)
     |> Client.request()
     |> answer()
   end
 
-  defp body_key(:get), do: :params
-  defp body_key(_write), do: :form
+  defp put_body(spec, _method, parts, true), do: Map.put(spec, :multipart, parts)
+  defp put_body(spec, :get, params, false), do: Map.put(spec, :params, form(params))
+  defp put_body(spec, _write, params, false), do: Map.put(spec, :form, form(params))
 
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
@@ -855,12 +1613,15 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Stripe's names of the fields Mishka Pay calls otherwise; any other is kept as Stripe says it.
   @fields [
+    {"payment_intent_data.statement_descriptor_suffix", "statement_suffix"},
     {"subscription_data", "trial_days"},
     {"restrictions", "max_purchases"},
     {"proration_behavior", "proration"},
     {"invoice_creation", "invoice"},
     {"managed_payments", "merchant_of_record"},
-    {"after_completion", "success_url"}
+    {"after_completion", "success_url"},
+    {"shipping_options", "shipping_rates"},
+    {"shipping_address_collection", "shipping_countries"}
   ]
 
   defp field_of(nil), do: nil
@@ -884,9 +1645,20 @@ defmodule MishkaPay.Providers.Stripe do
   # or a product without the tax code Managed Payments needs.
   defp param_in(message) when is_binary(message) do
     cond do
-      String.contains?(message, "product tax code is missing") -> "tax_code"
-      match = Regex.run(~r/\A`(\w+)` can only be used/, message) -> List.last(match)
-      true -> nil
+      String.contains?(message, "product tax code is missing") ->
+        "tax_code"
+
+      String.contains?(message, "separate authorization and capture") ->
+        "capture"
+
+      match = Regex.run(~r/\A`(\w+)` can only be used/, message) ->
+        List.last(match)
+
+      match = Regex.run(~r/\A(\S+) cannot be used with Managed Payments/, message) ->
+        List.last(match)
+
+      true ->
+        nil
     end
   end
 
@@ -894,21 +1666,37 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
   # its words; so is an invoice turned off where Managed Payments must make one, a product without
-  # the tax code it needs, and a choice that belongs only to one-time or only to recurring prices.
+  # the tax code it needs, a choice that belongs only to one-time or only to recurring prices, and
+  # a hold on the card where an invoice is made after payment.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
+
+  # Stripe Tax turned off on the account, and an address it cannot count the tax for.
+  defp code_of(%{"code" => "stripe_tax_inactive"}), do: "tax_not_set_up"
+
+  defp code_of(%{"code" => code})
+       when code in ["customer_tax_location_invalid", "invalid_tax_location"],
+       do: "tax_location_invalid"
 
   defp code_of(%{"code" => code}) when is_binary(code), do: code
 
-  defp code_of(%{"message" => message}) when is_binary(message) do
-    cond do
-      String.contains?(message, "already exists") -> "already_exists"
-      String.contains?(message, "when Managed Payments is enabled") -> "managed_payments_invoice"
-      String.contains?(message, "product tax code is missing") -> "tax_code_missing"
-      String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
-      String.contains?(message, "must pass a recurring price") -> "recurring_only"
-      true -> nil
-    end
-  end
+  # Stripe's words for a refusal it gives no code, first match wins: shipping where Managed
+  # Payments sells is named before any other choice it refuses there.
+  @worded [
+    {"already exists", "already_exists"},
+    {"when Managed Payments is enabled", "managed_payments_invoice"},
+    {"Shipping parameters cannot be used with Managed", "managed_payments_shipping"},
+    {"cannot be used with Managed Payments", "merchant_of_record_off"},
+    {"product tax code is missing", "tax_code_missing"},
+    {"does not contain any recurring prices", "one_time_only"},
+    {"must pass a recurring price", "recurring_only"},
+    {"separate authorization and capture", "capture_invoice"},
+    {"Stripe Tax has not been activated", "tax_not_set_up"},
+    {"feature in the portal configuration is disabled", "portal_feature_off"},
+    {"customer does not match the subscription's customer", "subscription_of_another"}
+  ]
+
+  defp code_of(%{"message" => message}) when is_binary(message),
+    do: Enum.find_value(@worded, fn {words, code} -> String.contains?(message, words) && code end)
 
   defp code_of(_no_code), do: nil
 
@@ -936,7 +1724,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Money off or a minimum in a currency Stripe counts its own way is refused, like a price.
   defp money_off(nil), do: :ok
-  defp money_off(money), do: currencies([%{amount: money}], :discount)
+  defp money_off(money), do: currencies([%{amount: money}])
 
   # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
   # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
@@ -960,12 +1748,12 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  # Stripe keeps up to 50 metadata keys (one is the reference), of 40 characters, with values of
+  # Stripe keeps up to 50 metadata keys (two are the reference and the owner), of 40 characters, with values of
   # 500.
   defp metadata(nil), do: :ok
 
   defp metadata(metadata) do
-    case map_size(metadata) < 50 and
+    case map_size(metadata) < 49 and
            Enum.all?(metadata, fn {key, value} ->
              String.length(key) <= 40 and String.length(value) <= 500
            end) do
@@ -982,25 +1770,45 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp invalid(field, message), do: ProviderKit.invalid(field, message)
 
-  defp currencies(items, operation) do
-    odd =
-      for %{amount: %Money{currency: currency}} <- items,
-          currency in @odd_currencies,
-          uniq: true,
-          do: currency
+  # Stripe takes no statement suffix while it sells as merchant of record (Managed Payments): a
+  # checkout or a site that turns it on is refused before the request.
+  defp suffix_fits(%Checkout{statement_suffix: nil}, _keys), do: :ok
 
-    case odd do
-      [] ->
-        three_decimal(items)
+  defp suffix_fits(%Checkout{merchant_of_record: on?} = checkout, keys) do
+    case on? == true or (is_nil(on?) and Map.get(keys, :merchant_of_record) == true) do
+      true ->
+        invalid(
+          :statement_suffix,
+          Messages.text(:merchant_of_record_off, param: "statement_suffix")
+        )
 
-      [currency | _] ->
-        {:error,
-         Errors.Unsupported.exception(
-           provider: "stripe",
-           operation: "#{operation} in #{currency}"
-         )}
+      false ->
+        suffix_mode(checkout)
     end
   end
+
+  defp suffix_mode(%Checkout{mode: :subscription}),
+    do: invalid(:statement_suffix, Messages.text(:one_time_only, param: "statement_suffix"))
+
+  defp suffix_mode(_one_time), do: :ok
+
+  # Stripe counts ISK, UGX and MGA in whole units only, and BHD, JOD, KWD, OMR and TND with a last
+  # decimal of 0; an amount Stripe would read otherwise is refused before any request.
+  defp currencies(items) do
+    case Enum.find(items, &(not whole_ok?(&1))) do
+      nil -> three_decimal(items)
+      %{amount: money} -> invalid(:amount, Messages.text(:stripe_whole, currency: money.currency))
+    end
+  end
+
+  defp whole_ok?(%{amount: %Money{currency: currency} = money}) do
+    case Mapper.digits(currency) do
+      nil -> true
+      _stripe_places -> MishkaPay.Money.fits?(money, 0)
+    end
+  end
+
+  defp whole_ok?(_item), do: true
 
   # Stripe takes BHD, JOD, KWD, OMR and TND only in amounts whose last decimal is 0.
   defp three_decimal(items) do
@@ -1019,10 +1827,14 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp three_decimal_ok?(_item), do: true
 
-  defp base_url do
-    :mishka_pay
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(:base_url, @base_url)
+  # The API's address, or the files host's for an upload: its own setting, else the API's.
+  defp base_url(upload?) do
+    config = Application.get_env(:mishka_pay, __MODULE__, [])
+
+    case upload? do
+      true -> config[:files_url] || Keyword.get(config, :base_url, @files_url)
+      false -> Keyword.get(config, :base_url, @base_url)
+    end
   end
 
   @doc """

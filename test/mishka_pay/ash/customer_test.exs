@@ -58,6 +58,29 @@ defmodule MishkaPay.Ash.CustomerTest do
     assert id == first.id
   end
 
+  test "register for a person the site has already reads them again instead of making a second customer" do
+    test_pid = self()
+
+    :telemetry.attach_many(
+      "register-test",
+      [[:mishka_pay, :customer_create, :stop], [:mishka_pay, :customer, :stop]],
+      fn [_, operation, _], _measurements, _meta, _config ->
+        send(test_pid, {:called, operation})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("register-test") end)
+
+    assert {:ok, first} = register()
+    assert_received {:called, :customer_create}
+
+    assert {:ok, again} = register()
+    assert again.id == first.id
+    assert_received {:called, :customer}
+    refute_received {:called, :customer_create}
+  end
+
   test "edit sends the change to the provider and writes its answer" do
     {:ok, row} = register()
     MishkaPay.Test.start_plugin!(CustomerWatcher)
@@ -104,10 +127,42 @@ defmodule MishkaPay.Ash.CustomerTest do
     MishkaPay.Test.start_plugin!(Inbox)
     MishkaPay.Test.start_plugin!(CustomerSync)
 
+    assert deliver(%{"id" => "evt_customer", "type" => "customer.updated"}, %{
+             "id" => "cus_123",
+             "object" => "customer"
+           }) == 200
+
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    assert [%{provider: "stripe", provider_id: "cus_123", tenant: "site-a"}] =
+             Ash.read!(@customer, authorize?: false)
+
+    # A card taken off names the customer it left only in `previous_attributes`.
+    detached = %{
+      "id" => "evt_card",
+      "type" => "payment_method.detached",
+      "data" => %{"previous_attributes" => %{"customer" => "cus_456"}}
+    }
+
+    assert deliver(detached, %{"id" => "pm_1", "object" => "payment_method", "customer" => nil}) ==
+             200
+
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    assert ["cus_123", "cus_456"] =
+             @customer
+             |> Ash.read!(authorize?: false)
+             |> Enum.map(& &1.provider_id)
+             |> Enum.sort()
+  end
+
+  # A signed Stripe webhook about `object`, as Stripe posts it.
+  defp deliver(changes, object) do
     body =
       @event
-      |> Map.merge(%{"id" => "evt_customer", "type" => "customer.updated"})
-      |> put_in(["data", "object"], %{"id" => "cus_123", "object" => "customer"})
+      |> Map.merge(Map.delete(changes, "data"))
+      |> Map.update!("data", &Map.merge(&1, Map.get(changes, "data", %{})))
+      |> put_in(["data", "object"], object)
       |> JSON.encode!()
 
     time = System.system_time(:second)
@@ -120,11 +175,7 @@ defmodule MishkaPay.Ash.CustomerTest do
       )
       |> Webhook.call(Webhook.init(at: "/pay/webhooks"))
 
-    assert conn.status == 200
-    Oban.drain_queue(queue: :mishka_pay_inbox)
-
-    assert [%{provider: "stripe", provider_id: "cus_123", tenant: "site-a"}] =
-             Ash.read!(@customer, authorize?: false)
+    conn.status
   end
 
   defp sync(id) do

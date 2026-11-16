@@ -27,9 +27,7 @@ if Code.ensure_loaded?(Ash) do
 
     @impl true
     def change(changeset, opts, _context) do
-      changeset
-      |> Ash.Changeset.before_transaction(&ask(&1, opts[:operation]))
-      |> MishkaPay.Ash.announce(opts, &Sync.announce/2)
+      MishkaPay.Ash.provider_change(changeset, opts, &ask(&1, opts[:operation]), &Sync.announce/2)
     end
 
     defp ask(%{data: row} = changeset, :cancel) do

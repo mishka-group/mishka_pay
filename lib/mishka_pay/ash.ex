@@ -49,6 +49,15 @@ if Code.ensure_loaded?(Ash) do
           do: listener
     end
 
+    @doc """
+    Whether `user` has a subscription in `resource` that gives access now: see
+    `MishkaPay.Ash.Subscribed`, which is also the policy check.
+
+        MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, current_user, tenant: site.id)
+    """
+    @spec subscribed?(Ash.Resource.t(), term(), keyword()) :: boolean()
+    defdelegate subscribed?(resource, user, opts \\ []), to: MishkaPay.Ash.Subscribed
+
     @doc false
     # The `mishka_pay:<kind>:changed` announcement of a change, after its transaction, unless the
     # resource says `announce? false`.
@@ -60,6 +69,80 @@ if Code.ensure_loaded?(Ash) do
         false -> changeset
       end
     end
+
+    @doc false
+    # A kind's change: `ask` reads or writes the provider before the transaction (`read/2`), and
+    # `announce` fires after it unless the resource says `announce? false`.
+    @spec provider_change(Ash.Changeset.t(), keyword(), function(), function()) ::
+            Ash.Changeset.t()
+    def provider_change(changeset, opts, ask, announce) do
+      changeset
+      |> Ash.Changeset.before_transaction(&read(&1, ask))
+      |> announce(opts, announce)
+    end
+
+    @doc false
+    # A listener's sync of `resource` for an event: the row of object `id` (argument `id_name`), in
+    # the event's tenant; the event state with `:failed` set when it could not be written. A sync
+    # skipped for a newer read already kept counts as done.
+    @spec sync_event(module(), atom(), String.t(), MishkaPay.Event.t(), map()) :: map()
+    def sync_event(resource, id_name, id, event, state) do
+      tenant = event.tenant && to_string(event.tenant)
+      args = %{:provider => event.provider, id_name => id, :tenant => tenant}
+
+      case Ash.create(
+             resource,
+             args,
+             [action: :sync] ++ MishkaPay.Ash.Tenant.opts(resource, tenant)
+           ) do
+        {:ok, _row} ->
+          state
+
+        {:error, error} ->
+          case stale?(error) do
+            true -> state
+            false -> %{state | failed: message(error)}
+          end
+      end
+    end
+
+    @doc false
+    # The provider object a sync reads: from a `:sync` create's arguments, or from the row a
+    # `:resync` update runs on.
+    @spec object_ref(Ash.Changeset.t(), atom()) :: {String.t(), String.t(), String.t() | nil}
+    def object_ref(%{action_type: :update, data: row}, _id_argument),
+      do: {row.provider, row.provider_id, row.tenant}
+
+    def object_ref(changeset, id_argument) do
+      {Ash.Changeset.get_argument(changeset, :provider),
+       Ash.Changeset.get_argument(changeset, id_argument), MishkaPay.Ash.Tenant.of(changeset)}
+    end
+
+    @doc false
+    # Runs `ask` (the provider call of a change) and keeps when it started in `:synced_at`: the
+    # moment the provider's word was read. A `:sync` upsert writes over a row only when its read is
+    # not older (`stale?/1`), so a slow read that ends after a newer one never wins.
+    @spec read(Ash.Changeset.t(), (Ash.Changeset.t() -> Ash.Changeset.t())) :: Ash.Changeset.t()
+    def read(changeset, ask) do
+      read_at = DateTime.utc_now()
+
+      case ask.(changeset) do
+        %{valid?: true} = changeset ->
+          Ash.Changeset.force_change_attribute(changeset, :synced_at, read_at)
+
+        refused ->
+          refused
+      end
+    end
+
+    @doc """
+    Whether a `:sync` was skipped because the row holds a newer read of the provider: the sync
+    succeeded in effect, since what it would write is already older than what is kept.
+    """
+    @spec stale?(term()) :: boolean()
+    def stale?(%{errors: errors}) when is_list(errors), do: Enum.any?(errors, &stale?/1)
+    def stale?(%Ash.Error.Changes.StaleRecord{}), do: true
+    def stale?(_error), do: false
 
     @doc "A `MishkaPay.Errors` error (or any Splode error) as Ash errors, one per inner error."
     @spec to_ash_error(Exception.t()) :: [Exception.t()]

@@ -40,21 +40,7 @@ if Code.ensure_loaded?(Ash) do
     end
 
     @doc false
-    def sync(resource, event, state) do
-      args = %{
-        provider: event.provider,
-        dispute_id: event.dispute_id,
-        tenant: event.tenant && to_string(event.tenant)
-      }
-
-      case Ash.create(
-             resource,
-             args,
-             [action: :sync] ++ MishkaPay.Ash.Tenant.opts(resource, args.tenant)
-           ) do
-        {:ok, _dispute} -> state
-        {:error, error} -> %{state | failed: MishkaPay.Ash.message(error)}
-      end
-    end
+    def sync(resource, event, state),
+      do: MishkaPay.Ash.sync_event(resource, :dispute_id, event.dispute_id, event, state)
   end
 end

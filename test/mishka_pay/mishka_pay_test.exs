@@ -58,6 +58,11 @@ defmodule MishkaPayTest do
 
     assert {:error, %Errors.MissingCredentials{provider: "checkout_only"}} =
              MishkaPay.checkout(%{@checkout | provider: "checkout_only"})
+
+    for shipping <- [%{shipping_countries: ["NL"]}, %{shipping_rates: ["shr_1"]}] do
+      assert {:error, %Errors.Unsupported{provider: "checkout_only", operation: :shipping}} =
+               MishkaPay.checkout(Map.merge(%{@checkout | provider: "checkout_only"}, shipping))
+    end
   end
 
   test "the host's gate can change a checkout or refuse it before the provider sees it" do
@@ -606,6 +611,42 @@ defmodule MishkaPayTest do
 
       assert {:error, %Errors.Unsupported{operation: :subscription}} =
                MishkaPay.fetch_subscription("checkout_only", "sub_1")
+    end
+  end
+
+  test "an embedded form or a hold on the card needs its capability, asked before the provider" do
+    embedded =
+      @checkout
+      |> Map.drop([:success_url, :cancel_url])
+      |> Map.merge(%{ui_mode: :embedded, return_url: "https://shop.test/return"})
+
+    assert {:error, %Errors.Unsupported{provider: "acme", operation: :embedded_checkout}} =
+             MishkaPay.checkout(embedded)
+
+    assert {:error, %Errors.Unsupported{operation: :capture}} =
+             MishkaPay.checkout(Map.put(@checkout, :capture, :manual))
+
+    assert {:error, %Errors.Unsupported{operation: :capture}} =
+             MishkaPay.capture_payment("acme", "acme_paid", "site-a")
+
+    assert {:error, %Errors.Unsupported{operation: :capture}} =
+             MishkaPay.cancel_payment("acme", "acme_paid", "site-a")
+
+    assert {:ok, %Checkout{ui_mode: :hosted}} =
+             MishkaPay.checkout(Map.put(@checkout, :capture, "automatic"))
+  end
+
+  test "a checkout's pages fit its ui mode: two for a hosted page, one for an embedded form" do
+    embedded = Map.merge(@checkout, %{ui_mode: "embedded", return_url: "https://shop.test/r"})
+
+    for {attrs, field} <- [
+          {Map.delete(@checkout, :cancel_url), :cancel_url},
+          {Map.put(@checkout, :return_url, "https://shop.test/r"), :return_url},
+          {embedded, :success_url},
+          {Map.drop(embedded, [:success_url, :cancel_url, :return_url]), :return_url},
+          {Map.merge(@checkout, %{capture: :manual, mode: :subscription}), :capture}
+        ] do
+      assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} = MishkaPay.checkout(attrs)
     end
   end
 

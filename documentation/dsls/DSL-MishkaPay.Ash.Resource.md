@@ -148,8 +148,10 @@ Its listener syncs the dispute of each `charge.dispute.*` event.
 ## Options
 
 * `:kind` - Required. What the resource keeps: `:inbox` (each checked webhook event), `:payment`,
-  `:subscription`, `:customer` or `:dispute`.
-   Valid values are :inbox, :payment, :subscription, :customer, :dispute
+  `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin:
+  `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice`
+  (`MishkaPay.Ash.Object.Spec`).
+   Valid values are :inbox, :payment, :subscription, :customer, :dispute, :product, :price, :coupon, :promotion_code, :payment_link, :invoice
 
 * `:actions` (list of `t:atom/0`) - Only these actions of the kind, besides the primary `:read`. Every action of the kind
   when left out. An `:inbox` needs all of its own.
@@ -171,8 +173,18 @@ Its listener syncs the dispute of each `charge.dispute.*` event.
   not needed. Not for an `:inbox`, which stays global.
 
 * `:belongs_to_user` - A `:user` belongs_to relationship to the host's user resource, on `:user_id`, or on
-  another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. Rows synced from
-  webhooks have no user, so it may be nil.
+  another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. A payment or a
+  subscription gets its user from the checkout's owner, which `:start_checkout` takes from
+  the actor and every sync writes again (`MishkaPay.Ash.Owner`); a customer's `:register`
+  takes it as an input. It may be nil, for a sale with no owner.
+
+* `:resync_after` (`t:pos_integer/0`) - Hours after which a row still open at its provider is read again by an hourly AshOban
+  trigger running `:resync`, in case a webhook never came: a pending or authorized
+  payment, a subscription that has not ended, an open dispute, a draft or open bill.
+  Runs on the inbox's queue, `mishka_pay_inbox`. Off unless given.
+
+* `:keep_events_for` - For an `:inbox`: how many days a processed event is kept before its daily `:forget`
+  trigger deletes it, or `:forever`. Failed and pending events are always kept. The default value is `30`.
 
 
 
@@ -203,13 +215,15 @@ end
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`kind`](#mishka_pay-kind){: #mishka_pay-kind .spark-required} | `:inbox \| :payment \| :subscription \| :customer \| :dispute` |  | What the resource keeps: `:inbox` (each checked webhook event), `:payment`, `:subscription`, `:customer` or `:dispute`. |
+| [`kind`](#mishka_pay-kind){: #mishka_pay-kind .spark-required} | `:inbox \| :payment \| :subscription \| :customer \| :dispute \| :product \| :price \| :coupon \| :promotion_code \| :payment_link \| :invoice` |  | What the resource keeps: `:inbox` (each checked webhook event), `:payment`, `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin: `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice` (`MishkaPay.Ash.Object.Spec`). |
 | [`actions`](#mishka_pay-actions){: #mishka_pay-actions } | `list(atom)` |  | Only these actions of the kind, besides the primary `:read`. Every action of the kind when left out. An `:inbox` needs all of its own. |
 | [`listen?`](#mishka_pay-listen?){: #mishka_pay-listen? } | `boolean` | `true` | Makes `<Resource>.MishkaPayListener`, the webhook listener that keeps the resource current. `MishkaPay.Ash.listeners/1` lists them for the application's children. |
 | [`announce?`](#mishka_pay-announce?){: #mishka_pay-announce? } | `boolean` | `true` | Fires `mishka_pay:<kind>:changed` after each write the provider answered. The inbox announces nothing either way. |
 | [`code_interface?`](#mishka_pay-code_interface?){: #mishka_pay-code_interface? } | `boolean` | `true` | Defines a code interface function for each action it adds, such as `MyApp.Pay.Subscription.cancel!(row, %{at: :now})`. The inbox's `:receive` is `receive_event`. |
 | [`tenant_from`](#mishka_pay-tenant_from){: #mishka_pay-tenant_from } | `atom` |  | The host's own attribute that holds the tenant, such as `:site_id` (an attribute, or the source attribute of a `belongs_to :site`), for a host that keeps sites apart without Ash multitenancy. Each create action writes its tenant there too; the row's `:tenant` still picks the provider keys. With Ash multitenancy on that attribute, Ash fills it and this is not needed. Not for an `:inbox`, which stays global. |
-| [`belongs_to_user`](#mishka_pay-belongs_to_user){: #mishka_pay-belongs_to_user } | `atom \| {atom, keyword}` |  | A `:user` belongs_to relationship to the host's user resource, on `:user_id`, or on another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. Rows synced from webhooks have no user, so it may be nil. |
+| [`belongs_to_user`](#mishka_pay-belongs_to_user){: #mishka_pay-belongs_to_user } | `atom \| {atom, keyword}` |  | A `:user` belongs_to relationship to the host's user resource, on `:user_id`, or on another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. A payment or a subscription gets its user from the checkout's owner, which `:start_checkout` takes from the actor and every sync writes again (`MishkaPay.Ash.Owner`); a customer's `:register` takes it as an input. It may be nil, for a sale with no owner. |
+| [`resync_after`](#mishka_pay-resync_after){: #mishka_pay-resync_after } | `pos_integer` |  | Hours after which a row still open at its provider is read again by an hourly AshOban trigger running `:resync`, in case a webhook never came: a pending or authorized payment, a subscription that has not ended, an open dispute, a draft or open bill. Runs on the inbox's queue, `mishka_pay_inbox`. Off unless given. |
+| [`keep_events_for`](#mishka_pay-keep_events_for){: #mishka_pay-keep_events_for } | `pos_integer \| :forever` | `30` | For an `:inbox`: how many days a processed event is kept before its daily `:forget` trigger deletes it, or `:forever`. Failed and pending events are always kept. |
 
 
 

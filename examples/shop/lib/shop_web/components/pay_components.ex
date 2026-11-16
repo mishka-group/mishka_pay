@@ -97,7 +97,7 @@ defmodule ShopWeb.PayComponents do
               </span>
             </dd>
             <dt class="opacity-70">PayPal</dt>
-            <dd data-testid="site-paypal">coming soon</dd>
+            <dd data-testid="site-paypal">{if @paypal?, do: "sandbox keys", else: "no keys"}</dd>
           </dl>
         </div>
       </div>
@@ -201,7 +201,7 @@ defmodule ShopWeb.PayComponents do
           phx-disable-with="Opening Stripe..."
           data-testid={"buy-#{@product.slug}"}
         >
-          {if @product.interval, do: "Subscribe with Stripe", else: "Buy with Stripe"}
+          {if @product.interval, do: "Subscribe", else: "Buy"}
         </button>
         <p :if={!@open?} class="text-xs text-error">The shop is closed: the gate will refuse.</p>
       </div>
@@ -228,7 +228,9 @@ defmodule ShopWeb.PayComponents do
           <span class="fieldset-legend">Pay with</span>
           <select name="provider" class="select select-sm" data-testid="option-provider">
             <option value="stripe">Stripe</option>
-            <option value="paypal" disabled>PayPal (coming soon)</option>
+            <option value="paypal" disabled={!@paypal?}>
+              {if @paypal?, do: "PayPal", else: "PayPal (no keys)"}
+            </option>
           </select>
         </label>
         <label class="fieldset">

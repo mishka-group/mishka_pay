@@ -14,5 +14,14 @@ defmodule MishkaPay.Support.Domain do
     resource MishkaPay.Support.Customer
     resource MishkaPay.Support.Dispute
     resource MishkaPay.Support.SitePayment
+    resource MishkaPay.Support.Member
+    resource MishkaPay.Support.SiteSubscription
+    resource MishkaPay.Support.MembersPost
+    resource MishkaPay.Support.SiteProduct
+    resource MishkaPay.Support.SitePrice
+    resource MishkaPay.Support.SiteCoupon
+    resource MishkaPay.Support.SitePromotionCode
+    resource MishkaPay.Support.SitePaymentLink
+    resource MishkaPay.Support.SiteInvoice
   end
 end

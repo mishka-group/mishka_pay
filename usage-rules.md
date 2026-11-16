@@ -93,20 +93,38 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.checkout(attrs)` | `{:ok, %MishkaPay.Checkout{url: url}}`: redirect the buyer to `url` |
 | `MishkaPay.fetch_checkout(provider, checkout_id, tenant)` | the checkout read back, with `:payment_id` or `:subscription_id` once paid |
 | `MishkaPay.fetch_payment(provider, payment_id, tenant)` | `%MishkaPay.Payment{}` with status, buyer, card, refunds |
+| `MishkaPay.checkout(%{ui_mode: :embedded, return_url: url, ...})` | `%MishkaPay.Checkout{client_secret: secret}`: the provider's form inside the site's page |
+| `MishkaPay.capture_payment(provider, payment_id, tenant, amount: money)`, `cancel_payment/3` | the `%MishkaPay.Payment{}` after: a held (`:authorized`) payment taken, all or part, or let go |
 | `MishkaPay.refund(attrs)` | `%MishkaPay.Refund{}` |
+| `MishkaPay.fetch_refund(provider, refund_id, tenant)`, `list_refunds(provider, tenant, payment_id: id)` | `%MishkaPay.Refund{}` read again; a `MishkaPay.Page` of them |
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
 | `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |
 | `MishkaPay.pause_collection(provider, id, tenant, behavior: ...)`, `resume_collection/3` | stops or starts charging without cancelling |
 | `MishkaPay.fetch_invoice(provider, invoice_id, tenant)` | `%MishkaPay.Invoice{}` with its `:lines` |
+| `MishkaPay.create_invoice(attrs)` (`MishkaPay.InvoiceDraft`) | a draft `%MishkaPay.Invoice{}` for a customer, with its items |
+| `MishkaPay.finalize_invoice/3`, `send_invoice/3`, `pay_invoice(p, id, tenant, out_of_band: true)`, `void_invoice/3`, `mark_invoice_uncollectible/3`, `delete_invoice/3` | open, email, settle or end a one-off bill |
 | `MishkaPay.fetch_dispute/3`, `list_disputes/3`, `update_dispute(attrs)`, `accept_dispute/3` | `%MishkaPay.Dispute{}`: a chargeback, answered with evidence or accepted |
+| `MishkaPay.upload_file(%{provider:, tenant:, purpose: :dispute_evidence, filename:, content_type:, content:})` | `%MishkaPay.File{}`; its `:id` goes in a dispute's file evidence (`"receipt"`, `"uncategorized_file"`...) |
+| `MishkaPay.fetch_file(provider, file_id, tenant)`, `file_link(provider, file_id, tenant, expires_at: dt)` | the file read again; a `%MishkaPay.FileLink{}` whose `:url` a page can show |
 | `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` (or `customer_id:`) | a `MishkaPay.Page` of `%MishkaPay.Invoice{}` |
 | `MishkaPay.list_payments(provider, tenant, customer_id: id)` | a `MishkaPay.Page` of `%MishkaPay.Payment{}` |
 | `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |
 | `MishkaPay.update_customer(attrs)` | the customer after (`attrs` has `:provider` and `:id`) |
 | `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
 | `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | a `MishkaPay.Page` of `%MishkaPay.Customer{}` |
+| `MishkaPay.checkout(%{mode: :setup, currency: "usd", customer: %{id: id}, ...})` | a page that saves a card without a charge; read back, `:setup_intent_id` and `:payment_method_id` |
+| `MishkaPay.list_payment_methods(provider, tenant, customer_id: id)`, `fetch_payment_method/3` | a `MishkaPay.Page` of `%MishkaPay.PaymentMethod{}` (type, card brand, last4, expiry); one read again |
+| `MishkaPay.set_default_payment_method(provider, customer_id, payment_method_id, tenant)` | the `%MishkaPay.Customer{}` after, with its `:default_payment_method` |
+| `MishkaPay.detach_payment_method(provider, payment_method_id, tenant)` | the `%MishkaPay.PaymentMethod{}` taken off its customer for good |
+| `MishkaPay.create_tax_id(provider, customer_id, %{type: "eu_vat", value: "DE123456789"}, tenant)`, `list_tax_ids/4`, `delete_tax_id/4` | `%MishkaPay.TaxId{}`: a business buyer's VAT or other tax id, with its `:verification` |
+| `MishkaPay.calculate_tax(attrs)` (`MishkaPay.TaxCalculation`: `:items` of `MishkaPay.TaxLine`, `:address` or `:customer_id`, `:shipping`) | `%MishkaPay.TaxCalculation{}`: the tax on a sale outside the checkout, with `:amount_total` to charge |
+| `MishkaPay.record_tax(provider, calculation_id, reference, tenant)` | `%MishkaPay.TaxTransaction{}`: the paid sale in the provider's tax reports |
+| `MishkaPay.create_shipping_rate(attrs)`, `list_shipping_rates(provider, tenant, active: true)` | `%MishkaPay.ShippingRate{}`: a way to ship and its price, offered by id on checkouts |
+| `MishkaPay.list_events(provider, tenant, since: dt, types: [...])` | a `MishkaPay.Page` of `%MishkaPay.Event{}` |
+| `MishkaPay.replay_events(provider, tenant, since: dt)` | `%{delivered: n, failed: [{id, reason}]}`: missed events handed to the listeners again |
+| `MishkaPay.Check.run(tenant: t, webhook_url: url, domain: MyApp.Pay)` | `[{check, :ok \| {:error, reason}}]`: the site's setup |
 | `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
 | `MishkaPay.expire_checkout(provider, checkout_id, tenant)` | the checkout, `status: :expired`: it can no longer be paid |
 | `MishkaPay.create_coupon(attrs)`, `fetch_coupon/3`, `list_coupons/3`, `delete_coupon/3` | `%MishkaPay.Coupon{}` |
@@ -114,6 +132,15 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_product(attrs)`, `fetch_product/3`, `update_product/1`, `archive_product/3`, `list_products/3` | `%MishkaPay.Product{}` |
 | `MishkaPay.create_price(attrs)`, `fetch_price/3`, `archive_price/3`, `list_prices/3` | `%MishkaPay.Price{}` |
 | `MishkaPay.create_payment_link(attrs)`, `fetch_payment_link/3`, `update_payment_link/1`, `list_payment_links/3` | `%MishkaPay.PaymentLink{url: url}` |
+| `MishkaPay.create_meter(attrs)` (`MishkaPay.Meter`), `list_meters(provider, tenant, status: :active)`, `deactivate_meter/3` | `%MishkaPay.Meter{}` that counts usage; a provider never deletes one |
+| `MishkaPay.create_price(%{..., interval: :month, meter_id: id})` | a `%MishkaPay.Price{}` billed by the usage its meter counted |
+| `MishkaPay.report_usage(attrs)` (`MishkaPay.Usage`: `:event_name`, `:customer_id`, `:value`, `:at`, `:reference`) | `%MishkaPay.Usage{id: id}`; the same reference never counts twice |
+| `MishkaPay.usage_summary(provider, meter_id, customer_id, from, to, tenant)` | `%MishkaPay.UsageSummary{value: n}`: what the meter counted in the window |
+| `MishkaPay.create_feature(attrs)` (`MishkaPay.Feature`), `attach_feature(provider, product_id, feature_id, tenant)` | `%MishkaPay.Feature{}`; a buyer of the product is entitled to it |
+| `MishkaPay.list_entitlements(provider, customer_id, tenant)` | a `MishkaPay.Page` of `%MishkaPay.Entitlement{lookup_key: key}`: what the customer may use now |
+| `MishkaPay.fetch_balance(provider, tenant)` | `%MishkaPay.Balance{available: [money], pending: [money]}`, one money per currency |
+| `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` | a `MishkaPay.Page` of `%MishkaPay.BalanceTransaction{}` (amount, fee, net, type, source) |
+| `MishkaPay.adjust_customer_balance(provider, customer_id, money, tenant, description: d, reference: r)`, `list_customer_balance/4` | `%MishkaPay.CustomerBalanceTransaction{}`: below zero is store credit |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every
@@ -151,7 +178,18 @@ redirect(conn, external: checkout.url)
   `nil` and answer the same keys for every tenant.
 - A **subscription** is a checkout with `mode: :subscription`, items with `interval:` and an
   optional `trial_days:`. See `usage-rules/subscriptions.md`.
+- A **saved card** is a checkout with `mode: :setup` and a `currency:`, without items. It needs a
+  provider with `:payment_method`. Name the customer with `customer: %{id: id}`, or the provider
+  makes one. Options of a sale (discounts, tax, trial, invoice) are refused in setup mode.
 - A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
+- **Embedded:** `ui_mode: :embedded` shows the provider's form inside the site's own page. It takes
+  one `return_url` instead of `success_url` and `cancel_url`, and answers `:client_secret` (no
+  `:url`). Give the secret to that buyer's page only; Stripe.js mounts the form with it. The
+  provider needs `:embedded_checkout`.
+- **Pay later:** `capture: :manual` (one-time checkouts only) holds the money on the card. The
+  payment reads `:authorized` until `capture_payment/4` takes it (all, or `amount:`) or
+  `cancel_payment/3` lets it go. A hold ends by itself after some days (Stripe: 7). The provider
+  needs `:capture`.
 - A checkout's `customer:` names the buyer by `id` (a customer made with `create_customer/1`) or by
   `email`, never both.
 
@@ -182,6 +220,11 @@ MishkaPay.checkout(%{
 - A coupon takes `percent_off` (more than 0, at most 100) or `amount_off` (money), one of them;
   `duration: :repeating` needs `duration_in_months`.
 - A checkout read back has `amount_discount` beside `amount_total` and `amount_tax`.
+- A checkout that ships: `shipping_countries: ["NL", "DE"]` asks for the address, and
+  `shipping_rates: ["shr_...", %{name: "Post", amount: money, min_days: 2, max_days: 5}]` are the
+  choices (one-time checkouts only; the provider needs `:shipping`). Read back,
+  `:shipping_address` (a `MishkaPay.Address`), `:shipping_rate_id` and `:amount_shipping` say
+  where it goes and what shipping cost.
 - `expire_checkout/3` ends an open checkout when the buyer walks away, so held stock is free again.
 - A provider refuses an option it cannot send (`Errors.Unsupported`); it never drops one.
 

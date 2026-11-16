@@ -13,14 +13,17 @@ In Stripe's Dashboard, point each site's endpoint at
 |---|---|
 | `checkout.session.completed` | the payment, or the subscription it started |
 | `checkout.session.expired`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` | the payment |
-| `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.processing`, `payment_intent.requires_action` | the payment |
-| `charge.succeeded`, `charge.failed`, `charge.refunded` | the payment |
+| `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.processing`, `payment_intent.requires_action`, `payment_intent.amount_capturable_updated` | the payment |
+| `charge.succeeded`, `charge.failed`, `charge.refunded`, `charge.captured`, `charge.expired` | the payment |
 | `refund.created`, `refund.updated`, `refund.failed` | the payment |
 | `invoice_payment.paid` | the payment an invoice was paid with |
 | `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`, `charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated` | the dispute and its payment |
-| `invoice.paid`, `invoice.payment_failed`, `invoice.finalized` | the subscription |
+| `invoice.paid`, `invoice.payment_failed`, `invoice.finalized`, `invoice.payment_action_required`, `invoice.voided`, `invoice.marked_uncollectible`, `invoice.overdue`, `invoice.upcoming` | the subscription |
 | `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.trial_will_end` | the subscription |
 | `customer.created`, `customer.updated`, `customer.deleted` | the customer |
+| `setup_intent.succeeded`, `setup_intent.setup_failed`, `payment_method.attached`, `payment_method.detached`, `payment_method.updated`, `payment_method.automatically_updated` | the customer the setup or the payment method names |
+| `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed |
+| `customer.tax_id.created`, `customer.tax_id.updated`, `customer.tax_id.deleted` | the customer the tax id belongs to |
 
 Each listed event is tested to name what it updates. Any other event is verified and stored, and
 changes nothing.

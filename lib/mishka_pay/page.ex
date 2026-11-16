@@ -59,4 +59,26 @@ defmodule MishkaPay.Page do
       fn _state -> :ok end
     )
   end
+
+  @doc """
+  Every item a list call gives, read page by page until the last: `{:ok, items}`, or the first
+  error, without raising. For lists a caller means to read whole, such as the events a site
+  missed (`MishkaPay.replay_events/3`).
+  """
+  @spec all((keyword() -> {:ok, t()} | {:error, Exception.t()})) ::
+          {:ok, list()} | {:error, Exception.t()}
+  def all(list) when is_function(list, 1), do: all(list, [], [])
+
+  defp all(list, opts, acc) do
+    case list.(opts) do
+      {:ok, %__MODULE__{items: items, has_more: true, next: next}} when is_binary(next) ->
+        all(list, [after: next], [items | acc])
+
+      {:ok, %__MODULE__{items: items}} ->
+        {:ok, [items | acc] |> Enum.reverse() |> Enum.concat()}
+
+      {:error, _error} = error ->
+        error
+    end
+  end
 end

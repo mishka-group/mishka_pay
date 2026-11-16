@@ -10,6 +10,8 @@ defmodule MishkaPay.Ash.SubscriptionTest do
   import Plug.Conn
   import Plug.Test
 
+  require Ecto.Query
+
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.{Subscription, Webhook}
   alias MishkaPay.Support.{StripeMock, SubscriptionWatcher}
@@ -140,5 +142,36 @@ defmodule MishkaPay.Ash.SubscriptionTest do
 
     assert [%{provider_id: "sub_123", tenant: "site-a"}] =
              Ash.read!(@subscription, authorize?: false)
+  end
+
+  test "a subscription not read for six hours is read again by its hourly trigger, and :resync refreshes one row" do
+    {:ok, row} = sync()
+
+    MishkaPay.Support.Repo.update_all(
+      Ecto.Query.from(s in "pay_subscriptions", where: s.id == type(^row.id, :binary_id)),
+      set: [synced_at: DateTime.add(DateTime.utc_now(), -7, :hour)]
+    )
+
+    assert %{failure: 0, discard: 0} =
+             AshOban.Test.schedule_and_run_triggers({@subscription, :resync})
+
+    [fresh] = Ash.read!(@subscription, authorize?: false)
+    assert DateTime.diff(DateTime.utc_now(), fresh.synced_at, :minute) < 1
+
+    assert {:ok, %{synced_at: again}} =
+             fresh |> Ash.Changeset.for_update(:resync, %{}) |> Ash.update(authorize?: false)
+
+    assert DateTime.compare(again, fresh.synced_at) in [:gt, :eq]
+  end
+
+  test "an admin page reads a subscription row's next bill and what a plan change would bill" do
+    {:ok, row} = sync()
+
+    for {action, args} <- [upcoming_invoice: %{}, preview_change: %{price_id: "price_123"}] do
+      assert {:ok, %MishkaPay.Invoice{}} =
+               @subscription
+               |> Ash.ActionInput.for_action(action, Map.put(args, :id, row.id))
+               |> Ash.run_action(authorize?: false)
+    end
   end
 end

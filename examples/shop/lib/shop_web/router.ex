@@ -19,6 +19,8 @@ defmodule ShopWeb.Router do
 
     live "/", ShopLive
     live "/sell", SellLive
+    post "/member", MemberController, :sign_in
+    delete "/member", MemberController, :sign_out
   end
 
   # Other scopes may use custom stacks.
