@@ -26,6 +26,39 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @reference "mishka_pay_reference"
 
+  # Where Stripe counts a currency in other places than ISO 4217: ISK and UGX as two-decimal
+  # amounts ending in 00, MGA as zero-decimal (docs.stripe.com/currencies).
+  @digits %{ISK: 2, UGX: 2, MGA: 0}
+
+  @doc """
+  The decimal places Stripe counts `currency` in when they differ from ISO 4217 (ISK and UGX: 2,
+  MGA: 0), or `nil` for the ISO ones.
+  """
+  @spec digits(atom()) :: non_neg_integer() | nil
+  def digits(currency), do: Map.get(@digits, currency)
+
+  @doc "Stripe's integer `amount` for `money`, in the places Stripe counts its currency in."
+  @spec minor(Money.t()) :: integer()
+  def minor(%{currency: currency} = money) do
+    case digits(currency) do
+      nil -> Money.to_minor(money)
+      digits -> Money.to_minor(money, digits)
+    end
+  end
+
+  # Money from Stripe's integer amount, read in the places Stripe counts the currency in. Stripe
+  # names currencies in lower case.
+  defp from_stripe(minor, currency) when is_integer(minor) and is_binary(currency) do
+    case Enum.find(@digits, fn {code, _digits} ->
+           Atom.to_string(code) == String.upcase(currency)
+         end) do
+      nil -> Money.from_minor(minor, currency)
+      {_code, digits} -> Money.from_minor(minor, currency, digits)
+    end
+  end
+
+  defp from_stripe(minor, currency), do: Money.from_minor(minor, currency)
+
   @checkout_statuses %{"open" => :open, "complete" => :complete, "expired" => :expired}
 
   @refund_reasons %{
@@ -129,7 +162,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "price_data" =>
         %{
           "currency" => amount.currency |> to_string() |> String.downcase(),
-          "unit_amount" => Money.to_minor(amount),
+          "unit_amount" => minor(amount),
           "product_data" => %{"name" => name, "tax_code" => tax_code},
           "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
         }
@@ -186,7 +219,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp buyer(_none), do: nil
 
   defp money(minor, currency) when is_integer(minor) and is_binary(currency) do
-    case Money.from_minor(minor, currency) do
+    case from_stripe(minor, currency) do
       {:ok, money} -> money
       {:error, _odd} -> nil
     end
@@ -195,7 +228,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp money(_minor, _currency), do: nil
 
   defp signed_money(minor, currency) when is_integer(minor) and is_binary(currency) do
-    case Money.signed_from_minor(minor, currency) do
+    case from_stripe(abs(minor), currency) do
+      {:ok, money} when minor < 0 -> Elixir.Money.negate!(money)
       {:ok, money} -> money
       {:error, _odd} -> nil
     end
@@ -211,8 +245,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   def payment(intent) do
     charge = expanded(intent["latest_charge"])
 
-    with {:ok, amount} <- Money.from_minor(intent["amount"], intent["currency"]),
-         {:ok, refunded} <- Money.from_minor(charge["amount_refunded"] || 0, intent["currency"]) do
+    with {:ok, amount} <- from_stripe(intent["amount"], intent["currency"]),
+         {:ok, refunded} <- from_stripe(charge["amount_refunded"] || 0, intent["currency"]) do
       %{
         provider: "stripe",
         id: intent["id"],
@@ -518,7 +552,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   def refund_params(%Refund{} = refund) do
     %{
       "payment_intent" => refund.payment_id,
-      "amount" => refund.amount && Money.to_minor(refund.amount),
+      "amount" => refund.amount && minor(refund.amount),
       "reason" => refund.reason && Atom.to_string(refund.reason),
       "metadata" => refund.reference && %{@reference => refund.reference}
     }
@@ -527,7 +561,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc "The refund with Stripe's answer: its id, status, amount and time."
   @spec refund(map(), Refund.t()) :: {:ok, Refund.t()} | {:error, Splode.Error.t()}
   def refund(answer, %Refund{} = refund) do
-    with {:ok, amount} <- Money.from_minor(answer["amount"], answer["currency"]) do
+    with {:ok, amount} <- from_stripe(answer["amount"], answer["currency"]) do
       {:ok,
        %{
          refund
@@ -627,7 +661,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "id" => coupon.id,
       "name" => coupon.name,
       "percent_off" => coupon.percent_off && Decimal.to_string(coupon.percent_off, :normal),
-      "amount_off" => coupon.amount_off && Money.to_minor(coupon.amount_off),
+      "amount_off" => coupon.amount_off && minor(coupon.amount_off),
       "currency" => coupon.amount_off && lower_currency(coupon.amount_off),
       "duration" => Atom.to_string(coupon.duration),
       "duration_in_months" => coupon.duration_in_months,
@@ -681,7 +715,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp restrictions(%PromotionCode{first_time_transaction: first, minimum_amount: minimum}) do
     %{
       "first_time_transaction" => first,
-      "minimum_amount" => minimum && Money.to_minor(minimum),
+      "minimum_amount" => minimum && minor(minimum),
       "minimum_amount_currency" => minimum && lower_currency(minimum)
     }
   end
@@ -753,7 +787,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     %{
       "product" => price.product_id,
       "currency" => lower_currency(price.amount),
-      "unit_amount" => Money.to_minor(price.amount),
+      "unit_amount" => minor(price.amount),
       "nickname" => price.name,
       "lookup_key" => price.lookup_key,
       "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior),

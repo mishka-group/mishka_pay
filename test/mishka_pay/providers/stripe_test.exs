@@ -929,11 +929,52 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_promotion_code("stripe", "cus_123")
     end
 
-    test "a currency Stripe counts differently from ISO 4217 is refused, not charged wrong" do
-      huf = %{@checkout | items: [%{name: "Ebook", amount: %{amount: "1000", currency: "HUF"}}]}
+    test "a currency Stripe counts differently from ISO 4217 goes as Stripe counts it, and a fraction of one is refused" do
+      test_pid = self()
 
-      assert {:error, %Errors.Unsupported{provider: "stripe", operation: "checkout in HUF"}} =
-               MishkaPay.checkout(huf)
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+
+        send(
+          test_pid,
+          {:sent, params["line_items[0][price_data][currency]"],
+           params["line_items[0][price_data][unit_amount]"]}
+        )
+
+        Req.Test.json(conn, %{
+          "id" => "cs_1",
+          "url" => "https://checkout.stripe.com/c/pay/cs_1",
+          "status" => "open",
+          "currency" => params["line_items[0][price_data][currency]"],
+          "amount_total" => String.to_integer(params["line_items[0][price_data][unit_amount]"])
+        })
+      end)
+
+      for {currency, amount, sent, read} <- [
+            {"ISK", "5", "500", "5"},
+            {"UGX", "3000", "300000", "3000"},
+            {"MGA", "1000", "1000", "1000"},
+            {"HUF", "10.45", "1045", "10.45"},
+            {"TWD", "800", "80000", "800"}
+          ] do
+        item = %{name: "Ebook", amount: %{amount: amount, currency: currency}}
+
+        assert {:ok, %Checkout{amount_total: total}} =
+                 MishkaPay.checkout(%{@checkout | items: [item]})
+
+        downcased = String.downcase(currency)
+        assert_received {:sent, ^downcased, ^sent}
+        assert Elixir.Money.equal?(total, Elixir.Money.new(currency, read))
+      end
+
+      mga = %{name: "Ebook", amount: %{amount: "10.50", currency: "MGA"}}
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount, message: message}]}} =
+               MishkaPay.checkout(%{@checkout | items: [mga]})
+
+      assert message =~ "MGA"
+      refute_received {:sent, _currency, _amount}
     end
 
     test "Stripe's 402 for a card it declined is a decline with Stripe's code" do

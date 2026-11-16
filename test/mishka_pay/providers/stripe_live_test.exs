@@ -547,6 +547,34 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
+  test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do
+    run = System.unique_integer([:positive])
+
+    assert {:ok, %MishkaPay.Product{id: product_id}} =
+             MishkaPay.create_product(%{provider: "stripe", name: "Live currencies #{run}"})
+
+    on_exit(fn -> MishkaPay.archive_product("stripe", product_id) end)
+
+    for {currency, amount} <- [
+          {"ISK", "500"},
+          {"UGX", "3000"},
+          {"MGA", "10000"},
+          {"HUF", "175.50"}
+        ] do
+      assert {:ok, %MishkaPay.Price{id: price_id, amount: made}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 product_id: product_id,
+                 amount: %{amount: amount, currency: currency}
+               })
+
+      assert {:ok, %MishkaPay.Price{amount: read}} = MishkaPay.fetch_price("stripe", price_id)
+      assert Money.equal?(made, Money.new(currency, amount))
+      assert Money.equal?(read, Money.new(currency, amount))
+      MishkaPay.archive_price("stripe", price_id)
+    end
+  end
+
   test "a one-time payment link, a checkout with its invoice, and prices that hold or add the tax" do
     run = System.unique_integer([:positive])
 

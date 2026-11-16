@@ -75,6 +75,7 @@ defmodule MishkaPay.Messages do
           | :refund_reference
           | :stripe_metadata
           | :stripe_three_decimal
+          | :stripe_whole
           | :declined
           | :declined_reason
           | :missing_keys
@@ -392,6 +393,9 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The metadata field is over Stripe's limits: 49 keys of 40 characters, values of 500"
       )
+
+  defp msgid(:stripe_whole),
+    do: dgettext_noop("mishka_pay", "Stripe takes %{currency} only in whole units")
 
   defp msgid(:stripe_three_decimal),
     do:

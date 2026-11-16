@@ -106,6 +106,17 @@ defmodule MishkaPay.Money do
   end
 
   @doc """
+  Like `from_minor/2`, for a provider that counts `currency` in `digits` places rather than its
+  ISO 4217 ones: Stripe sends 500 for 5 Icelandic krónur (`from_minor(500, "ISK", 2)`).
+  """
+  @spec from_minor(integer(), String.t() | atom(), non_neg_integer()) ::
+          {:ok, Money.t()} | {:error, Splode.Error.t()}
+  def from_minor(minor, currency, digits)
+      when is_integer(minor) and minor >= 0 and is_integer(digits) and digits >= 0 do
+    1 |> Decimal.new(minor, -digits) |> Decimal.normalize() |> new(currency)
+  end
+
+  @doc """
   Like `from_minor/2`, for an amount that may be below zero (an invoice's credit line); a
   negative one keeps its sign. Payments and prices never take this.
   """
@@ -123,6 +134,21 @@ defmodule MishkaPay.Money do
     {_currency, minor, _exponent, _remainder} = Money.to_integer_exp(money)
     minor
   end
+
+  @doc """
+  The amount in `digits` places of its unit, for a provider that counts the currency other than
+  ISO 4217 does: 5 Icelandic krónur is 500 at Stripe (`to_minor(money, 2)`). The amount has no
+  more places than `digits`; a checked call refuses it before (`fits?/2`).
+  """
+  @spec to_minor(Money.t(), non_neg_integer()) :: integer()
+  def to_minor(%Money{amount: amount}, digits) when is_integer(digits) and digits >= 0 do
+    amount |> Decimal.mult(Decimal.new(1, 1, digits)) |> Decimal.round(0) |> Decimal.to_integer()
+  end
+
+  @doc "Whether `money` fits in `digits` decimal places, such as whole units for `0`."
+  @spec fits?(Money.t(), non_neg_integer()) :: boolean()
+  def fits?(%Money{amount: amount}, digits) when is_integer(digits) and digits >= 0,
+    do: Decimal.equal?(Decimal.round(amount, digits), amount)
 
   defp currency(code) when is_binary(code) or is_atom(code) do
     case code |> to_string() |> String.trim() |> String.upcase() |> Money.validate_currency() do

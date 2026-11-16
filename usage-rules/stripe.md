@@ -24,8 +24,9 @@
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
   `cus_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
-- Refused as `Errors.Unsupported`: HUF, TWD, ISK, UGX, MGA (Stripe counts them differently from
-  ISO 4217). BHD, JOD, KWD, OMR and TND only with a last decimal of 0.
+- ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
+  Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
+  with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
 - Metadata: at most 49 keys of 40 characters, values of 500, string keys and values.
 
 ## Payments as Mishka Pay reads them

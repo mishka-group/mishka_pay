@@ -83,4 +83,22 @@ defmodule MishkaPay.MoneyTest do
     assert message =~ "exact"
     assert {:error, :price, _message} = Money.field(:price, "5 USD")
   end
+
+  test "a provider that counts a currency in other places than ISO 4217 converts both ways" do
+    {:ok, isk} = Money.new("5", "ISK")
+    assert Money.to_minor(isk, 2) == 500
+    assert {:ok, ^isk} = Money.from_minor(500, "ISK", 2)
+
+    {:ok, mga} = Money.new("1000", "MGA")
+    assert Money.to_minor(mga) == 100_000
+    assert Money.to_minor(mga, 0) == 1000
+    assert {:ok, ^mga} = Money.from_minor(1000, "MGA", 0)
+
+    assert Money.fits?(mga, 0)
+    {:ok, part} = Money.new("10.50", "MGA")
+    refute Money.fits?(part, 0)
+
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :amount}]}} =
+             Money.from_minor(550, "ISK", 2)
+  end
 end

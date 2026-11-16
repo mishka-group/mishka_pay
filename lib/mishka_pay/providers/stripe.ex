@@ -48,9 +48,10 @@ defmodule MishkaPay.Providers.Stripe do
   Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
   and other errors as `MishkaPay.Errors.Rejected` with its code and status.
 
-  Stripe counts a few currencies differently from ISO 4217 (HUF, TWD, ISK, UGX, MGA); a checkout or
-  refund in one of them is refused as `MishkaPay.Errors.Unsupported` rather than charged wrong. It
-  takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 49 keys of 40
+  Stripe counts a few currencies differently from ISO 4217: ISK and UGX as two-decimal amounts
+  ending in 00, and MGA as zero-decimal. Mishka Pay sends and reads them as Stripe counts them,
+  and refuses a fraction of one before any request. HUF and TWD charge with two decimals like
+  other currencies (Stripe pays them out in whole units). It takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 49 keys of 40
   characters with values of 500; anything past that is an `:invalid` error before any request.
 
   A refund first reads the payment. A tenant that refunds once is refused a second refund, and a
@@ -100,7 +101,6 @@ defmodule MishkaPay.Providers.Stripe do
 
   @version "2026-10-28.endive"
   @base_url "https://api.stripe.com"
-  @odd_currencies ~w(HUF TWD ISK UGX MGA)a
   @three_decimal ~w(BHD JOD KWD OMR TND)a
 
   @handled %{
@@ -154,7 +154,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def checkout(%Checkout{} = checkout, keys) do
-    with :ok <- currencies(checkout.items, :checkout),
+    with :ok <- currencies(checkout.items),
          :ok <- metadata(checkout.metadata),
          :ok <- expiry(checkout.expires_at),
          {:ok, session} <-
@@ -203,7 +203,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def refund(%Refund{} = refund, keys) do
     with :ok <- stripe_id(refund.payment_id, "pi_", :payment_id),
-         :ok <- currencies([refund], :refund),
+         :ok <- currencies([refund]),
          {:ok, key} <- ProviderKit.refund_key(refund, keys),
          {:ok, payment} <- fetch_payment(refund.payment_id, keys),
          :ok <- ProviderKit.refundable(refund, payment, keys),
@@ -527,7 +527,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def create_price(%Price{} = price, keys) do
     with :ok <- plain_id(price.product_id, :product_id),
-         :ok <- currencies([price], :price),
+         :ok <- currencies([price]),
          :ok <- metadata(price.metadata),
          {:ok, answer} <- request(:post, "/v1/prices", Mapper.price_params(price), keys) do
       Mapper.price(answer)
@@ -936,7 +936,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Money off or a minimum in a currency Stripe counts its own way is refused, like a price.
   defp money_off(nil), do: :ok
-  defp money_off(money), do: currencies([%{amount: money}], :discount)
+  defp money_off(money), do: currencies([%{amount: money}])
 
   # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
   # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
@@ -982,25 +982,23 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp invalid(field, message), do: ProviderKit.invalid(field, message)
 
-  defp currencies(items, operation) do
-    odd =
-      for %{amount: %Money{currency: currency}} <- items,
-          currency in @odd_currencies,
-          uniq: true,
-          do: currency
-
-    case odd do
-      [] ->
-        three_decimal(items)
-
-      [currency | _] ->
-        {:error,
-         Errors.Unsupported.exception(
-           provider: "stripe",
-           operation: "#{operation} in #{currency}"
-         )}
+  # Stripe counts ISK, UGX and MGA in whole units only, and BHD, JOD, KWD, OMR and TND with a last
+  # decimal of 0; an amount Stripe would read otherwise is refused before any request.
+  defp currencies(items) do
+    case Enum.find(items, &(not whole_ok?(&1))) do
+      nil -> three_decimal(items)
+      %{amount: money} -> invalid(:amount, Messages.text(:stripe_whole, currency: money.currency))
     end
   end
+
+  defp whole_ok?(%{amount: %Money{currency: currency} = money}) do
+    case Mapper.digits(currency) do
+      nil -> true
+      _stripe_places -> MishkaPay.Money.fits?(money, 0)
+    end
+  end
+
+  defp whole_ok?(_item), do: true
 
   # Stripe takes BHD, JOD, KWD, OMR and TND only in amounts whose last decimal is 0.
   defp three_decimal(items) do
