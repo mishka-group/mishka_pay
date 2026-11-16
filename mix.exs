@@ -44,7 +44,8 @@ defmodule MishkaPay.MixProject do
     [
       licenses: ["Apache-2.0"],
       maintainers: ["Shahryar Tavakkoli"],
-      files: ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README*),
+      files:
+        ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* usage-rules.md usage-rules),
       links: %{
         "GitHub" => @source_url,
         "Sponsor" => "https://github.com/sponsors/mishka-group",
