@@ -25,6 +25,15 @@ field or a function.
 
 ## Setup in a host project
 
+The installer does all of this in a Phoenix project, and never twice:
+
+```bash
+mix igniter.install mishka_pay            # provider, keys plugin, webhook plug, test config
+mix igniter.install mishka_pay --ash --pubsub   # plus the Ash resources and the PubSub plugin
+```
+
+By hand:
+
 ```elixir
 # mix.exs
 {:mishka_pay, "~> 0.0.1"}

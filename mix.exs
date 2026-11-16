@@ -93,6 +93,8 @@ defmodule MishkaPay.MixProject do
       {:ash, "~> 3.37", optional: true},
       # The inbox processes each webhook event as an AshOban job, with retries.
       {:ash_oban, "~> 0.10.3", optional: true},
+      # `mix igniter.install mishka_pay` sets a host up (`Mix.Tasks.MishkaPay.Install`).
+      {:igniter, "~> 0.8", optional: true},
       # The Ash layer's own tests keep their resources in Postgres, as a host does.
       {:ash_postgres, "~> 2.15", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
