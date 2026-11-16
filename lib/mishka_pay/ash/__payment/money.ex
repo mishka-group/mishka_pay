@@ -16,9 +16,11 @@ if Code.ensure_loaded?(Ash) do
 
     @impl true
     def calculate(records, opts, _context) do
-      Enum.map(records, fn record ->
-        Money.new(record.currency, Map.fetch!(record, opts[:field]))
-      end)
+      Enum.map(records, &money(&1.currency, Map.fetch!(&1, opts[:field])))
     end
+
+    # An amount the provider has not given yet (a hold not captured, a bill not counted) is nil.
+    defp money(currency, amount) when is_nil(currency) or is_nil(amount), do: nil
+    defp money(currency, amount), do: Money.new(currency, amount)
   end
 end

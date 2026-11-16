@@ -13,7 +13,8 @@ defmodule MishkaPay.Providers.Stripe.WebhookEndpoint do
 
       {:ok, %{endpoint: endpoint, missing: []}} = WebhookEndpoint.check("site-42", url)
 
-  `ensure/2` makes the endpoint when the account has none at that URL, or adds the events it
+  The URL is an `https` address, or `http` on `localhost`; anything else is refused before any
+  request. `ensure/2` makes the endpoint when the account has none at that URL, or adds the events it
   lacks to the one it has; it never removes events another part of the site may need. `check/2`
   changes nothing and says which events the endpoint at that URL does not send.
   """
@@ -35,7 +36,8 @@ defmodule MishkaPay.Providers.Stripe.WebhookEndpoint do
   @doc "The endpoint at `url` with every event Mishka Pay acts on: made, or its events added."
   @spec ensure(term(), String.t()) :: {:ok, t()} | {:error, Splode.Error.t()}
   def ensure(tenant, url) when is_binary(url) do
-    with {:ok, keys} <- Credentials.fetch("stripe", tenant),
+    with :ok <- address(url),
+         {:ok, keys} <- Credentials.fetch("stripe", tenant),
          {:ok, found} <- find(url, keys) do
       case found do
         nil -> create(url, keys)
@@ -51,7 +53,8 @@ defmodule MishkaPay.Providers.Stripe.WebhookEndpoint do
   @spec check(term(), String.t()) ::
           {:ok, %{endpoint: t() | nil, missing: [String.t()]}} | {:error, Splode.Error.t()}
   def check(tenant, url) when is_binary(url) do
-    with {:ok, keys} <- Credentials.fetch("stripe", tenant),
+    with :ok <- address(url),
+         {:ok, keys} <- Credentials.fetch("stripe", tenant),
          {:ok, endpoint} <- find(url, keys) do
       {:ok, %{endpoint: endpoint, missing: missing(endpoint)}}
     end
@@ -71,6 +74,17 @@ defmodule MishkaPay.Providers.Stripe.WebhookEndpoint do
         :endpoint_id,
         MishkaPay.Messages.text(:stripe_id, field: :endpoint_id, prefix: "we_")
       )
+
+  # Stripe sends webhooks to an https address; a local one over http is fine for a sandbox.
+  defp address(url) do
+    case MishkaPay.Checkout.return_url(:url, url) do
+      {:ok, :url, _url} ->
+        :ok
+
+      {:error, :url, _message} ->
+        MishkaPay.ProviderKit.invalid(:url, MishkaPay.Messages.text(:endpoint_url))
+    end
+  end
 
   defp find(url, keys) do
     with {:ok, %{"data" => endpoints}} <-

@@ -282,4 +282,32 @@ defmodule MishkaPay.Ash.PaymentTest do
              |> Ash.ActionInput.for_action(:refunds, %{id: row.id})
              |> Ash.run_action(authorize?: false)
   end
+
+  test "a held payment captured in part keeps what was taken beside what was asked" do
+    MishkaPay.Test.stub_http(fn
+      %{request_path: "/v1/checkout/sessions"} = conn ->
+        Req.Test.json(conn, %{"object" => "list", "data" => [], "has_more" => false})
+
+      conn ->
+        Req.Test.json(conn, %{
+          "id" => "pi_held",
+          "object" => "payment_intent",
+          "amount" => 2000,
+          "amount_received" => 1250,
+          "currency" => "usd",
+          "status" => "succeeded",
+          "latest_charge" => %{
+            "amount_captured" => 1250,
+            "amount_refunded" => 0,
+            "refunds" => %{"data" => []}
+          },
+          "metadata" => %{}
+        })
+    end)
+
+    {:ok, row} = sync(%{payment_id: "pi_held"})
+    row = Ash.load!(row, [:money, :money_captured])
+    assert Money.equal?(row.money, Money.new(:USD, "20.00"))
+    assert Money.equal?(row.money_captured, Money.new(:USD, "12.50"))
+  end
 end

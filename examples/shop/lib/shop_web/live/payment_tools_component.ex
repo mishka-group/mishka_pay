@@ -18,7 +18,7 @@ defmodule ShopWeb.PaymentToolsComponent do
   def mount(socket) do
     {:ok,
      socket
-     |> assign(loaded?: false, refunds: nil, refund: nil)
+     |> assign(loaded?: false, refunds: nil, refund: nil, refund_error: nil)
      |> stream_configure(:payments, dom_id: &"payment-tools-#{&1.id}")}
   end
 
@@ -73,10 +73,11 @@ defmodule ShopWeb.PaymentToolsComponent do
   def handle_event("read_refund", %{"refund_id" => value}, socket) do
     with {:ok, refund_id} <- refund_id(value),
          {:ok, refund} <- MishkaPay.fetch_refund("stripe", refund_id, socket.assigns.tenant) do
-      {:noreply, assign(socket, refund: refund)}
+      {:noreply, assign(socket, refund: refund, refund_error: nil)}
     else
       {:error, error} ->
-        {:noreply, socket |> assign(refund: nil) |> say(:error, MishkaPay.Ash.message(error))}
+        message = if is_binary(error), do: error, else: MishkaPay.Ash.message(error)
+        {:noreply, socket |> assign(refund: nil, refund_error: message) |> say(:error, message)}
     end
   end
 
@@ -100,6 +101,9 @@ defmodule ShopWeb.PaymentToolsComponent do
           />
           <button class="btn btn-sm join-item" data-testid="read-refund-submit">Read refund</button>
         </form>
+        <p :if={@refund_error} class="alert alert-error text-sm" data-testid="read-refund-error">
+          {@refund_error}
+        </p>
       </div>
       <p class="text-sm opacity-70">
         Each payment's refunds as Stripe lists them. A payment bought with "Pay later" (Checkout
@@ -282,8 +286,19 @@ defmodule ShopWeb.PaymentToolsComponent do
     |> Ash.read!(authorize?: false)
   end
 
-  defp amount(%{amount: amount, currency: currency}),
-    do: currency |> Money.new(amount) |> Money.to_string!()
+  # A hold taken in part shows what was taken beside what was asked.
+  defp amount(%{amount: amount, amount_captured: captured, currency: currency})
+       when not is_nil(captured) do
+    case Decimal.equal?(captured, amount) do
+      true ->
+        money(Money.new(currency, amount))
+
+      false ->
+        "#{money(Money.new(currency, captured))} taken of #{money(Money.new(currency, amount))}"
+    end
+  end
+
+  defp amount(%{amount: amount, currency: currency}), do: money(Money.new(currency, amount))
 
   defp money(nil), do: "–"
   defp money(money), do: Money.to_string!(money)
