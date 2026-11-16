@@ -153,6 +153,30 @@ defmodule MishkaPay.Providers.Stripe do
   @spec version() :: String.t()
   def version, do: @version
 
+  @doc """
+  The API version of Stripe's newest published OpenAPI spec (github.com/stripe/openapi): its
+  `info.version`, the first value in Stripe's version form (`2026-10-28.endive`) in the file's
+  first bytes. `mix mishka_pay.stripe.check_version` compares it with `version/0`.
+  """
+  @spec latest_version() :: {:ok, String.t()} | {:error, Splode.Error.t()}
+  def latest_version do
+    with {:ok, %Req.Response{status: status, body: head}} when status in [200, 206] <-
+           Client.request(%{
+             provider: "stripe",
+             method: :get,
+             base_url: "https://raw.githubusercontent.com",
+             path: "/stripe/openapi/master/latest/openapi.spec3.json",
+             headers: %{"range" => "bytes=0-4095"},
+             options: [decode_body: false]
+           }),
+         [_head, version] <- Regex.run(~r/"version"\s*:\s*"(\d{4}-\d{2}-\d{2}\.[a-z]+)"/, head) do
+      {:ok, version}
+    else
+      {:error, _unreachable} = error -> error
+      _other -> {:error, Errors.Rejected.exception(provider: "stripe", code: "spec_unreadable")}
+    end
+  end
+
   @impl MishkaPay.Provider
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- currencies(checkout.items),

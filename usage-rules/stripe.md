@@ -1,7 +1,8 @@
 # Rules for Stripe in Mishka Pay
 
 `MishkaPay.Providers.Stripe` (id `"stripe"`) has every capability: `:checkout`, `:refund`,
-`:subscription`, `:webhook`. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`).
+`:subscription`, `:webhook`. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
+`mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
 
 ## Checkout
 
