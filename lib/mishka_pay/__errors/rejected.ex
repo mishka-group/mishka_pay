@@ -20,7 +20,11 @@ defmodule MishkaPay.Errors.Rejected do
       merchant of record off; `"one_time_only"` and `"recurring_only"` a choice (`:param`) that
       goes only with one-time prices, or only with a plan's; `"capture_invoice"` a checkout that
       holds the money (`capture: :manual`) where an invoice is made after payment, as a merchant
-      of record always makes one.
+      of record always makes one; `"tax_id_invalid"` a tax id whose number
+      does not have the form its kind needs; `"tax_not_set_up"` a tax calculation on an account
+      whose tax service is off; `"tax_location_invalid"` a buyer's address too thin to count the
+      tax; `"managed_payments_shipping"` shipping asked of a checkout the provider sells as
+      merchant of record.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
@@ -41,6 +45,14 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{code: "merchant_of_record_off", param: param}),
     do: Messages.text(:merchant_of_record_off, param: param || "this choice")
+
+  def message(%{code: "tax_id_invalid"}), do: Messages.text(:tax_id_invalid)
+  def message(%{code: "tax_not_set_up"}), do: Messages.text(:tax_not_set_up)
+
+  def message(%{code: "managed_payments_shipping"}),
+    do: Messages.text(:managed_payments_shipping)
+
+  def message(%{code: "tax_location_invalid"}), do: Messages.text(:tax_location_invalid)
 
   def message(%{code: "one_time_only", param: param}),
     do: Messages.text(:one_time_only, param: param || "this choice")

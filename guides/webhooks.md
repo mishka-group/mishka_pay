@@ -23,6 +23,7 @@ In Stripe's Dashboard, point each site's endpoint at
 | `customer.created`, `customer.updated`, `customer.deleted` | the customer |
 | `setup_intent.succeeded`, `setup_intent.setup_failed`, `payment_method.attached`, `payment_method.detached`, `payment_method.updated`, `payment_method.automatically_updated` | the customer the setup or the payment method names |
 | `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed |
+| `customer.tax_id.created`, `customer.tax_id.updated`, `customer.tax_id.deleted` | the customer the tax id belongs to |
 
 Each listed event is tested to name what it updates. Any other event is verified and stored, and
 changes nothing.

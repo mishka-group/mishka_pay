@@ -43,10 +43,22 @@
   then needs a `tax_code` (`"txcd_10302000"` digital book, `"txcd_10103001"` SaaS).
 - The buyer's total can be higher than the item price (tax). Show "+ tax" next to prices.
 
+## Shipping
+
+- `:shipping_countries` is Stripe's `shipping_address_collection[allowed_countries]`; it works in
+  payment and subscription mode. `:shipping_rates` is `shipping_options`: a rate by id (`shr_`)
+  or `shipping_rate_data` made with the session, at most 5, in payment mode only.
+- Stripe refuses shipping where Managed Payments is on, in the request or as the account's
+  default: pass `merchant_of_record: false` with shipping. The refusal is `Errors.Rejected` with
+  code `"managed_payments_shipping"`.
+- A rate's delivery estimate is in business days. Stripe sets the first rate on an open session
+  until the buyer picks another, so `:amount_shipping` and `:shipping_rate_id` are filled at once.
+- A shipping rate's amount cannot change once set; make a new rate instead.
+
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, test clocks `clock_`, meters `mtr_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -109,6 +121,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reached, the link turns itself off and shows `inactive_message`.
 - `invoice: true` is Stripe's `invoice_creation`: an invoice for a one-time payment. Whether
   Stripe emails receipts and invoices is a Dashboard setting (Customer emails), not code.
+- `calculate_tax/1` is Stripe Tax without Checkout (`POST /v1/tax/calculations`): a
+  `MishkaPay.TaxLine`'s `:amount` is the whole line (unit price times `:quantity`), as Stripe
+  takes it. `record_tax/4` is `POST /v1/tax/transactions/create_from_calculation`; its
+  reference makes the idempotency key, and Stripe wants it unique across all transactions. A
+  calculation can be recorded for 90 days (`:expires_at`).
+- An account without Stripe Tax turned on answers `Errors.Rejected` with code
+  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
+  it on but with no registration where the buyer is counts a tax of zero.
 - Stripe Tax must be turned on in the Dashboard (origin address, registrations) before
   `automatic_tax` counts anything. A price's `tax_behavior` can be set once on a price that had
   none; otherwise make a new price.
@@ -127,8 +147,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   `:reference`; `:default_payment_method` is the customer's invoice default.
 - The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
   pass `configuration: "bpc_..."` to use another.
-- Stripe sends `customer.created`, `customer.updated` and `customer.deleted`; the Ash customer
-  listener syncs the row on each.
+- Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and
+  `customer.tax_id.created`, `.updated` and `.deleted` for a customer's tax ids; the event's
+  `:customer_id` names the customer, and the Ash customer listener syncs the row on each.
+- Tax ids start with `txi_`. Stripe checks EU VAT, GB VAT and AU ABN numbers against the
+  government register after they are added: `:verification` is `:pending` first, and
+  `customer.tax_id.updated` comes when the check ends. Other kinds get their format checked only.
+  In a sandbox, a number of `000000000` (`DE000000000`) verifies, `111111111` does not, and
+  `222222222` stays pending.
 - `list_customers/3` leaves out customers made on a test clock (Stripe's list does); read those by
   id with `fetch_customer/3`.
 - A `reference` reused within 24 hours with other details is `Errors.Rejected` with code
@@ -176,7 +202,7 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   which `list_entitlements/4` reads. Check access by the entitlement's `:lookup_key`.
 - Stripe sends `entitlements.active_entitlement_summary.updated` when a customer's entitlements
   change. The summary has no id, so Mishka Pay names its customer as the event's object
-  (`object_type: "customer"`): read `list_entitlements/4` again on it.
+  (the event's `:customer_id`): read `list_entitlements/4` again on it.
 
 ## Balances
 

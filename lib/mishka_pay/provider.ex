@@ -60,6 +60,10 @@ defmodule MishkaPay.Provider do
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
       `search_customers/2`;
+    * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
+    * `:tax`: `calculate_tax/2`, `record_tax/3`;
+    * `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2` (and a checkout's
+      `:shipping_countries` and `:shipping_rates`);
     * `:portal`: `portal_session/2`;
     * `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
       `detach_payment_method/2`, `set_default_payment_method/3` (a checkout in `mode: :setup`
@@ -103,6 +107,9 @@ defmodule MishkaPay.Provider do
     :subscription_change,
     :invoice,
     :customer,
+    :tax_id,
+    :tax,
+    :shipping,
     :portal,
     :payment_method,
     :discount,
@@ -136,6 +143,11 @@ defmodule MishkaPay.Provider do
       previews what that bills, and pauses or resumes its collection.
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:customer`: keeps buyers (create, read, update, list).
+    * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
+    * `:tax`: counts the tax on a sale made outside its checkout, and records the sale for the
+      site's tax reports.
+    * `:shipping`: keeps shipping rates, and its checkout asks for a shipping address and
+      charges the rate the buyer picks.
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:payment_method`: keeps a customer's saved payment methods (read, list, take off, make
       the default), and saves one with a checkout in `mode: :setup`.
@@ -164,6 +176,9 @@ defmodule MishkaPay.Provider do
           | :subscription_change
           | :invoice
           | :customer
+          | :tax_id
+          | :tax
+          | :shipping
           | :portal
           | :payment_method
           | :discount
@@ -369,6 +384,43 @@ defmodule MishkaPay.Provider do
   @doc "With `:customer`. One page of customers, newest first; only those with `:email` when given."
   @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. Adds a tax id to the customer it names (`:customer_id`), and answers it."
+  @callback create_tax_id(MishkaPay.TaxId.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxId.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. One page of the tax ids of customer `:customer_id`."
+  @callback list_tax_ids(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:tax`. Counts the tax on the calculation's lines and shipping for the buyer's address or
+  customer, and answers it with its `:id`, totals and the tax of each line.
+  """
+  @callback calculate_tax(MishkaPay.TaxCalculation.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxCalculation.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax`. Records the sale of a calculation under the caller's `reference`, for the tax reports."
+  @callback record_tax(
+              calculation_id :: String.t(),
+              reference :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.TaxTransaction.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:shipping`. Makes a shipping rate and answers it with its `:id`."
+  @callback create_shipping_rate(MishkaPay.ShippingRate.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ShippingRate.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:shipping`. One page of shipping rates, newest first; only `:active` ones when given."
+  @callback list_shipping_rates(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. Removes one tax id from a customer."
+  @callback delete_tax_id(
+              customer_id :: String.t(),
+              tax_id_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: :ok | {:error, Splode.Error.t()}
 
   @doc "With `:portal`. Opens the provider's billing page for a customer and answers its `:url`."
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
@@ -624,6 +676,13 @@ defmodule MishkaPay.Provider do
                       fetch_customer: 2,
                       update_customer: 2,
                       list_customers: 2,
+                      create_tax_id: 2,
+                      list_tax_ids: 2,
+                      delete_tax_id: 3,
+                      calculate_tax: 2,
+                      record_tax: 3,
+                      create_shipping_rate: 2,
+                      list_shipping_rates: 2,
                       portal_session: 2,
                       list_payment_methods: 2,
                       fetch_payment_method: 2,
@@ -708,6 +767,9 @@ defmodule MishkaPay.Provider do
       list_customers: 2,
       search_customers: 2
     ],
+    tax_id: [create_tax_id: 2, list_tax_ids: 2, delete_tax_id: 3],
+    tax: [calculate_tax: 2, record_tax: 3],
+    shipping: [create_shipping_rate: 2, list_shipping_rates: 2],
     portal: [portal_session: 2],
     payment_method: [
       list_payment_methods: 2,

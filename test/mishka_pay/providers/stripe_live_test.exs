@@ -597,6 +597,133 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.portal_session(session)
   end
 
+  test "a business buyer's VAT number is added to a new customer, listed and removed" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        email: "vat-#{run}@example.com",
+        reference: "vat-#{run}"
+      })
+
+    # Stripe's sandbox verifies an EU VAT number of 000000000.
+    assert {:ok,
+            %MishkaPay.TaxId{
+              id: "txi_" <> _ = id,
+              customer_id: ^customer_id,
+              type: "eu_vat",
+              value: "DE000000000",
+              country: "DE",
+              verification: check
+            }} =
+             MishkaPay.create_tax_id("stripe", customer_id, %{
+               type: "eu_vat",
+               value: "DE000000000"
+             })
+
+    assert check in [:pending, :verified]
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxId{id: ^id}]}} =
+             MishkaPay.list_tax_ids("stripe", customer_id)
+
+    assert {:error, %Errors.Rejected{code: "tax_id_invalid"} = error} =
+             MishkaPay.create_tax_id("stripe", customer_id, %{type: "eu_vat", value: "DE12"})
+
+    assert Exception.message(error) =~ "tax id"
+
+    assert :ok = MishkaPay.delete_tax_id("stripe", customer_id, id)
+    assert {:ok, %MishkaPay.Page{items: []}} = MishkaPay.list_tax_ids("stripe", customer_id)
+  end
+
+  test "the tax on a sale outside Checkout is counted and recorded, or the account says Stripe Tax is off" do
+    run = System.unique_integer([:positive])
+
+    calculation = %{
+      provider: "stripe",
+      items: [
+        %{
+          reference: "ebook-#{run}",
+          amount: %{amount: "20.00", currency: "EUR"},
+          quantity: 2,
+          tax_code: "txcd_10302000"
+        }
+      ],
+      address: %{country: "DE", postal_code: "10115"},
+      shipping: %{amount: "4.95", currency: "EUR"}
+    }
+
+    # The test account's own Stripe Tax settings decide which answer comes; they are never changed.
+    case MishkaPay.calculate_tax(calculation) do
+      {:ok,
+       %MishkaPay.TaxCalculation{
+         id: "taxcalc_" <> _ = id,
+         amount_total: total,
+         tax_amount_exclusive: tax,
+         items: [%MishkaPay.TaxLine{reference: reference, amount_tax: %Money{}}]
+       }} ->
+        assert reference == "ebook-#{run}"
+        # The line's amount is its whole: 20.00 for the two, then 4.95 shipping and the tax.
+        expected = Money.add!(Money.new(:EUR, "24.95"), tax)
+        assert Money.equal?(total, expected)
+
+        assert {:ok,
+                %MishkaPay.TaxTransaction{
+                  id: "tax_" <> _ = recorded,
+                  calculation_id: ^id,
+                  reference: order
+                }} = MishkaPay.record_tax("stripe", id, "order-#{run}")
+
+        assert order == "order-#{run}"
+
+        assert {:ok, %MishkaPay.TaxTransaction{id: ^recorded}} =
+                 MishkaPay.record_tax("stripe", id, "order-#{run}")
+
+      {:error, %Errors.Rejected{code: "tax_not_set_up"} = error} ->
+        assert Exception.message(error) =~ "tax service is not turned on"
+    end
+  end
+
+  test "a shipping rate is made and listed, and a checkout that ships opens with it and an inline rate" do
+    run = System.unique_integer([:positive])
+
+    assert {:ok, %MishkaPay.ShippingRate{id: "shr_" <> _ = rate_id, min_days: 1, max_days: 2}} =
+             MishkaPay.create_shipping_rate(%{
+               provider: "stripe",
+               name: "Express #{run}",
+               amount: %{amount: "9.90", currency: "EUR"},
+               min_days: 1,
+               max_days: 2,
+               tax_code: "txcd_92010001"
+             })
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = rates}} =
+             MishkaPay.list_shipping_rates("stripe", nil, active: true, limit: 100)
+
+    assert Enum.any?(rates, &(&1.id == rate_id))
+
+    assert {:ok, %Checkout{id: "cs_test_" <> _ = id, status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               merchant_of_record: false,
+               items: [%{name: "Mug", amount: %{amount: "15.00", currency: "EUR"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "ship-#{run}",
+               shipping_countries: ["NL", "DE"],
+               shipping_rates: [
+                 rate_id,
+                 %{name: "Post", amount: %{amount: "4.95", currency: "EUR"}, max_days: 5}
+               ]
+             })
+
+    # Stripe picks the first rate until the buyer picks another.
+    assert {:ok, %Checkout{shipping_rate_id: ^rate_id, amount_shipping: shipping}} =
+             MishkaPay.fetch_checkout("stripe", id)
+
+    assert Money.equal?(shipping, Money.new(:EUR, "9.90"))
+  end
+
   test "a promotion code lowers a real checkout, and an expired checkout cannot be paid" do
     run = System.unique_integer([:positive])
 

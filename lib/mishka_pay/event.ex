@@ -11,10 +11,8 @@ defmodule MishkaPay.Event do
     * `:id`: the provider's event id (`evt_...` at Stripe). A provider may send one event more
       than once: a listener keeps what it did by this id.
     * `:type`: the provider's own name for what happened, such as `"checkout.session.completed"`.
-    * `:object_id`, `:object_type`: what it is about (`"pi_..."`, `"payment_intent"`). An event
-      about a saved payment method or a setup that names a customer is about that customer
-      (`"cus_..."`, `"customer"`), since the customer is what changes; so does a change to a
-      customer's entitlements, whose summary has no id of its own.
+    * `:object_id`, `:object_type`: what it is about (`"pi_..."`, `"payment_intent"`); an
+      entitlement summary has no id of its own.
     * `:payment_id`: the payment it concerns, when it concerns one: the object itself for a
       payment, or the payment a checkout, charge, refund or dispute belongs to. The id
       `MishkaPay.fetch_payment/3` takes.
@@ -23,6 +21,11 @@ defmodule MishkaPay.Event do
       `MishkaPay.fetch_subscription/3` takes.
     * `:dispute_id`: the dispute it concerns, for a `charge.dispute.*` event
       (`MishkaPay.fetch_dispute/3`).
+    * `:customer_id`: the customer it changes: the customer itself, or the one a tax id, a saved
+      payment method, a setup or an entitlement summary belongs to (`customer.*`,
+      `customer.tax_id.*`, `payment_method.*`, `setup_intent.*`,
+      `entitlements.active_entitlement_summary.updated` on Stripe). The id
+      `MishkaPay.fetch_customer/3` takes.
     * `:livemode`: whether it came from live or test mode.
     * `:account`: the connected account it is for, when the provider has those.
     * `:created_at`: when the provider made it.
@@ -44,6 +47,7 @@ defmodule MishkaPay.Event do
     field :payment_id, String.t(), derives: "validate(string)"
     field :subscription_id, String.t(), derives: "validate(string)"
     field :dispute_id, String.t(), derives: "validate(string)"
+    field :customer_id, String.t(), derives: "validate(string)"
     field :livemode, boolean(), default: false, derives: "validate(boolean)"
     field :account, String.t(), derives: "validate(string)"
     field :created_at, DateTime.t(), derives: "validate(struct)"

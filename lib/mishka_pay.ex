@@ -56,9 +56,12 @@ defmodule MishkaPay do
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
-      `:customer_search`, `:portal`;
+      `:customer_search`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
+      `:tax_id_delete`;
     * saved payment methods: `:payment_method_list`, `:payment_method`,
       `:payment_method_detach`, `:payment_method_default`;
+    * tax outside a checkout: `:tax_calculate`, `:tax_record`;
+    * shipping: `:shipping_rate_create`, `:shipping_rate_list`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
       `:promotion_code_update`;
@@ -93,7 +96,8 @@ defmodule MishkaPay do
     PromotionCode,
     Provider,
     ProviderKit,
-    Refund
+    Refund,
+    TaxId
   }
 
   alias MishkaPay.Helpers.Plugins
@@ -258,6 +262,134 @@ defmodule MishkaPay do
           {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_customers(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     capable(:customer, :customer_list, provider, tenant, & &1.list_customers(limited(opts), &2))
+  end
+
+  @doc """
+  Adds a business buyer's tax id to customer `customer_id` from `attrs` (see `MishkaPay.TaxId`):
+  its `:type`, such as `"eu_vat"`, and its `:value`. The provider prints it on the customer's
+  invoices, and checks it against a government register for the kinds it can
+  (`:verification`).
+
+      MishkaPay.create_tax_id("stripe", "cus_123", %{type: "eu_vat", value: "DE123456789"}, site_id)
+  """
+  @spec create_tax_id(String.t(), String.t(), map(), term()) ::
+          {:ok, TaxId.t()} | {:error, Splode.Error.t()}
+  def create_tax_id(provider, customer_id, attrs, tenant \\ nil)
+      when is_binary(provider) and is_binary(customer_id) and is_map(attrs) do
+    attrs = %{
+      provider: provider,
+      tenant: tenant,
+      customer_id: customer_id,
+      type: field(attrs, :type),
+      value: field(attrs, :value)
+    }
+
+    made(:tax_id_create, :tax_id, attrs, TaxId, [:type, :value], :create_tax_id)
+  end
+
+  @doc """
+  One page of customer `customer_id`'s tax ids at `provider` (`MishkaPay.Page` of
+  `MishkaPay.TaxId`), with `limit:` and `after:`.
+  """
+  @spec list_tax_ids(String.t(), String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_tax_ids(provider, customer_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(customer_id) do
+    opts = opts |> Keyword.put(:customer_id, customer_id) |> limited()
+    capable(:tax_id, :tax_id_list, provider, tenant, & &1.list_tax_ids(opts, &2))
+  end
+
+  @doc "Removes tax id `tax_id_id` from customer `customer_id`; past invoices keep it."
+  @spec delete_tax_id(String.t(), String.t(), String.t(), term()) ::
+          :ok | {:error, Splode.Error.t()}
+  def delete_tax_id(provider, customer_id, tax_id_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(customer_id) and is_binary(tax_id_id) do
+    capable(
+      :tax_id,
+      :tax_id_delete,
+      provider,
+      tenant,
+      & &1.delete_tax_id(customer_id, tax_id_id, &2)
+    )
+  end
+
+  @doc """
+  Makes a shipping rate from `attrs` (see `MishkaPay.ShippingRate`): its `:name`, its `:amount`
+  for the whole order, and a delivery estimate. A checkout offers it by its `:id` in
+  `:shipping_rates`.
+  """
+  @spec create_shipping_rate(map()) ::
+          {:ok, MishkaPay.ShippingRate.t()} | {:error, Splode.Error.t()}
+  def create_shipping_rate(attrs) when is_map(attrs) do
+    made(
+      :shipping_rate_create,
+      :shipping,
+      attrs,
+      MishkaPay.ShippingRate,
+      [:provider, :name, :amount],
+      :create_shipping_rate
+    )
+  end
+
+  @doc """
+  One page of shipping rates at `provider`, newest first (`MishkaPay.Page`): `active:` only those
+  that can (or cannot) be offered, plus `limit:` and `after:`.
+  """
+  @spec list_shipping_rates(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_shipping_rates(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :shipping,
+      :shipping_rate_list,
+      provider,
+      tenant,
+      & &1.list_shipping_rates(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Counts the tax on a sale made outside the provider's checkout, from `attrs` (see
+  `MishkaPay.TaxCalculation`): its lines, the buyer's address or customer, and shipping. Show the
+  answer's `:tax_amount_exclusive` and charge its `:amount_total`; once paid, report the sale
+  with `record_tax/4`.
+
+      MishkaPay.calculate_tax(%{
+        provider: "stripe",
+        tenant: site_id,
+        items: [%{reference: "sku-1", amount: %{amount: "30.00", currency: "EUR"}, quantity: 2}],
+        address: %{country: "NL", postal_code: "1012"}
+      })
+  """
+  @spec calculate_tax(map()) :: {:ok, MishkaPay.TaxCalculation.t()} | {:error, Splode.Error.t()}
+  def calculate_tax(attrs) when is_map(attrs) do
+    made(:tax_calculate, :tax, attrs, MishkaPay.TaxCalculation, [:provider], :calculate_tax)
+  end
+
+  @doc """
+  Records the sale counted by tax calculation `calculation_id` under the caller's `reference`
+  (an order id, one sale per reference), so the provider counts its tax in the site's tax
+  reports. A calculation can be recorded until its `:expires_at`.
+  """
+  @spec record_tax(String.t(), String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.TaxTransaction.t()} | {:error, Splode.Error.t()}
+  def record_tax(provider, calculation_id, reference, tenant \\ nil)
+      when is_binary(provider) and is_binary(calculation_id) and is_binary(reference) do
+    case String.trim(reference) do
+      "" ->
+        MishkaPay.ProviderKit.invalid(
+          :reference,
+          Messages.text(:customer_needs, field: :reference)
+        )
+
+      reference ->
+        capable(
+          :tax,
+          :tax_record,
+          provider,
+          tenant,
+          & &1.record_tax(calculation_id, reference, &2)
+        )
+    end
   end
 
   @doc """
@@ -1196,13 +1328,14 @@ defmodule MishkaPay do
   end
 
   # Each choice that needs more than `:checkout` asks the provider for its capability: a
-  # subscription, an embedded form, a hold on the card, a card saved without a charge.
+  # subscription, an embedded form, a hold on the card, a card saved without a charge, shipping.
   defp mode_capable(%Checkout{provider: provider} = checkout) do
     [
       {checkout.mode == :subscription, :subscription},
       {checkout.ui_mode == :embedded, :embedded_checkout},
       {checkout.capture == :manual, :capture},
-      {checkout.mode == :setup, :payment_method}
+      {checkout.mode == :setup, :payment_method},
+      {not is_nil(checkout.shipping_countries) or not is_nil(checkout.shipping_rates), :shipping}
     ]
     |> Enum.reduce_while(:ok, fn
       {true, capability}, :ok ->

@@ -28,7 +28,12 @@ if Code.ensure_loaded?(Ash) do
 
     @doc "The `:sync` argument that names the object: `:product_id`, `:invoice_id`..."
     @spec id_argument(atom()) :: atom()
-    def id_argument(kind), do: :"#{kind}_id"
+    def id_argument(:product), do: :product_id
+    def id_argument(:price), do: :price_id
+    def id_argument(:coupon), do: :coupon_id
+    def id_argument(:promotion_code), do: :promotion_code_id
+    def id_argument(:payment_link), do: :payment_link_id
+    def id_argument(:invoice), do: :invoice_id
 
     @doc "Reads one object of `kind` again from its provider."
     @spec fetch(atom(), String.t(), String.t(), term()) :: {:ok, struct()} | {:error, term()}

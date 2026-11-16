@@ -63,6 +63,17 @@ defmodule MishkaPay.Messages do
           | :proration_date
           | :managed_payments_invoice
           | :tax_code_missing
+          | :tax_id_invalid
+          | :tax_not_set_up
+          | :tax_location_invalid
+          | :tax_lines_many
+          | :tax_lines_unique
+          | :tax_address
+          | :shipping_needs
+          | :shipping_days
+          | :managed_payments_shipping
+          | :shipping_countries
+          | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
           | :rejected_param
@@ -317,6 +328,71 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "A merchant of record sells only products with a tax category: give the product one, or turn merchant of record off"
+      )
+
+  defp msgid(:tax_id_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The tax id number does not have the form its kind needs: check the number and its country"
+      )
+
+  defp msgid(:tax_not_set_up),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The provider's tax service is not turned on for this account: set it up in the provider's dashboard first"
+      )
+
+  defp msgid(:tax_location_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The buyer's address is not enough to count the tax: give its country, and its postal code in the US"
+      )
+
+  defp msgid(:tax_lines_many),
+    do: dgettext_noop("mishka_pay", "A tax calculation takes at most 100 lines")
+
+  defp msgid(:tax_lines_unique),
+    do: dgettext_noop("mishka_pay", "Each line of a tax calculation needs its own reference")
+
+  defp msgid(:tax_address),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax calculation needs the buyer's address or a customer whose address the provider keeps"
+      )
+
+  defp msgid(:shipping_needs),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A shipping rate needs the provider's rate id, or a name and an amount"
+      )
+
+  defp msgid(:shipping_days),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The fewest days of a delivery estimate must not be more than the most days"
+      )
+
+  defp msgid(:shipping_countries),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The shipping countries must be a list of two-letter country codes, such as NL"
+      )
+
+  defp msgid(:stripe_shipping_five),
+    do: dgettext_noop("mishka_pay", "A Stripe checkout offers at most 5 shipping rates")
+
+  defp msgid(:managed_payments_shipping),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A merchant of record does not ship goods: turn merchant of record off to charge for shipping"
       )
 
   defp msgid(:one_time_only),

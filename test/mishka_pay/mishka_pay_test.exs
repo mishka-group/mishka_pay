@@ -58,6 +58,11 @@ defmodule MishkaPayTest do
 
     assert {:error, %Errors.MissingCredentials{provider: "checkout_only"}} =
              MishkaPay.checkout(%{@checkout | provider: "checkout_only"})
+
+    for shipping <- [%{shipping_countries: ["NL"]}, %{shipping_rates: ["shr_1"]}] do
+      assert {:error, %Errors.Unsupported{provider: "checkout_only", operation: :shipping}} =
+               MishkaPay.checkout(Map.merge(%{@checkout | provider: "checkout_only"}, shipping))
+    end
   end
 
   test "the host's gate can change a checkout or refuse it before the provider sees it" do

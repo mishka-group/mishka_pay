@@ -50,6 +50,7 @@ if Code.ensure_loaded?(Ash) do
         payment_id: event.payment_id,
         subscription_id: event.subscription_id,
         dispute_id: event.dispute_id,
+        customer_id: event.customer_id,
         livemode: event.livemode,
         account: event.account,
         provider_created_at: event.created_at

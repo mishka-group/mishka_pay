@@ -45,7 +45,8 @@ webhook endpoint to these:
 | `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`, `.trial_will_end` | the subscription |
 | `customer.created`, `.updated`, `.deleted` | the customer |
 | `setup_intent.succeeded`, `.setup_failed`; `payment_method.attached`, `.detached`, `.updated`, `.automatically_updated` | the customer it names |
-| `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed (`:object_type` is `"customer"`) |
+| `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed (`:customer_id`) |
+| `customer.tax_id.created`, `.updated`, `.deleted` | the customer the tax id belongs to |
 
 Any other event is verified and stored, and changes nothing.
 

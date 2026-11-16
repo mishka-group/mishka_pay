@@ -33,7 +33,9 @@ defmodule MishkaPay.Providers.Stripe do
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription.
     * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` keep
-      Customers (`cus_...`), with the reference in their metadata; `portal_session/2` opens a
+      Customers (`cus_...`), with the reference in their metadata; `create_tax_id/2`,
+      `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids (`txi_...`);
+      `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
     * A checkout in `mode: :setup` opens a session in Stripe's `setup` mode that saves a card
@@ -42,6 +44,14 @@ defmodule MishkaPay.Providers.Stripe do
       `fetch_payment_method/2`, `detach_payment_method/2` and `set_default_payment_method/3` keep
       a customer's PaymentMethods (`pm_...`); the default is the customer's
       `invoice_settings.default_payment_method`.
+    * `create_shipping_rate/2` and `list_shipping_rates/2` keep Shipping Rates (`shr_...`). A
+      checkout's `:shipping_countries` is `shipping_address_collection` and its `:shipping_rates`
+      are `shipping_options` (a rate by id, or `shipping_rate_data`), up to 5, in payment mode
+      only. Stripe refuses shipping where Managed Payments is on.
+    * `calculate_tax/2` asks Stripe Tax for the tax on a sale made outside Checkout
+      (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
+      (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
+      An account without Stripe Tax turned on is refused with code `"tax_not_set_up"`.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
     * `upload_file/2` sends a file to `files.stripe.com` as `multipart/form-data`; dispute
@@ -104,6 +114,9 @@ defmodule MishkaPay.Providers.Stripe do
       :subscription_change,
       :invoice,
       :customer,
+      :tax_id,
+      :tax,
+      :shipping,
       :portal,
       :payment_method,
       :discount,
@@ -216,7 +229,10 @@ defmodule MishkaPay.Providers.Stripe do
     "payment_method.detached" => [:customer],
     "payment_method.updated" => [:customer],
     "payment_method.automatically_updated" => [:customer],
-    "entitlements.active_entitlement_summary.updated" => [:customer]
+    "entitlements.active_entitlement_summary.updated" => [:customer],
+    "customer.tax_id.created" => [:customer],
+    "customer.tax_id.updated" => [:customer],
+    "customer.tax_id.deleted" => [:customer]
   }
 
   @doc """
@@ -264,6 +280,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
          :ok <- held(checkout, keys),
+         :ok <- shipping_rates(checkout.shipping_rates),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -705,6 +722,104 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def list_customers(opts, keys),
     do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
+
+  # A tax id has no reference of its own, so it goes without a fixed idempotency key: the same
+  # number added again after a delete must make a new one.
+  @impl MishkaPay.Provider
+  def create_tax_id(%MishkaPay.TaxId{customer_id: customer_id} = tax_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/customers/#{customer_id}/tax_ids",
+             Mapper.tax_id_params(tax_id),
+             keys
+           ) do
+      Mapper.tax_id(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_tax_ids(opts, keys) do
+    with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
+      page("/v1/customers/#{opts[:customer_id]}/tax_ids", [], opts, keys, &Mapper.tax_id/1)
+    end
+  end
+
+  # Stripe Tax on its own: a calculation (`taxcalc_...`) changes nothing until it is recorded as a
+  # Tax Transaction under the caller's reference.
+  @impl MishkaPay.Provider
+  def calculate_tax(%MishkaPay.TaxCalculation{} = calculation, keys) do
+    shipping = (calculation.shipping && [%{amount: calculation.shipping}]) || []
+
+    with :ok <- maybe_id(calculation.customer_id, "cus_", :customer_id),
+         :ok <- currencies(calculation.items ++ shipping),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/calculations",
+             Mapper.tax_calculation_params(calculation),
+             keys
+           ) do
+      Mapper.tax_calculation(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def record_tax(calculation_id, reference, keys) do
+    with :ok <- stripe_id(calculation_id, "taxcalc_", :calculation_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/transactions/create_from_calculation",
+             %{"calculation" => calculation_id, "reference" => reference},
+             keys,
+             key: ProviderKit.idempotency_key("tax-record", keys.tenant, reference)
+           ) do
+      Mapper.tax_transaction(answer, calculation_id)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_shipping_rate(%MishkaPay.ShippingRate{} = rate, keys) do
+    with :ok <- currencies([rate]),
+         :ok <- metadata(rate.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/shipping_rates", Mapper.shipping_rate_params(rate), keys) do
+      Mapper.shipping_rate(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_shipping_rates(opts, keys),
+    do: page("/v1/shipping_rates", [active: opts[:active]], opts, keys, &Mapper.shipping_rate/1)
+
+  # Stripe offers up to 5 rates on a checkout: its own by id (`shr_`), or new ones in a currency
+  # it takes.
+  defp shipping_rates(nil), do: :ok
+
+  defp shipping_rates(rates) do
+    case Enum.drop(rates, 5) do
+      [] -> with :ok <- currencies(rates), do: shipping_rate_ids(rates)
+      _more -> invalid(:shipping_rates, Messages.text(:stripe_shipping_five))
+    end
+  end
+
+  defp shipping_rate_ids(rates) do
+    case Enum.find(rates, &(is_binary(&1.id) and not shipping_rate?(&1.id))) do
+      nil -> :ok
+      %{id: id} -> stripe_id(id, "shr_", :shipping_rates)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def delete_tax_id(customer_id, tax_id_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         :ok <- stripe_id(tax_id_id, "txi_", :tax_id_id),
+         {:ok, _deleted} <-
+           request(:delete, "/v1/customers/#{customer_id}/tax_ids/#{tax_id_id}", [], keys),
+         do: :ok
+  end
 
   # Stripe's search language: each filter quoted, a quote inside escaped; the reference is kept
   # in the customer's metadata. Search pages on its own `next_page` cursor.
@@ -1288,6 +1403,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp stripe_price?(id), do: stripe_id(id, "price_", :items) == :ok
+  defp shipping_rate?(id), do: stripe_id(id, "shr_", :shipping_rates) == :ok
 
   # One page of a Stripe list: the list options as Stripe's `limit` and `starting_after`, the
   # filters set, each item mapped; the next cursor is the last item's id when Stripe has more.
@@ -1503,7 +1619,9 @@ defmodule MishkaPay.Providers.Stripe do
     {"proration_behavior", "proration"},
     {"invoice_creation", "invoice"},
     {"managed_payments", "merchant_of_record"},
-    {"after_completion", "success_url"}
+    {"after_completion", "success_url"},
+    {"shipping_options", "shipping_rates"},
+    {"shipping_address_collection", "shipping_countries"}
   ]
 
   defp field_of(nil), do: nil
@@ -1552,35 +1670,31 @@ defmodule MishkaPay.Providers.Stripe do
   # a hold on the card where an invoice is made after payment.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
 
+  # Stripe Tax turned off on the account, and an address it cannot count the tax for.
+  defp code_of(%{"code" => "stripe_tax_inactive"}), do: "tax_not_set_up"
+
+  defp code_of(%{"code" => code})
+       when code in ["customer_tax_location_invalid", "invalid_tax_location"],
+       do: "tax_location_invalid"
+
   defp code_of(%{"code" => code}) when is_binary(code), do: code
 
-  defp code_of(%{"message" => message}) when is_binary(message) do
-    cond do
-      String.contains?(message, "already exists") ->
-        "already_exists"
+  # Stripe's words for a refusal it gives no code, first match wins: shipping where Managed
+  # Payments sells is named before any other choice it refuses there.
+  @worded [
+    {"already exists", "already_exists"},
+    {"when Managed Payments is enabled", "managed_payments_invoice"},
+    {"Shipping parameters cannot be used with Managed", "managed_payments_shipping"},
+    {"cannot be used with Managed Payments", "merchant_of_record_off"},
+    {"product tax code is missing", "tax_code_missing"},
+    {"does not contain any recurring prices", "one_time_only"},
+    {"must pass a recurring price", "recurring_only"},
+    {"separate authorization and capture", "capture_invoice"},
+    {"Stripe Tax has not been activated", "tax_not_set_up"}
+  ]
 
-      String.contains?(message, "when Managed Payments is enabled") ->
-        "managed_payments_invoice"
-
-      String.contains?(message, "cannot be used with Managed Payments") ->
-        "merchant_of_record_off"
-
-      String.contains?(message, "product tax code is missing") ->
-        "tax_code_missing"
-
-      String.contains?(message, "does not contain any recurring prices") ->
-        "one_time_only"
-
-      String.contains?(message, "must pass a recurring price") ->
-        "recurring_only"
-
-      String.contains?(message, "separate authorization and capture") ->
-        "capture_invoice"
-
-      true ->
-        nil
-    end
-  end
+  defp code_of(%{"message" => message}) when is_binary(message),
+    do: Enum.find_value(@worded, fn {words, code} -> String.contains?(message, words) && code end)
 
   defp code_of(_no_code), do: nil
 
