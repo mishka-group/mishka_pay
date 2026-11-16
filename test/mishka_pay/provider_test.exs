@@ -20,11 +20,13 @@ defmodule MishkaPay.ProviderTest do
     assert Acme.capabilities() == [
              :checkout,
              :expire,
+             :payment_list,
              :refund,
              :subscription,
              :customer,
              :portal,
-             :discount
+             :discount,
+             :catalog
            ]
   end
 

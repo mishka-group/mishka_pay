@@ -4,7 +4,8 @@
 
 defmodule MishkaPay.Price do
   @moduledoc """
-  One line of a checkout: what the buyer pays for, how much and how many. A guarded_struct.
+  A price: one line of a checkout (what the buyer pays for, how much and how many), or a price in
+  the provider's catalog for a `MishkaPay.Product`. A guarded_struct.
 
     * `:name`: what the buyer sees, such as "Elixir ebook".
     * `:amount`: the price of one, a `Money` checked by `MishkaPay.Money` (`%{amount: "19.99",
@@ -19,11 +20,24 @@ defmodule MishkaPay.Price do
     * `:interval`, `:interval_count`: a price charged again on a schedule, for a subscription:
       every `:interval_count` (1 by default) `:day`, `:week`, `:month` or `:year`. Left out, the
       price is paid once.
+
+  In the catalog (`MishkaPay.create_price/1`, `MishkaPay.list_prices/3`) a price also has:
+
+    * `:provider`, `:tenant`: which provider's catalog, with whose keys.
+
+    * `:product_id`: the product it sells; with `:amount` it is all a new price needs.
+    * `:lookup_key`: the host's own name for it (`"pro-monthly"`), to find it without its id.
+    * `:active`: on sale; `MishkaPay.archive_price/3` turns it off (a provider never deletes a
+      price that was used).
+    * `:metadata`: extra pairs, string keys to string values.
+    * `:created_at`: filled in by the provider.
   """
 
   use GuardedStruct
 
   guardedstruct authorized_fields: true, main_validator: {__MODULE__, :named_or_known} do
+    field :provider, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+    field :tenant, term()
     field :id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
     field :name, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=250)"
     field :amount, Money.t(), validator: {MishkaPay.Money, :field}
@@ -40,6 +54,15 @@ defmodule MishkaPay.Price do
     field :quantity, pos_integer(),
       default: 1,
       derives: "validate(not_nil_value, integer, min_len=1)"
+
+    field :product_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+
+    field :lookup_key, String.t(),
+      derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
+
+    field :active, boolean(), derives: "validate(boolean)"
+    dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
+    field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 
   # An interval from JSON or a form comes as a string.
@@ -53,6 +76,9 @@ defmodule MishkaPay.Price do
   def named_or_known(%{id: id} = attrs) when is_binary(id), do: {:ok, attrs}
 
   def named_or_known(%{name: name, amount: %Money{}} = attrs) when is_binary(name),
+    do: {:ok, attrs}
+
+  def named_or_known(%{product_id: product, amount: %Money{}} = attrs) when is_binary(product),
     do: {:ok, attrs}
 
   def named_or_known(_attrs) do

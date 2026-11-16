@@ -23,6 +23,8 @@ defmodule ShopWeb.CustomersComponent do
        assign(socket,
          selected: nil,
          found: nil,
+         found_next: nil,
+         found_filter: [],
          saved: MapSet.new(),
          loaded?: false,
          new_open?: false
@@ -69,13 +71,12 @@ defmodule ShopWeb.CustomersComponent do
   end
 
   def handle_event("find", %{"email" => email}, socket) do
-    opts = [limit: 10] ++ if(blank?(email), do: [], else: [email: String.trim(email)])
-
-    case MishkaPay.list_customers("stripe", socket.assigns.tenant, opts) do
-      {:ok, customers} -> {:noreply, assign(socket, found: customers, saved: saved(customers))}
-      {:error, error} -> {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
-    end
+    filter = if blank?(email), do: [], else: [email: String.trim(email)]
+    {:noreply, socket |> assign(found: [], found_filter: filter) |> find_page(nil)}
   end
+
+  def handle_event("more_found", _params, socket),
+    do: {:noreply, find_page(socket, socket.assigns.found_next)}
 
   def handle_event("close_found", _params, socket), do: {:noreply, assign(socket, found: nil)}
 
@@ -176,7 +177,7 @@ defmodule ShopWeb.CustomersComponent do
       </div>
 
       <.new_customer :if={@new_open?} myself={@myself} />
-      <.found :if={@found} found={@found} saved={@saved} myself={@myself} />
+      <.found :if={@found} found={@found} next={@found_next} saved={@saved} myself={@myself} />
 
       <div class="overflow-x-auto rounded-box border border-base-300">
         <table class="table">
@@ -286,6 +287,7 @@ defmodule ShopWeb.CustomersComponent do
   end
 
   attr :found, :list, required: true
+  attr :next, :string, default: nil
   attr :saved, :any, required: true
   attr :myself, :any, required: true
 
@@ -294,7 +296,7 @@ defmodule ShopWeb.CustomersComponent do
     <div class="card bg-base-200" data-testid="found-customers">
       <div class="card-body gap-2">
         <div class="flex items-center gap-2">
-          <h3 class="font-medium flex-1">On Stripe ({length(@found)})</h3>
+          <h3 class="font-medium flex-1">On Stripe ({length(@found)}{if @next, do: "+"})</h3>
           <button
             class="btn btn-ghost btn-xs"
             phx-click="close_found"
@@ -339,6 +341,16 @@ defmodule ShopWeb.CustomersComponent do
             </button>
           </li>
         </ul>
+        <button
+          :if={@next}
+          class="btn btn-sm btn-ghost self-start"
+          phx-click="more_found"
+          phx-target={@myself}
+          phx-disable-with="Asking Stripe..."
+          data-testid="found-more"
+        >
+          More from Stripe
+        </button>
       </div>
     </div>
     """
@@ -623,6 +635,20 @@ defmodule ShopWeb.CustomersComponent do
 
   defp reselect(%{assigns: %{selected: %{id: id}}} = socket, %{id: id}), do: select(socket, id)
   defp reselect(socket, _other), do: socket
+
+  # One page of Stripe's customers, 10 at a time, added to those found before it.
+  defp find_page(socket, cursor) do
+    opts = [limit: 10, after: cursor] ++ socket.assigns.found_filter
+
+    case MishkaPay.list_customers("stripe", socket.assigns.tenant, opts) do
+      {:ok, %MishkaPay.Page{items: customers, next: next}} ->
+        found = socket.assigns.found ++ customers
+        assign(socket, found: found, found_next: next, saved: saved(found))
+
+      {:error, error} ->
+        say(socket, :error, MishkaPay.Ash.message(error))
+    end
+  end
 
   # Which of the customers found on Stripe the shop keeps already, in one read.
   defp saved(customers) do

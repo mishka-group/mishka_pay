@@ -46,6 +46,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
 
+## Catalog and lists
+
+- A product may take the host's own `id` (`"ebook"`): letters, digits, `_` and `-`.
+- A Stripe price reads its name from its product (expanded), so a listed price says what it sells.
+- A page's `:next` is the last item's id (Stripe's `starting_after`).
+- `list_payments/3` reads each PaymentIntent with its charge, refunds and customer, as
+  `fetch_payment/3` does.
+
 ## Customers and the portal
 
 - The customer's `reference` is kept in its metadata as `mishka_pay_reference` and comes back as

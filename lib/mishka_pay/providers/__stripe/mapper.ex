@@ -17,6 +17,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Money,
     Payment,
     Price,
+    Product,
     PromotionCode,
     Refund,
     Subscription
@@ -590,6 +591,78 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> PromotionCode.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  @doc "Params of `POST /v1/products` (and its update): only the fields set."
+  @spec product_params(Product.t()) :: map()
+  def product_params(%Product{} = product) do
+    %{
+      "id" => product.id,
+      "name" => product.name,
+      "description" => product.description,
+      "tax_code" => product.tax_code,
+      "active" => product.active,
+      "metadata" => product.metadata
+    }
+  end
+
+  @doc "A Stripe product as a `MishkaPay.Product`."
+  @spec product(map()) :: {:ok, Product.t()} | {:error, Splode.Error.t()}
+  def product(product) do
+    %{
+      provider: "stripe",
+      id: product["id"],
+      name: product["name"],
+      description: blank(product["description"]),
+      tax_code: id_of(product["tax_code"]),
+      active: product["active"],
+      metadata: product["metadata"],
+      default_price_id: id_of(product["default_price"]),
+      created_at: time(product["created"])
+    }
+    |> Product.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "Params of `POST /v1/prices`: the product, the amount, and the schedule of a plan."
+  @spec price_params(Price.t()) :: map()
+  def price_params(%Price{} = price) do
+    %{
+      "product" => price.product_id,
+      "currency" => lower_currency(price.amount),
+      "unit_amount" => Money.to_minor(price.amount),
+      "nickname" => price.name,
+      "lookup_key" => price.lookup_key,
+      "metadata" => price.metadata
+    }
+    |> Map.merge(recurring(price))
+  end
+
+  @doc """
+  A Stripe price as a catalog `MishkaPay.Price`: named after its product when the product is
+  expanded, else its nickname.
+  """
+  @spec price(map()) :: {:ok, Price.t()} | {:error, Splode.Error.t()}
+  def price(price) do
+    %{
+      provider: "stripe",
+      id: price["id"],
+      name: expanded(price["product"])["name"] || blank(price["nickname"]),
+      amount: money(price["unit_amount"], price["currency"]),
+      product_id: id_of(price["product"]),
+      lookup_key: price["lookup_key"],
+      active: price["active"],
+      interval: interval(get_in(price, ["recurring", "interval"])),
+      interval_count: get_in(price, ["recurring", "interval_count"]),
+      tax_code: id_of(expanded(price["product"])["tax_code"]),
+      metadata: price["metadata"],
+      created_at: time(price["created"])
+    }
+    |> Price.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp blank(""), do: nil
+  defp blank(text), do: text
 
   # Stripe keeps an unnamed coupon's name as null or empty.
   defp blank_names(%{name: ""} = attrs), do: %{attrs | name: nil}
