@@ -20,6 +20,9 @@ defmodule ShopWeb.ShopLive do
     * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
+    * members and access by subscription, refunds and held payments, more checkout options
+      (embedded too), saved cards and portal links, one-off bills, customer search and bill
+      previews, each in its own component;
     * reading a checkout or a payment back by its id;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
@@ -448,6 +451,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.SavedCardsComponent} id="saved-cards" tenant={@tenant} />
 
       <.live_component module={ShopWeb.BillsComponent} id="bills" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.LookupsComponent} id="lookups" tenant={@tenant} />
 
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
