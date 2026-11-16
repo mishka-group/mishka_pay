@@ -152,9 +152,15 @@ if Code.ensure_loaded?(Ash) do
           errors |> Enum.flat_map(&leaves/1) |> Enum.map(&invalid/1)
 
         %{errors: errors} ->
-          Enum.map(errors, &Ash.Error.Unknown.UnknownError.exception(error: message(&1)))
+          Enum.map(errors, &other/1)
       end
     end
+
+    # What the provider cannot do is the caller's request, refused in plain words, like `Refused`.
+    defp other(%Errors.Unsupported{} = error),
+      do: Ash.Error.Changes.InvalidChanges.exception(message: message(error))
+
+    defp other(error), do: Ash.Error.Unknown.UnknownError.exception(error: message(error))
 
     @doc """
     The plain words of an error, for a person or a log: the error's own message, without the
