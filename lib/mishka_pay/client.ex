@@ -44,7 +44,9 @@ defmodule MishkaPay.Client do
   slash. So a path can never send the request, and its auth, to another host or place.
   Header names are compared without case.
 
-  The body is one of `form`, `json` or `multipart`. `multipart` sends `multipart/form-data`, the
+  The body is one of `form`, `json`, `json_text` or `multipart`. `json_text` is a JSON document
+  already encoded, sent byte for byte: for a provider that checks a message it signed against the
+  exact bytes it sent, such as PayPal's webhook verification. `multipart` sends `multipart/form-data`, the
   way a file is uploaded: a list of `{name, value}` parts, where a value is a binary, or
   `{binary, filename: "receipt.pdf", content_type: "application/pdf"}` for a file. A value is
   always bytes in memory, never a path or a stream, so a request never reads a file from disk.
@@ -91,6 +93,7 @@ defmodule MishkaPay.Client do
 
     field :form, term(), derives: "validate(either=[map, list])"
     field :json, term()
+    field :json_text, String.t(), derives: "validate(string, not_empty)"
     field :multipart, term(), validator: {__MODULE__, :multipart}
 
     field :idempotency_header, String.t(),
@@ -156,6 +159,7 @@ defmodule MishkaPay.Client do
       |> put_present(:params, spec.params)
       |> put_present(:form, spec.form)
       |> put_present(:json, spec.json)
+      |> put_present(:body, spec.json_text)
       |> put_present(:form_multipart, spec.multipart)
 
     :mishka_pay
@@ -179,11 +183,18 @@ defmodule MishkaPay.Client do
     lowered =
       Map.new(headers, fn {name, value} -> {name |> to_string() |> String.downcase(), value} end)
 
-    case spec.idempotency_key do
-      nil -> lowered
-      key -> Map.put(lowered, spec.idempotency_header, key)
-    end
+    lowered
+    |> json_type(spec.json_text)
+    |> idempotency(spec)
   end
+
+  defp json_type(headers, nil), do: headers
+  defp json_type(headers, _text), do: Map.put(headers, "content-type", "application/json")
+
+  defp idempotency(headers, %{idempotency_key: nil}), do: headers
+
+  defp idempotency(headers, spec),
+    do: Map.put(headers, spec.idempotency_header, spec.idempotency_key)
 
   defp put_present(opts, _key, nil), do: opts
   defp put_present(opts, key, value), do: Keyword.put(opts, key, value)
@@ -313,7 +324,11 @@ defmodule MishkaPay.Client do
   # One body at most; the second one given is the field in the error.
   @doc false
   def one_body(attrs) do
-    case for(name <- [:form, :json, :multipart], not is_nil(Map.get(attrs, name)), do: name) do
+    case for(
+           name <- [:form, :json, :json_text, :multipart],
+           not is_nil(Map.get(attrs, name)),
+           do: name
+         ) do
       [_first, second | _rest] ->
         {:error, %{field: second, action: :one_body, message: Messages.text(:one_body)}}
 

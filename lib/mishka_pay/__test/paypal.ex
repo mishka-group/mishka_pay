@@ -30,7 +30,7 @@ defmodule MishkaPay.Test.PayPal do
 
   `MishkaPay.Test.setup!/0` makes its table. What it holds belongs to the test that called `stub!/0`, read from any process the test starts
   (through `$callers`), so async tests never see each other's. It tells the test every request
-  it got as `{:paypal, method, path, headers, body}`.
+  it got as `{:paypal, method, path, headers, body}`, and its bytes as `{:paypal_raw, path, body}`.
   """
 
   @table __MODULE__
@@ -97,6 +97,7 @@ defmodule MishkaPay.Test.PayPal do
     {:ok, body, conn} = read_body(conn)
     json = if body == "", do: %{}, else: decode(body)
     send(test(), {:paypal, conn.method, conn.request_path, Map.new(conn.req_headers), json})
+    send(test(), {:paypal_raw, conn.request_path, body})
     answer(conn, conn.method, String.split(conn.request_path, "/", trim: true), json)
   end
 

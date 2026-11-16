@@ -461,6 +461,20 @@ defmodule MishkaPay.Providers.PayPalTest do
       assert body["webhook_event"]["id"] == "WH-EVT-1"
     end
 
+    test "the event goes back to PayPal byte for byte, as PayPal signed it" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+
+      payload =
+        ~s({"resource_type":"capture","id":"WH-EVT-2","event_type":"PAYMENT.CAPTURE.COMPLETED",) <>
+          ~s( "create_time":"2026-11-16T10:00:00Z","resource":{"id":"CAPTURE1","amount":{"value":"1.50"}}})
+
+      assert {:ok, %Event{id: "WH-EVT-2"}} = PayPal.verify_webhook(payload, headers("good"), keys)
+
+      assert_received {:paypal_raw, "/v1/notifications/verify-webhook-signature", sent}
+      assert String.ends_with?(sent, ~s("webhook_event":) <> payload <> "}")
+      assert %{"webhook_id" => "WH-1", "transmission_sig" => "good"} = JSON.decode!(sent)
+    end
+
     test "a message PayPal does not confirm, one without its headers, and a site without a webhook id are refused" do
       {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
       payload = JSON.encode!(@event)

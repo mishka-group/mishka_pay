@@ -229,7 +229,7 @@ defmodule MishkaPay.Providers.PayPal do
            request(
              :post,
              "/v1/notifications/verify-webhook-signature",
-             Map.merge(signature, %{"webhook_id" => webhook_id, "webhook_event" => event}),
+             {:json_text, verification(signature, webhook_id, payload)},
              keys
            ) do
       Mapper.event(event, keys.mode == :live)
@@ -470,7 +470,16 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp body_of(:get, params) when map_size(params) == 0, do: %{}
   defp body_of(:get, params), do: %{params: params}
+  defp body_of(_write, {:json_text, text}), do: %{json_text: text}
   defp body_of(_write, body), do: %{json: body}
+
+  # PayPal checks a message's signature against the exact bytes it sent, so the event goes back
+  # as it came (`payload`, already decoded once as one JSON object), never decoded and encoded
+  # again, which would reorder its keys and change the bytes.
+  defp verification(signature, webhook_id, payload) do
+    head = signature |> Map.put("webhook_id", webhook_id) |> JSON.encode!()
+    String.trim_trailing(head, "}") <> ~s(,"webhook_event":) <> payload <> "}"
+  end
 
   # The app's OAuth token for the site's keys, kept until shortly before it expires.
   defp token(keys) do
