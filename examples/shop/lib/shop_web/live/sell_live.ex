@@ -41,6 +41,7 @@ defmodule ShopWeb.SellLive do
        tenant: @tenant,
        currencies: @currencies,
        tax_codes: @tax_codes,
+       params: %{"currency" => "USD", "interval" => "month"},
        steps: [],
        undo_steps: [],
        made: %{},
@@ -51,6 +52,8 @@ defmodule ShopWeb.SellLive do
   end
 
   @impl true
+  def handle_event("change", params, socket), do: {:noreply, assign(socket, params: params)}
+
   def handle_event("sell", params, socket) do
     me = self()
     tenant = @tenant
@@ -58,7 +61,8 @@ defmodule ShopWeb.SellLive do
 
     {:noreply,
      socket
-     |> assign(steps: [], undo_steps: [], made: %{}, running?: true, link: nil, buyer_url: nil)
+     |> assign(params: params, steps: [], undo_steps: [], made: %{}, running?: true)
+     |> assign(link: nil, buyer_url: nil)
      |> start_async(:sell, fn -> run(me, params, tenant, success_url) end)}
   end
 
@@ -263,13 +267,14 @@ defmodule ShopWeb.SellLive do
         Every field left empty is Stripe's own default.
       </p>
 
-      <form phx-submit="sell" class="space-y-6" data-testid="sell-form">
+      <form phx-change="change" phx-submit="sell" class="space-y-6" data-testid="sell-form">
         <section class="card bg-base-200" data-testid="sell-product">
           <div class="card-body">
             <.section_title icon="hero-cube" title="1. The product" />
             <.hint>MishkaPay.create_product/1 · Stripe Product</.hint>
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <.field
+                params={@params}
                 name="name"
                 label="Name the buyer sees"
                 required
@@ -277,18 +282,22 @@ defmodule ShopWeb.SellLive do
                 testid="sell-name"
               />
               <.field
+                params={@params}
                 name="product_id"
                 label="Own id (optional)"
                 placeholder="mishka-cms-support"
                 testid="sell-product-id"
               />
-              <label class="fieldset">
-                <span class="fieldset-legend">Tax category</span>
-                <select name="tax_code" class="select select-sm" data-testid="sell-tax-code">
-                  <option value="">Stripe's default</option>
-                  <option :for={{code, label} <- @tax_codes} value={code}>{label} ({code})</option>
-                </select>
-              </label>
+              <.choice
+                params={@params}
+                name="tax_code"
+                label="Tax category"
+                testid="sell-tax-code"
+                options={[
+                  {"", "Stripe's default"}
+                  | for({code, label} <- @tax_codes, do: {code, "#{label} (#{code})"})
+                ]}
+              />
               <label class="fieldset sm:col-span-2 lg:col-span-3">
                 <span class="fieldset-legend">Description</span>
                 <textarea
@@ -296,19 +305,21 @@ defmodule ShopWeb.SellLive do
                   class="textarea textarea-sm"
                   placeholder="Priority answers and fixes for your Mishka CMS site"
                   data-testid="sell-description"
-                ></textarea>
+                >{@params["description"]}</textarea>
               </label>
               <div class="fieldset">
                 <span class="fieldset-legend">Metadata (optional)</span>
                 <div class="join">
                   <input
                     name="meta_key"
+                    value={@params["meta_key"]}
                     placeholder="key"
                     class="input input-sm join-item w-24"
                     data-testid="sell-meta-key"
                   />
                   <input
                     name="meta_value"
+                    value={@params["meta_value"]}
                     placeholder="value"
                     class="input input-sm join-item w-28"
                     data-testid="sell-meta-value"
@@ -325,6 +336,7 @@ defmodule ShopWeb.SellLive do
             <.hint>MishkaPay.create_price/1 · Stripe Price</.hint>
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <.field
+                params={@params}
                 name="amount"
                 label="Amount"
                 required
@@ -334,23 +346,28 @@ defmodule ShopWeb.SellLive do
                 placeholder="20.00"
                 testid="sell-amount"
               />
-              <label class="fieldset">
-                <span class="fieldset-legend">Currency</span>
-                <select name="currency" class="select select-sm" data-testid="sell-currency">
-                  <option :for={currency <- @currencies} value={currency}>{currency}</option>
-                </select>
-              </label>
-              <label class="fieldset">
-                <span class="fieldset-legend">Charged</span>
-                <select name="interval" class="select select-sm" data-testid="sell-interval">
-                  <option value="">Once</option>
-                  <option value="day">Every day</option>
-                  <option value="week">Every week</option>
-                  <option value="month" selected>Every month</option>
-                  <option value="year">Every year</option>
-                </select>
-              </label>
+              <.choice
+                params={@params}
+                name="currency"
+                label="Currency"
+                testid="sell-currency"
+                options={for currency <- @currencies, do: {currency, currency}}
+              />
+              <.choice
+                params={@params}
+                name="interval"
+                label="Charged"
+                testid="sell-interval"
+                options={[
+                  {"", "Once"},
+                  {"day", "Every day"},
+                  {"week", "Every week"},
+                  {"month", "Every month"},
+                  {"year", "Every year"}
+                ]}
+              />
               <.field
+                params={@params}
                 name="interval_count"
                 label="Every how many (plans)"
                 type="number"
@@ -358,15 +375,19 @@ defmodule ShopWeb.SellLive do
                 placeholder="1"
                 testid="sell-interval-count"
               />
-              <label class="fieldset">
-                <span class="fieldset-legend">Tax in the amount</span>
-                <select name="tax_behavior" class="select select-sm" data-testid="sell-tax-behavior">
-                  <option value="">Stripe's default</option>
-                  <option value="exclusive">Added on top</option>
-                  <option value="inclusive">Already included</option>
-                </select>
-              </label>
+              <.choice
+                params={@params}
+                name="tax_behavior"
+                label="Tax in the amount"
+                testid="sell-tax-behavior"
+                options={[
+                  {"", "Stripe's default"},
+                  {"exclusive", "Added on top"},
+                  {"inclusive", "Already included"}
+                ]}
+              />
               <.field
+                params={@params}
                 name="lookup_key"
                 label="Your name for it (lookup key)"
                 placeholder="cms-support-monthly"
@@ -382,6 +403,7 @@ defmodule ShopWeb.SellLive do
             <.hint>MishkaPay.create_payment_link/1 · Stripe Payment Link</.hint>
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <.field
+                params={@params}
                 name="quantity"
                 label="Quantity"
                 type="number"
@@ -390,6 +412,7 @@ defmodule ShopWeb.SellLive do
                 testid="sell-quantity"
               />
               <.field
+                params={@params}
                 name="max_purchases"
                 label="Purchases before it turns off"
                 type="number"
@@ -398,12 +421,14 @@ defmodule ShopWeb.SellLive do
                 testid="sell-max"
               />
               <.field
+                params={@params}
                 name="inactive_message"
                 label="Message once off"
                 placeholder="Sold out"
                 testid="sell-inactive-message"
               />
               <.field
+                params={@params}
                 name="trial_days"
                 label="Trial days (plans)"
                 type="number"
@@ -411,32 +436,44 @@ defmodule ShopWeb.SellLive do
                 testid="sell-trial"
               />
               <.field
+                params={@params}
                 name="quantity_min"
                 label="Buyer picks quantity: from"
                 type="number"
                 min="1"
                 testid="sell-qty-min"
               />
-              <.field name="quantity_max" label="to" type="number" min="2" testid="sell-qty-max" />
+              <.field
+                params={@params}
+                name="quantity_max"
+                label="to"
+                type="number"
+                min="2"
+                testid="sell-qty-max"
+              />
               <.choice
+                params={@params}
                 name="invoice"
                 label="Invoice"
                 testid="sell-invoice"
                 options={[{"", "Stripe's default"}, {"on", "Make one"}, {"off", "Don't"}]}
               />
               <.choice
+                params={@params}
                 name="merchant_of_record"
                 label="Merchant of record"
                 testid="sell-merchant"
                 options={[{"", "The site's setting"}, {"on", "On"}, {"off", "Off"}]}
               />
               <.choice
+                params={@params}
                 name="automatic_tax"
                 label="Stripe Tax"
                 testid="sell-automatic-tax"
                 options={[{"", "The site's setting"}, {"on", "On"}, {"off", "Off"}]}
               />
               <.choice
+                params={@params}
                 name="customer_creation"
                 label="Make a Stripe customer"
                 testid="sell-customer-creation"
@@ -447,6 +484,7 @@ defmodule ShopWeb.SellLive do
                 ]}
               />
               <.choice
+                params={@params}
                 name="billing_address"
                 label="Billing address"
                 testid="sell-billing-address"
@@ -458,6 +496,7 @@ defmodule ShopWeb.SellLive do
                     type="checkbox"
                     name="allow_promotion_codes"
                     value="true"
+                    checked={@params["allow_promotion_codes"] == "true"}
                     class="checkbox checkbox-sm"
                     data-testid="sell-promo"
                   /> Buyers may type a promotion code
@@ -467,6 +506,7 @@ defmodule ShopWeb.SellLive do
                     type="checkbox"
                     name="tax_id_collection"
                     value="true"
+                    checked={@params["tax_id_collection"] == "true"}
                     class="checkbox checkbox-sm"
                     data-testid="sell-tax-id"
                   /> Business buyers give their tax id
@@ -611,13 +651,21 @@ defmodule ShopWeb.SellLive do
   attr :label, :string, required: true
   attr :testid, :string, required: true
   attr :type, :string, default: "text"
+  attr :params, :map, default: %{}
   attr :rest, :global, include: ~w(required placeholder step min max)
 
   defp field(assigns) do
     ~H"""
     <label class="fieldset">
       <span class="fieldset-legend">{@label}</span>
-      <input name={@name} type={@type} class="input input-sm" data-testid={@testid} {@rest} />
+      <input
+        name={@name}
+        type={@type}
+        value={@params[@name]}
+        class="input input-sm"
+        data-testid={@testid}
+        {@rest}
+      />
     </label>
     """
   end
@@ -626,13 +674,20 @@ defmodule ShopWeb.SellLive do
   attr :label, :string, required: true
   attr :testid, :string, required: true
   attr :options, :list, required: true
+  attr :params, :map, default: %{}
 
   defp choice(assigns) do
     ~H"""
     <label class="fieldset">
       <span class="fieldset-legend">{@label}</span>
       <select name={@name} class="select select-sm" data-testid={@testid}>
-        <option :for={{value, label} <- @options} value={value}>{label}</option>
+        <option
+          :for={{value, label} <- @options}
+          value={value}
+          selected={(@params[@name] || "") == value}
+        >
+          {label}
+        </option>
       </select>
     </label>
     """
