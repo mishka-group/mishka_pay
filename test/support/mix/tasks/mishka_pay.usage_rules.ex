@@ -21,7 +21,7 @@ defmodule Mix.Tasks.MishkaPay.UsageRules do
   @impl Mix.Task
   def run(_args) do
     Mix.Task.run("compile")
-    files = ["usage-rules.md" | Path.wildcard("usage-rules/*.md")]
+    files = ["usage-rules.md", "AGENTS.md" | Path.wildcard("usage-rules/**/*.md")]
 
     problems =
       Enum.flat_map(files, &missing_names/1) ++ missing_sub_rules(File.read!("usage-rules.md"))

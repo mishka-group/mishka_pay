@@ -195,13 +195,17 @@ nothing. Supervise every listener like any child.
 
 ```elixir
 # mix.exs, deps
-{:usage_rules, "~> 1.2", only: :dev}
+{:usage_rules, "~> 1.3", only: :dev}
 
 # mix.exs, project/0
 usage_rules: [
-  file: "CLAUDE.md",
-  usage_rules: [{:mishka_pay, sub_rules: ["stripe", "subscriptions", "webhooks", "ash"]}]
+  file: "AGENTS.md",
+  usage_rules: [{:mishka_pay, sub_rules: ["stripe", "subscriptions", "webhooks"]}],
+  skills: [package_skills: [:mishka_pay]]
 ]
 ```
 
-Then `mix usage_rules.sync`. Name only the sub-rules your project uses.
+Then `mix usage_rules.sync`. `{:mishka_pay, sub_rules: [...]}` inlines this file and the sub-rules
+named (checked with usage_rules 1.3); a bare `:mishka_pay` inlines this file and every sub-rule;
+`{:mishka_pay, link: :markdown}` links instead of inlining. `package_skills` installs the
+`mishka-pay` skill this package ships (`usage-rules/skills/mishka-pay/SKILL.md`).
