@@ -37,7 +37,8 @@ by hand, `MishkaPay.Ash.listeners(MyApp.Pay)` lists them all in the domain's ord
 
 Every action asks the provider before its transaction and writes what the provider answered, then
 fires `mishka_pay:<kind>:changed`. The `mishka_pay` section takes `actions`, `listen?`,
-`announce?`, `code_interface?` and `belongs_to_user`; see `MishkaPay.Ash.Resource`.
+`announce?`, `code_interface?`, `belongs_to_user` and `tenant_from`; see `MishkaPay.Ash.Resource`
+and its DSL page.
 
 ## Real time
 

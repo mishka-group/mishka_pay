@@ -6,7 +6,7 @@
 mix igniter.install mishka_pay              # add --ash for the Ash layer, --pubsub for broadcasts
 ```
 
-or by hand: add `{:mishka_pay, "~> 0.0.1"}`, supervise `MishkaPay.Providers.Stripe` and your keys
+or by hand: add `{:mishka_pay, "~> 0.0.1-alpha.1"}` (a pre-release is matched only when named), supervise `MishkaPay.Providers.Stripe` and your keys
 plugin, and mount `plug MishkaPay.Webhook, at: "/pay/webhooks"` before `Plug.Parsers`.
 
 ## Keys, per site

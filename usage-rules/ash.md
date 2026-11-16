@@ -32,6 +32,7 @@ defmodule MyApp.Pay.Subscription do
     code_interface? true                   # default: MyApp.Pay.Subscription.cancel!(row, %{at: :now})
     belongs_to_user MyApp.Accounts.User    # optional: belongs_to :user on :user_id
     # belongs_to_user {MyApp.Accounts.User, attribute: :owner_id}
+    # tenant_from :site_id                 # optional: the host's own site column, without Ash multitenancy
   end
 
   postgres do

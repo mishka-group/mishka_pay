@@ -34,9 +34,10 @@ defmodule MishkaPay.MixProject do
           "guides/errors.md",
           "guides/telemetry.md",
           "guides/production.md",
+          "documentation/dsls/DSL-MishkaPay.Ash.Resource.md",
           LICENSE: [title: "License"]
         ],
-        groups_for_extras: [Guides: ~r/guides\//],
+        groups_for_extras: [Guides: ~r/guides\//, DSLs: ~r/documentation\/dsls\//],
         source_url: @source_url
       ],
       # `test/support` is compiled in the test env, where `mix ci` runs dialyzer. It calls `Mix`,
@@ -156,11 +157,14 @@ defmodule MishkaPay.MixProject do
     [
       # The Ash layer's tests run on a database made from the test resources (mix ash.codegen).
       test: ["ash.setup --quiet", "test"],
+      # The DSL page of `MishkaPay.Ash.Resource` is made from its schema, never by hand.
+      docs: ["spark.cheat_sheets --extensions MishkaPay.Ash.Resource", "docs"],
       ci: [
         # First: after `compile` Mix has pruned the code path and the Hex archive's task is gone.
         "hex.audit",
         "compile --warnings-as-errors",
         "format --check-formatted",
+        "spark.cheat_sheets --check --extensions MishkaPay.Ash.Resource",
         "credo --strict",
         "mishka_pay.credence",
         # The rules an LLM agent reads name only what exists.

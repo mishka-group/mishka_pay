@@ -9,13 +9,18 @@ In Stripe's Dashboard, point each site's endpoint at
 `https://your-host/pay/webhooks/stripe/<site id>` and send it the events of
 `MishkaPay.Providers.Stripe.handled_events/0`:
 
-| Stripe events | Updates |
+| Stripe event | Updates |
 |---|---|
-| `checkout.session.*` | the payment, or the subscription it started |
-| `payment_intent.*`, `charge.*`, `refund.*`, `invoice_payment.paid` | the payment |
-| `charge.dispute.*` | the dispute and its payment |
-| `invoice.paid`, `.payment_failed`, `.finalized`, `customer.subscription.*` | the subscription |
-| `customer.created`, `.updated`, `.deleted` | the customer |
+| `checkout.session.completed` | the payment, or the subscription it started |
+| `checkout.session.expired`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` | the payment |
+| `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.processing`, `payment_intent.requires_action` | the payment |
+| `charge.succeeded`, `charge.failed`, `charge.refunded` | the payment |
+| `refund.created`, `refund.updated`, `refund.failed` | the payment |
+| `invoice_payment.paid` | the payment an invoice was paid with |
+| `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`, `charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated` | the dispute and its payment |
+| `invoice.paid`, `invoice.payment_failed`, `invoice.finalized` | the subscription |
+| `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.trial_will_end` | the subscription |
+| `customer.created`, `customer.updated`, `customer.deleted` | the customer |
 
 Each listed event is tested to name what it updates. Any other event is verified and stored, and
 changes nothing.

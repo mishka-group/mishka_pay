@@ -21,5 +21,19 @@ Mishka Pay is built for one install that serves many sites, as Mishka CMS does.
    Actions then run with `tenant: site.id`, the provider's keys are read for that site, and each
    webhook's row is synced inside the site its URL names. The same Stripe object in two sites is two
    rows. Keep the inbox global: a webhook arrives before any site is chosen.
+
+   Without Ash multitenancy, name your own column instead, and each create action writes the
+   site there too:
+
+   ```elixir
+   mishka_pay do
+     kind :payment
+     tenant_from :site_id
+   end
+
+   relationships do
+     belongs_to :site, MyApp.Sites.Site
+   end
+   ```
 5. **Real time per site.** `MishkaPay.PubSub` broadcasts on each site's own topic; subscribe a
    site's admin to `MishkaPay.PubSub.topic(:payment, site.id)`.
