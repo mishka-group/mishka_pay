@@ -11,6 +11,9 @@ defmodule ShopWeb.ShopLive do
       refunds), its webhook events, sync and refund;
     * the customers: register one on Stripe, find and keep one, edit it, open its customer portal,
       and buy as that customer;
+    * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
+      Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
+      the page, then paid or ended;
     * reading a checkout or a payment back by its id;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
@@ -144,8 +147,8 @@ defmodule ShopWeb.ShopLive do
   def handle_event("buy", %{"product" => slug} = params, socket) do
     with %{} = product <- Shop.Catalog.fetch(slug),
          {:ok, count} <- quantity(params["quantity"]),
-         {:ok, %{url: url}} <- start_checkout(product, count, params) do
-      {:noreply, redirect(socket, external: url)}
+         {:ok, checkout} <- start_checkout(product, count, params) do
+      {:noreply, go_or_hold(socket, checkout, params["hold"])}
     else
       nil -> {:noreply, flash(socket, :error, "That product is not on sale.")}
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
@@ -193,6 +196,19 @@ defmodule ShopWeb.ShopLive do
       {:error, error} ->
         {:noreply,
          socket |> close_other(payment_id) |> flash(:error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  def handle_event("expire_checkout", %{"id" => checkout_id}, socket) do
+    case MishkaPay.expire_checkout(provider_of(checkout_id), checkout_id, @tenant) do
+      {:ok, checkout} ->
+        {:noreply,
+         socket
+         |> assign(checkout_read: checkout)
+         |> flash(:info, "Checkout ended. Its page no longer takes payment.")}
+
+      {:error, error} ->
+        {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
 
@@ -377,6 +393,8 @@ defmodule ShopWeb.ShopLive do
         buyer={@buyer}
       />
 
+      <.live_component module={ShopWeb.DiscountsComponent} id="discounts" tenant={@tenant} />
+
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
 
       <section data-testid="read-checkout">
@@ -457,6 +475,45 @@ defmodule ShopWeb.ShopLive do
       merchant_of_record: on_off(params["merchant_of_record"]),
       metadata: metadata(params["meta_key"], params["meta_value"])
     }
+    |> Map.merge(options(params))
+  end
+
+  # "Open it here" keeps the buyer on the shop with the checkout shown, to pay or end later.
+  defp go_or_hold(socket, checkout, "true") do
+    socket
+    |> assign(checkout_read: checkout)
+    |> flash(:info, "Checkout opened and held. Pay it from its card below, or end it.")
+  end
+
+  defp go_or_hold(socket, %{url: url}, _go), do: redirect(socket, external: url)
+
+  # The checkout options, each only when chosen; Mishka Pay refuses a wrong mix with a reason.
+  defp options(params) do
+    %{
+      discounts: discounts(params["discount_mode"], blank_nil(params["discount_id"])),
+      allow_promotion_codes: (params["discount_mode"] == "typed" && true) || nil,
+      automatic_tax: (params["automatic_tax"] == "true" && true) || nil,
+      tax_id_collection: (params["tax_id_collection"] == "true" && true) || nil,
+      locale: blank_nil(params["locale"]),
+      billing_address: blank_nil(params["billing_address"]),
+      customer_creation: blank_nil(params["customer_creation"]),
+      expires_at: expires_at(blank_nil(params["expires_in"]))
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp discounts("code", id) when is_binary(id), do: [%{promotion_code_id: id}]
+  defp discounts("coupon", id) when is_binary(id), do: [%{coupon_id: id}]
+  defp discounts(_none, _id), do: nil
+
+  # Minutes from now; a number that is not one is left for Stripe's default.
+  defp expires_at(nil), do: nil
+
+  defp expires_at(minutes) do
+    case Integer.parse(minutes) do
+      {count, ""} -> DateTime.add(DateTime.utc_now(), count * 60)
+      _not_a_number -> nil
+    end
   end
 
   # A customer picked with "Buy as this customer" pays as that Stripe customer; otherwise the
