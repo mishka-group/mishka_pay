@@ -286,6 +286,8 @@ defmodule ShopWeb.ShopLive do
 
   @impl true
   def handle_info({:mishka_pay, :payment, %{record: record}}, socket) do
+    send_update(ShopWeb.PaymentToolsComponent, id: "payment-tools", changed: record)
+
     {:noreply,
      socket
      |> put_payment(record)
@@ -438,6 +440,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
 
       <.live_component module={ShopWeb.AccessComponent} id="access" tenant={@tenant} member={@member} />
+
+      <.live_component module={ShopWeb.PaymentToolsComponent} id="payment-tools" tenant={@tenant} />
 
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
