@@ -89,7 +89,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              })
   end
 
-  test "a paid payment is read as paid, refunded in part, then in full", %{key: key} do
+  test "a paid payment is read as paid and refunded once, in part", %{key: key} do
     {200, %{"id" => id}} = pay(key, "pm_card_visa")
 
     assert {:ok, %Payment{status: :paid}} = MishkaPay.fetch_payment("stripe", id)
@@ -102,8 +102,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              })
 
     assert {:ok, %Payment{status: :partially_refunded}} = MishkaPay.fetch_payment("stripe", id)
-    assert {:ok, %Refund{}} = MishkaPay.refund(%{provider: "stripe", payment_id: id})
-    assert {:ok, %Payment{status: :refunded}} = MishkaPay.fetch_payment("stripe", id)
+
+    assert {:error, %MishkaPay.Errors.Invalid{errors: [%{field: :payment_id}]}} =
+             MishkaPay.refund(%{provider: "stripe", payment_id: id})
   end
 
   test "a declined card is Stripe's 402 with its decline code", %{key: key} do

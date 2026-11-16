@@ -6,7 +6,8 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.Refund do
     @moduledoc """
     The `:refund` action of `MishkaPay.Ash.Payment`: refunds the stored payment through its
-    provider before the transaction starts, reads the payment again and writes it, keeps the
+    provider before the transaction starts (once: a row that shows a refund is refused without
+    asking the provider), reads the payment again and writes it, keeps the
     `MishkaPay.Refund` in the record's `:refund` metadata, and fires `mishka_pay:payment:changed`.
     When the payment cannot be read again, the row counts the refund itself (never past the
     payment's amount), and the announcement waits for the next sync.
@@ -27,13 +28,28 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp refund(%{data: payment} = changeset) do
+      case Decimal.gt?(payment.amount_refunded, 0) do
+        true ->
+          Ash.Changeset.add_error(
+            changeset,
+            Ash.Error.Changes.InvalidChanges.exception(
+              fields: [:amount],
+              message: MishkaPay.Messages.text(:refund_once)
+            )
+          )
+
+        false ->
+          provider_refund(changeset, payment)
+      end
+    end
+
+    defp provider_refund(changeset, payment) do
       request = %{
         provider: payment.provider,
         tenant: payment.tenant,
         payment_id: payment.provider_id,
         amount: Ash.Changeset.get_argument(changeset, :amount),
-        reason: Ash.Changeset.get_argument(changeset, :reason),
-        reference: Ash.Changeset.get_argument(changeset, :reference)
+        reason: Ash.Changeset.get_argument(changeset, :reason)
       }
 
       case MishkaPay.refund(request) do

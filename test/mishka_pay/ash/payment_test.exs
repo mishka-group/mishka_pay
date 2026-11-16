@@ -136,8 +136,7 @@ defmodule MishkaPay.Ash.PaymentTest do
                payment
                |> Ash.Changeset.for_update(:refund, %{
                  amount: %{amount: "5", currency: "USD"},
-                 reason: :requested_by_customer,
-                 reference: "refund-1"
+                 reason: :requested_by_customer
                })
                |> Ash.update(authorize?: false)
 
@@ -154,19 +153,28 @@ defmodule MishkaPay.Ash.PaymentTest do
         assert {:error,
                 %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidArgument{field: :amount}]}} =
                  payment
-                 |> Ash.Changeset.for_update(:refund, %{amount: amount, reference: "refund-2"})
+                 |> Ash.Changeset.for_update(:refund, %{amount: amount})
                  |> Ash.update(authorize?: false)
       end
     end
   end
 
   describe "safety" do
-    test "a refund needs its own reference, so sending it again can never refund twice" do
+    test "a payment is refunded once: a row that shows a refund is refused without asking Stripe" do
       {:ok, payment} = sync()
+      payment = Ash.Seed.update!(payment, %{amount_refunded: Decimal.new(5)})
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, :stripe_asked)
+        StripeMock.forward(conn)
+      end)
 
       assert {:error,
-              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.Required{field: :reference}]}} =
+              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidChanges{fields: [:amount]}]}} =
                payment |> Ash.Changeset.for_update(:refund, %{}) |> Ash.update(authorize?: false)
+
+      refute_received :stripe_asked
     end
 
     test "a refund that went through still succeeds when the payment cannot be read again" do
@@ -190,8 +198,7 @@ defmodule MishkaPay.Ash.PaymentTest do
       assert {:ok, refunded} =
                payment
                |> Ash.Changeset.for_update(:refund, %{
-                 amount: %{amount: "5", currency: "USD"},
-                 reference: "refund-3"
+                 amount: %{amount: "5", currency: "USD"}
                })
                |> Ash.update(authorize?: false)
 

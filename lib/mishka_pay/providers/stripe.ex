@@ -25,7 +25,7 @@ defmodule MishkaPay.Providers.Stripe do
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.
-    * `refund/2` refunds a PaymentIntent, in full or in part.
+    * `refund/2` refunds a PaymentIntent once, in full or in part.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
@@ -41,9 +41,10 @@ defmodule MishkaPay.Providers.Stripe do
   takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 49 keys of 40
   characters with values of 500; anything past that is an `:invalid` error before any request.
 
-  A part refund first reads the payment, since Stripe counts a refund in the payment's own
-  currency: an amount in another currency, or more than is left, is refused. A whole refund sends
-  no amount and needs no read.
+  A refund first reads the payment. One that was refunded already is refused (a payment is
+  refunded once), and so is a part refund in another currency than the payment's or over its
+  amount, since Stripe counts a refund in the payment's own currency. The idempotency key comes
+  from the tenant and the payment, so two refunds sent at once are one refund at Stripe.
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
   another address, such as Stripe's own mock server in tests.
@@ -99,7 +100,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- refundable(refund, keys),
          {:ok, answer} <-
            request(:post, "/v1/refunds", Mapper.refund_params(refund), keys,
-             key: idempotency_key("refund", refund.tenant, refund.reference)
+             key: idempotency_key("refund", refund.tenant, refund.payment_id)
            ) do
       Mapper.refund(answer, refund)
     end
@@ -275,23 +276,24 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  # Stripe has no currency on a refund: it counts the amount in the payment's own currency. So a
-  # part refund reads the payment first, and refuses another currency or more than is left. A
-  # whole refund (no amount) needs no read.
-  defp refundable(%Refund{amount: nil}, _keys), do: :ok
-
+  # A payment is refunded once. Stripe has no currency on a refund: it counts the amount in the
+  # payment's own currency, so a part refund in another currency, or over the payment, is refused.
   defp refundable(%Refund{amount: amount, payment_id: id}, keys) do
     with {:ok, payment} <- fetch_payment(id, keys) do
-      left = Decimal.sub(payment.amount.amount, payment.amount_refunded.amount)
-
       cond do
+        Money.positive?(payment.amount_refunded) ->
+          invalid(:payment_id, Messages.text(:refund_once))
+
+        is_nil(amount) ->
+          :ok
+
         amount.currency != payment.amount.currency ->
           invalid(
             :amount,
             Messages.text(:refund_currency, currency: payment.amount.currency)
           )
 
-        Decimal.gt?(amount.amount, left) ->
+        Decimal.gt?(amount.amount, payment.amount.amount) ->
           invalid(:amount, Messages.text(:refund_left))
 
         true ->

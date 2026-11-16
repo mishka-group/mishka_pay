@@ -40,6 +40,7 @@ defmodule MishkaPay.Messages do
           | :stripe_id
           | :refund_currency
           | :refund_left
+          | :refund_once
           | :stripe_metadata
           | :stripe_three_decimal
           | :declined
@@ -158,7 +159,14 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The amount field is more than is left to refund on the payment"
+        "The amount field is more than the payment"
+      )
+
+  defp msgid(:refund_once),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The payment was refunded already: a payment is refunded once, and a new purchase is a new payment"
       )
 
   defp msgid(:stripe_metadata),

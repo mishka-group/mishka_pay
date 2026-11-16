@@ -54,11 +54,11 @@ if Code.ensure_loaded?(Ash) do
 
     `:refund` refunds a stored payment through its provider (`MishkaPay.refund/1`), in full or by
     `:amount`, with an optional `:reason`, then syncs the row from the provider and keeps the
-    `MishkaPay.Refund` in the record's `:refund` metadata. Its `:reference` is required: the
-    caller's own id for this refund, which makes the idempotency key, so a refund sent again after a
-    lost answer is the same refund, never a second one. When the refund went through but the payment
-    cannot be read again, the action still succeeds: the row counts the refund itself, and the next
-    sync or webhook brings the provider's word.
+    `MishkaPay.Refund` in the record's `:refund` metadata. A payment is refunded once: a row that
+    shows a refund is refused before the provider is asked, and the provider refuses one the row
+    has not seen yet. A buyer who wants it again makes a new purchase. When the refund went through
+    but the payment cannot be read again, the action still succeeds: the row counts the refund
+    itself, and the next sync or webhook brings the provider's word.
 
     Errors come back as Ash errors (`MishkaPay.Ash.to_ash_error/1`).
 
@@ -142,7 +142,6 @@ if Code.ensure_loaded?(Ash) do
         argument :reason, :atom,
           constraints: [one_of: [:requested_by_customer, :duplicate, :fraudulent]]
 
-        argument :reference, :string, allow_nil?: false
         change MishkaPay.Ash.Payment.Refund
       end
     end

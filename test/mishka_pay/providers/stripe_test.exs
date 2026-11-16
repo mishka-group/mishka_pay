@@ -140,7 +140,45 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
-    test "a part refund in another currency or over what is left is refused before Stripe" do
+    test "a payment is refunded once: one Stripe shows refunded is refused before a refund is sent" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn
+        %{method: "GET"} = conn ->
+          {:ok, %{body: intent}} =
+            Req.get("http://localhost:12111#{conn.request_path}?#{conn.query_string}",
+              auth: {:bearer, "sk_test_123"}
+            )
+
+          Req.Test.json(conn, put_in(intent, ["latest_charge", "amount_refunded"], 500))
+
+        conn ->
+          send(test, :refund_sent)
+          StripeMock.forward(conn)
+      end)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      refute_received :refund_sent
+    end
+
+    test "two refunds of one payment sent at once carry one idempotency key, so Stripe makes one" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
+
+      for _twice <- 1..2,
+          do: MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      keys =
+        for _call <- 1..2 do
+          assert_received {_, ^ref, _, %{path: "/v1/refunds", idempotency_key: key}}
+          key
+        end
+
+      assert ["mishka_pay-refund-" <> _digest = same, same] = keys
+    end
+
+    test "a part refund in another currency or over the payment is refused before Stripe" do
       for amount <- [%{amount: "5", currency: "EUR"}, %{amount: "11", currency: "USD"}] do
         assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
                  MishkaPay.refund(%{
