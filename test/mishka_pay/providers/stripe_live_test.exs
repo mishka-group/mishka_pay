@@ -947,6 +947,220 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.checkout(%{setup | reference: "card-live-new-#{run}"})
   end
 
+  # An on_exit callback runs in its own process, without the test's keys or HTTP stub: it calls
+  # the adapter itself, with the test key and a stub of its own.
+  defp cleanup(key, call) do
+    MishkaPay.Test.stub_http(&StripeMock.forward(&1, "https://api.stripe.com"))
+    assert {:ok, _done} = call.(%MishkaPay.Credentials{provider: "stripe", secret_key: key})
+  end
+
+  defp archive(key, %MishkaPay.Product{id: id}),
+    do: cleanup(key, &Stripe.update_product(%MishkaPay.Product{id: id, active: false}, &1))
+
+  test "a meter counts a customer's usage once per reference, a metered price bills it, and the meter is turned off",
+       %{key: key} do
+    run = System.unique_integer([:positive])
+    event = "mishka_pay_live_#{run}"
+
+    assert {:ok,
+            %MishkaPay.Meter{
+              id: "mtr_" <> _ = meter_id,
+              event_name: ^event,
+              aggregation: :sum,
+              status: :active
+            }} =
+             MishkaPay.create_meter(%{provider: "stripe", name: "Live #{run}", event_name: event})
+
+    # A meter is never deleted, only turned off.
+    on_exit(fn ->
+      cleanup(key, fn keys ->
+        case Stripe.deactivate_meter(meter_id, keys) do
+          {:error, %Errors.Rejected{message: "meter_already_deactivated"}} -> {:ok, :inactive}
+          answer -> answer
+        end
+      end)
+    end)
+
+    assert %MishkaPay.Meter{id: ^meter_id} =
+             (&MishkaPay.list_meters("stripe", nil, Keyword.merge([status: :active], &1)))
+             |> MishkaPay.Page.stream()
+             |> Enum.find(&(&1.id == meter_id))
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "usage-#{run}@example.com"})
+
+    now = DateTime.utc_now()
+
+    usage = %{
+      provider: "stripe",
+      event_name: event,
+      customer_id: customer_id,
+      value: 3,
+      at: DateTime.add(now, -120),
+      reference: "use-#{run}-1"
+    }
+
+    assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _ = first}} =
+             MishkaPay.report_usage(usage)
+
+    assert {:ok, %MishkaPay.Usage{id: ^first}} = MishkaPay.report_usage(usage)
+
+    assert {:ok, %MishkaPay.Usage{id: second}} =
+             MishkaPay.report_usage(%{usage | value: "1.5", reference: "use-#{run}-2"})
+
+    refute second == first
+
+    # Stripe counts reports a little after they come in: the value is what it has counted so far.
+    assert {:ok,
+            %MishkaPay.UsageSummary{
+              meter_id: ^meter_id,
+              customer_id: ^customer_id,
+              value: value,
+              from: %DateTime{},
+              to: %DateTime{}
+            }} =
+             MishkaPay.usage_summary(
+               "stripe",
+               meter_id,
+               customer_id,
+               DateTime.add(now, -3600),
+               DateTime.add(now, 60)
+             )
+
+    # None, the first report, or both; Stripe may answer a whole number as a float.
+    assert Enum.any?([0, 3, 4.5], &(&1 == value)), inspect(value)
+
+    {:ok, %MishkaPay.Product{id: product_id} = product} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Live usage #{run}"})
+
+    on_exit(fn -> archive(key, product) end)
+
+    assert {:ok, %MishkaPay.Price{id: price_id, meter_id: ^meter_id, interval: :month}} =
+             MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: product_id,
+               amount: %{amount: "0.05", currency: "USD"},
+               interval: :month,
+               meter_id: meter_id
+             })
+
+    on_exit(fn ->
+      cleanup(key, &Stripe.update_price(%MishkaPay.Price{id: price_id, active: false}, &1))
+    end)
+
+    assert {:ok, %MishkaPay.Price{meter_id: ^meter_id}} =
+             MishkaPay.fetch_price("stripe", price_id)
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, status: :inactive}} =
+             MishkaPay.deactivate_meter("stripe", meter_id)
+  end
+
+  test "a feature is attached to a product, and a customer who bought nothing has no entitlements",
+       %{key: key} do
+    run = System.unique_integer([:positive])
+
+    assert {:ok, %MishkaPay.Feature{id: "feat_" <> _ = feature_id, active: true}} =
+             MishkaPay.create_feature(%{
+               provider: "stripe",
+               name: "Live #{run}",
+               lookup_key: "mishka-pay-live-#{run}"
+             })
+
+    # A feature is never deleted, only turned off.
+    on_exit(fn ->
+      cleanup(key, fn keys ->
+        path = "/v1/entitlements/features/#{feature_id}"
+        Stripe.request(:post, path, %{"active" => false}, keys)
+      end)
+    end)
+
+    {:ok, %MishkaPay.Product{id: product_id} = product} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Live feature #{run}"})
+
+    on_exit(fn -> archive(key, product) end)
+
+    assert {:ok, %MishkaPay.Feature{id: ^feature_id, lookup_key: "mishka-pay-live-" <> _}} =
+             MishkaPay.attach_feature("stripe", product_id, feature_id)
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "feature-#{run}@example.com"})
+
+    assert {:ok, %MishkaPay.Page{items: [], has_more: false}} =
+             MishkaPay.list_entitlements("stripe", customer_id)
+  end
+
+  test "the balance is read, and its transactions page through, by type, with net as amount less fee" do
+    assert {:ok, %MishkaPay.Balance{available: [_ | _] = available, pending: pending}} =
+             MishkaPay.fetch_balance("stripe")
+
+    assert Enum.all?(available ++ pending, &match?(%Money{}, &1))
+
+    assert {:ok, %MishkaPay.Page{items: [_, _] = items, has_more: true, next: next}} =
+             MishkaPay.list_balance_transactions("stripe", nil, limit: 2)
+
+    for %MishkaPay.BalanceTransaction{id: "txn_" <> _} = txn <- items do
+      assert Money.equal?(txn.net, Money.sub!(txn.amount, txn.fee))
+      assert txn.status in [:available, :pending]
+      assert %DateTime{} = txn.created_at
+    end
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.BalanceTransaction{id: later} | _]}} =
+             MishkaPay.list_balance_transactions("stripe", nil, limit: 2, after: next)
+
+    refute later in Enum.map(items, & &1.id)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = charges}} =
+             MishkaPay.list_balance_transactions("stripe", nil, type: "charge", limit: 3)
+
+    assert Enum.all?(charges, &(&1.type == "charge" and is_binary(&1.source_id)))
+  end
+
+  test "a customer's balance takes credit once per reference, then a debit, and lists both" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "credit-#{run}@example.com"})
+
+    credit = fn ->
+      MishkaPay.adjust_customer_balance(
+        "stripe",
+        customer_id,
+        %{amount: "-5.00", currency: "USD"},
+        nil,
+        description: "Sorry for the outage",
+        reference: "ticket-#{run}"
+      )
+    end
+
+    assert {:ok,
+            %MishkaPay.CustomerBalanceTransaction{
+              id: "cbtxn_" <> _ = credit_id,
+              customer_id: ^customer_id,
+              amount: amount,
+              ending_balance: after_credit,
+              type: "adjustment",
+              description: "Sorry for the outage",
+              reference: "ticket-" <> _
+            }} = credit.()
+
+    assert Money.equal?(amount, Money.new(:USD, "-5.00"))
+    assert Money.equal?(after_credit, Money.new(:USD, "-5.00"))
+    assert {:ok, %MishkaPay.CustomerBalanceTransaction{id: ^credit_id}} = credit.()
+
+    assert {:ok, %MishkaPay.CustomerBalanceTransaction{id: debit_id, ending_balance: ending}} =
+             MishkaPay.adjust_customer_balance("stripe", customer_id, Money.new(:USD, "2.00"))
+
+    assert Money.equal?(ending, Money.new(:USD, "-3.00"))
+
+    assert {:ok,
+            %MishkaPay.Page{
+              items: [
+                %MishkaPay.CustomerBalanceTransaction{id: ^debit_id},
+                %MishkaPay.CustomerBalanceTransaction{id: ^credit_id}
+              ]
+            }} = MishkaPay.list_customer_balance("stripe", customer_id)
+  end
+
   test "the setup check takes the sandbox keys" do
     assert {:keys_accepted, :ok} = List.keyfind(MishkaPay.Check.run([]), :keys_accepted, 0)
   end

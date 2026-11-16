@@ -13,7 +13,8 @@ defmodule MishkaPay.Event do
     * `:type`: the provider's own name for what happened, such as `"checkout.session.completed"`.
     * `:object_id`, `:object_type`: what it is about (`"pi_..."`, `"payment_intent"`). An event
       about a saved payment method or a setup that names a customer is about that customer
-      (`"cus_..."`, `"customer"`), since the customer is what changes.
+      (`"cus_..."`, `"customer"`), since the customer is what changes; so does a change to a
+      customer's entitlements, whose summary has no id of its own.
     * `:payment_id`: the payment it concerns, when it concerns one: the object itself for a
       payment, or the payment a checkout, charge, refund or dispute belongs to. The id
       `MishkaPay.fetch_payment/3` takes.

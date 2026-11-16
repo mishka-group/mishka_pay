@@ -24,7 +24,7 @@
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, test clocks `clock_`, meters `mtr_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -128,6 +128,45 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Payment method ids are checked by prefix: `pm_`, or `card_` for a card saved before them.
 - `setup_intent.*` and `payment_method.*` events are about the customer they name (a detached
   payment method names it in `previous_attributes`), so the Ash customer row syncs on each.
+
+## Usage billing
+
+- Mishka Pay uses Stripe Billing Meters (`mtr_...`) and meter events. Stripe's docs now point new
+  usage-based integrations to Metronome, its main usage billing platform. They say meters stay
+  fully supported, and work better with Checkout, Connect and Adaptive Pricing. Mishka Pay has
+  no Metronome calls.
+- A meter reads the customer from `stripe_customer_id` and the value from `value` in each report
+  (Stripe's defaults). A meter is never deleted: `deactivate_meter/3` stops it taking usage or
+  new prices.
+- A report's `:reference` becomes its `identifier` and its idempotency key. Stripe refuses a
+  repeated identifier within at least 24 hours. Without a reference Stripe makes one.
+- Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
+  is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
+  corrects usage reported by mistake.
+- `usage_summary/6` counts whole minutes: `from` rounds down, `to` rounds up. Stripe counts a
+  report a little after it comes in, so a summary read at once may not show it yet.
+- A metered price is a recurring price with `meter_id`: Stripe's `recurring[usage_type]=metered`
+  and `recurring[meter]`.
+
+## Entitlements
+
+- Features (`feat_...`) attach to products; a customer who subscribes gets active entitlements,
+  which `list_entitlements/4` reads. Check access by the entitlement's `:lookup_key`.
+- Stripe sends `entitlements.active_entitlement_summary.updated` when a customer's entitlements
+  change. The summary has no id, so Mishka Pay names its customer as the event's object
+  (`object_type: "customer"`): read `list_entitlements/4` again on it.
+
+## Balances
+
+- `fetch_balance/2` reads the account's payments balance: `available` and `pending`, one money
+  per currency, below zero when Stripe's is.
+- `list_balance_transactions/3` filters by `payout_id:` (`po_...`, automatic payouts only) and
+  `type:` (Stripe's type, such as `"charge"`, `"refund"` or `"payout"`). Each has `:amount`,
+  `:fee`, `:net`, `:type`, `:source_id`, `:status` and `:available_at`.
+- A customer's balance (`adjust_customer_balance/5`) is Stripe's customer credit balance:
+  below zero is credit taken off the next invoices, above zero is a debit added to them. It is
+  in the customer's one currency; the first change sets it. Its `:reference` makes the
+  idempotency key and is kept in its metadata.
 
 ## Sandbox
 

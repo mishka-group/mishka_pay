@@ -126,6 +126,15 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_product(attrs)`, `fetch_product/3`, `update_product/1`, `archive_product/3`, `list_products/3` | `%MishkaPay.Product{}` |
 | `MishkaPay.create_price(attrs)`, `fetch_price/3`, `archive_price/3`, `list_prices/3` | `%MishkaPay.Price{}` |
 | `MishkaPay.create_payment_link(attrs)`, `fetch_payment_link/3`, `update_payment_link/1`, `list_payment_links/3` | `%MishkaPay.PaymentLink{url: url}` |
+| `MishkaPay.create_meter(attrs)` (`MishkaPay.Meter`), `list_meters(provider, tenant, status: :active)`, `deactivate_meter/3` | `%MishkaPay.Meter{}` that counts usage; a provider never deletes one |
+| `MishkaPay.create_price(%{..., interval: :month, meter_id: id})` | a `%MishkaPay.Price{}` billed by the usage its meter counted |
+| `MishkaPay.report_usage(attrs)` (`MishkaPay.Usage`: `:event_name`, `:customer_id`, `:value`, `:at`, `:reference`) | `%MishkaPay.Usage{id: id}`; the same reference never counts twice |
+| `MishkaPay.usage_summary(provider, meter_id, customer_id, from, to, tenant)` | `%MishkaPay.UsageSummary{value: n}`: what the meter counted in the window |
+| `MishkaPay.create_feature(attrs)` (`MishkaPay.Feature`), `attach_feature(provider, product_id, feature_id, tenant)` | `%MishkaPay.Feature{}`; a buyer of the product is entitled to it |
+| `MishkaPay.list_entitlements(provider, customer_id, tenant)` | a `MishkaPay.Page` of `%MishkaPay.Entitlement{lookup_key: key}`: what the customer may use now |
+| `MishkaPay.fetch_balance(provider, tenant)` | `%MishkaPay.Balance{available: [money], pending: [money]}`, one money per currency |
+| `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` | a `MishkaPay.Page` of `%MishkaPay.BalanceTransaction{}` (amount, fee, net, type, source) |
+| `MishkaPay.adjust_customer_balance(provider, customer_id, money, tenant, description: d, reference: r)`, `list_customer_balance/4` | `%MishkaPay.CustomerBalanceTransaction{}`: below zero is store credit |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every

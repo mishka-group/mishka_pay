@@ -85,6 +85,10 @@ defmodule MishkaPay.Messages do
           | :stripe_metadata
           | :stripe_three_decimal
           | :stripe_whole
+          | :meter_interval
+          | :usage_value
+          | :usage_window
+          | :stripe_usage_time
           | :due_sent_only
           | :stripe_event_types
           | :search_needs
@@ -482,6 +486,26 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
+
+  defp msgid(:meter_interval),
+    do: dgettext_noop("mishka_pay", "A price on a meter needs an interval to bill its usage")
+
+  defp msgid(:usage_value),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The value field must be an exact number: an integer, a Decimal or a string"
+      )
+
+  defp msgid(:usage_window),
+    do: dgettext_noop("mishka_pay", "The end of a usage window must come after its start")
+
+  defp msgid(:stripe_usage_time),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe takes usage from the last 35 days and up to 5 minutes ahead"
+      )
 
   defp msgid(:due_sent_only),
     do:

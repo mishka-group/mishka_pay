@@ -1017,6 +1017,340 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Exception.message(error) =~ "merchant_of_record to false"
     end
 
+    test "a meter is made, listed and turned off, usage is reported and summed, and a price bills it, as Stripe's spec accepts" do
+      # stripe-mock makes its own ids (`meter_...`); Stripe's start with `mtr_`.
+      assert {:ok, %MishkaPay.Meter{provider: "stripe", id: "meter_" <> _}} =
+               MishkaPay.create_meter(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 name: "API calls",
+                 event_name: "api_call",
+                 aggregation: "count"
+               })
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Meter{status: :active} | _]}} =
+               MishkaPay.list_meters("stripe", "site-a", status: :active, limit: 5)
+
+      assert {:ok, %MishkaPay.Meter{}} = MishkaPay.deactivate_meter("stripe", "mtr_123", "site-a")
+
+      assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _, value: value}} =
+               MishkaPay.report_usage(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 event_name: "api_call",
+                 customer_id: "cus_123",
+                 value: "2.5",
+                 at: DateTime.add(DateTime.utc_now(), -3600),
+                 reference: "request-1"
+               })
+
+      assert Decimal.equal?(value, Decimal.new("2.5"))
+
+      from = ~U[2026-11-01 00:00:00Z]
+
+      assert {:ok,
+              %MishkaPay.UsageSummary{meter_id: "mtr_123", customer_id: "cus_123", value: 25}} =
+               MishkaPay.usage_summary(
+                 "stripe",
+                 "mtr_123",
+                 "cus_123",
+                 from,
+                 DateTime.add(from, 1, :day),
+                 "site-a"
+               )
+
+      assert {:ok, %MishkaPay.Price{}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 product_id: "prod_123",
+                 amount: %{amount: "0.05", currency: "USD"},
+                 interval: :month,
+                 meter_id: "mtr_123"
+               })
+
+      params =
+        Stripe.Mapper.price_params(%MishkaPay.Price{
+          product_id: "prod_1",
+          amount: Money.new(:USD, "0.05"),
+          interval: :month,
+          meter_id: "mtr_1"
+        })
+
+      assert %{"usage_type" => "metered", "meter" => "mtr_1", "interval" => "month"} =
+               params["recurring"]
+
+      assert {:ok, %MishkaPay.Price{meter_id: "mtr_9", interval: :month}} =
+               Stripe.Mapper.price(%{
+                 "id" => "price_1",
+                 "currency" => "usd",
+                 "unit_amount" => 5,
+                 "recurring" => %{
+                   "interval" => "month",
+                   "usage_type" => "metered",
+                   "meter" => "mtr_9"
+                 }
+               })
+    end
+
+    test "a usage report sends its reference as Stripe's identifier and idempotency key, with its value and time" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+        send(test_pid, {:sent, params, Plug.Conn.get_req_header(conn, "idempotency-key")})
+
+        Req.Test.json(conn, %{
+          "object" => "billing.meter_event",
+          "event_name" => params["event_name"],
+          "identifier" => params["identifier"],
+          "payload" => %{"value" => params["payload[value]"]},
+          "timestamp" => 1_794_825_000
+        })
+      end)
+
+      at = DateTime.utc_now() |> DateTime.add(-3600) |> DateTime.truncate(:second)
+      usage = %{provider: "stripe", event_name: "tokens", customer_id: "cus_1", reference: "r-1"}
+
+      assert {:ok, %MishkaPay.Usage{id: identifier}} =
+               MishkaPay.report_usage(Map.merge(usage, %{value: 1200, at: at}))
+
+      assert_received {:sent, sent, [^identifier]}
+
+      assert %{
+               "event_name" => "tokens",
+               "payload[stripe_customer_id]" => "cus_1",
+               "payload[value]" => "1200",
+               "identifier" => ^identifier
+             } = sent
+
+      assert sent["timestamp"] == Integer.to_string(DateTime.to_unix(at))
+
+      assert {:ok, %MishkaPay.Usage{id: ^identifier}} =
+               MishkaPay.report_usage(Map.put(usage, :value, Decimal.new("-3.50")))
+
+      assert_received {:sent, %{"payload[value]" => "-3.50"} = again, [^identifier]}
+      refute Map.has_key?(again, "timestamp")
+
+      assert {:ok, %MishkaPay.Usage{id: nil, value: 1}} =
+               MishkaPay.report_usage(Map.delete(usage, :reference))
+
+      assert_received {:sent, without, [client_key]}
+      refute Map.has_key?(without, "identifier")
+      refute client_key == identifier
+    end
+
+    test "a usage window goes to Stripe in whole minutes, and an empty one counts 0" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        send(test_pid, {:query, conn.request_path, conn.query_params})
+        Req.Test.json(conn, %{"object" => "list", "data" => [], "has_more" => false})
+      end)
+
+      from = ~U[2026-11-16 10:00:30Z]
+      to = ~U[2026-11-16 11:15:01Z]
+
+      assert {:ok, %MishkaPay.UsageSummary{value: 0, from: start, to: finish}} =
+               MishkaPay.usage_summary("stripe", "mtr_1", "cus_1", from, to)
+
+      assert start == ~U[2026-11-16 10:00:00Z]
+      assert finish == ~U[2026-11-16 11:16:00Z]
+
+      assert_received {:query, "/v1/billing/meters/mtr_1/event_summaries",
+                       %{"customer" => "cus_1", "start_time" => start_time}}
+
+      assert start_time == Integer.to_string(DateTime.to_unix(start))
+    end
+
+    test "features are made and attached to a product, and a customer's entitlements listed, as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.Feature{id: "feat_" <> _, lookup_key: "api-access", active: true}} =
+               MishkaPay.create_feature(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 name: "API access",
+                 lookup_key: "api-access"
+               })
+
+      assert {:ok, %MishkaPay.Feature{}} =
+               MishkaPay.attach_feature("stripe", "prod_123", "feat_123", "site-a")
+
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [%MishkaPay.Entitlement{id: "ent_" <> _, feature_id: "feat_" <> _}]
+              }} = MishkaPay.list_entitlements("stripe", "cus_123", "site-a", limit: 5)
+    end
+
+    test "the balance and its transactions, by payout and type, are read as Stripe's spec answers" do
+      assert {:ok, %MishkaPay.Balance{available: [%Elixir.Money{}], pending: [%Elixir.Money{}]}} =
+               MishkaPay.fetch_balance("stripe", "site-a")
+
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [
+                  %MishkaPay.BalanceTransaction{
+                    id: "txn_" <> _,
+                    type: "charge",
+                    status: :available
+                  }
+                ]
+              }} =
+               MishkaPay.list_balance_transactions("stripe", "site-a",
+                 payout_id: "po_123",
+                 type: "charge",
+                 limit: 3
+               )
+    end
+
+    test "a customer's balance is credited and listed as Stripe's spec accepts" do
+      assert {:ok,
+              %MishkaPay.CustomerBalanceTransaction{
+                id: "cbtxn_" <> _,
+                customer_id: "cus_123",
+                amount: amount
+              }} =
+               MishkaPay.adjust_customer_balance(
+                 "stripe",
+                 "cus_123",
+                 %{amount: "-5.00", currency: "USD"},
+                 "site-a",
+                 description: "Sorry for the outage",
+                 reference: "ticket-7"
+               )
+
+      assert Money.negative?(amount)
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CustomerBalanceTransaction{} | _]}} =
+               MishkaPay.list_customer_balance("stripe", "cus_123", "site-a", limit: 2)
+    end
+
+    test "Stripe's balances keep their sign and currency places, and a credit goes once per reference" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+        send(
+          test_pid,
+          {:sent, URI.decode_query(body), Plug.Conn.get_req_header(conn, "idempotency-key")}
+        )
+
+        Req.Test.json(conn, %{
+          "id" => "cbtxn_1",
+          "object" => "customer_balance_transaction",
+          "amount" => -50_000,
+          "currency" => "isk",
+          "customer" => "cus_1",
+          "ending_balance" => -70_000,
+          "type" => "adjustment",
+          "metadata" => %{"mishka_pay_reference" => "ticket-7"},
+          "created" => 1_794_825_000
+        })
+      end)
+
+      credit = fn ->
+        MishkaPay.adjust_customer_balance("stripe", "cus_1", Money.new(:ISK, "-500"), nil,
+          reference: "ticket-7"
+        )
+      end
+
+      assert {:ok,
+              %MishkaPay.CustomerBalanceTransaction{
+                amount: amount,
+                ending_balance: ending,
+                reference: "ticket-7",
+                type: "adjustment"
+              }} = credit.()
+
+      assert Money.equal?(amount, Money.new(:ISK, "-500"))
+      assert Money.equal?(ending, Money.new(:ISK, "-700"))
+
+      assert_received {:sent, %{"amount" => "-50000", "currency" => "isk"}, [key]}
+      assert {:ok, _same} = credit.()
+      assert_received {:sent, _params, [^key]}
+
+      assert {:ok, %MishkaPay.Balance{available: [usd, jpy], pending: []}} =
+               Stripe.Mapper.balance(%{
+                 "available" => [
+                   %{"amount" => -1250, "currency" => "usd"},
+                   %{"amount" => 300, "currency" => "jpy"}
+                 ],
+                 "pending" => []
+               })
+
+      assert Money.equal?(usd, Money.new(:USD, "-12.50"))
+      assert Money.equal?(jpy, Money.new(:JPY, 300))
+
+      assert {:ok,
+              %MishkaPay.BalanceTransaction{amount: out, fee: fee, net: net, source_id: "po_1"}} =
+               Stripe.Mapper.balance_transaction(%{
+                 "id" => "txn_1",
+                 "amount" => -10_000,
+                 "fee" => 25,
+                 "net" => -10_025,
+                 "currency" => "usd",
+                 "source" => "po_1",
+                 "type" => "payout",
+                 "status" => "pending"
+               })
+
+      assert Money.equal?(out, Money.new(:USD, "-100.00"))
+      assert Money.equal?(fee, Money.new(:USD, "0.25"))
+      assert Money.equal?(net, Money.new(:USD, "-100.25"))
+    end
+
+    test "usage, entitlements and balances that cannot be right are refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      usage = %{provider: "stripe", event_name: "api_call", customer_id: "cus_1"}
+      now = DateTime.utc_now()
+
+      for {result, field} <- [
+            {MishkaPay.create_meter(%{provider: "stripe", name: "No event"}), :event_name},
+            {MishkaPay.create_meter(%{provider: "stripe", event_name: "e", aggregation: :max}),
+             :aggregation},
+            {MishkaPay.report_usage(Map.put(usage, :value, 1.5)), :value},
+            {MishkaPay.report_usage(Map.put(usage, :value, "lots")), :value},
+            {MishkaPay.report_usage(Map.put(usage, :customer_id, "cs_1")), :customer_id},
+            {MishkaPay.report_usage(Map.put(usage, :at, DateTime.add(now, -36, :day))), :at},
+            {MishkaPay.report_usage(Map.put(usage, :at, DateTime.add(now, 10, :minute))), :at},
+            {MishkaPay.usage_summary("stripe", "mtr_1", "cus_1", now, now), :to},
+            {MishkaPay.usage_summary("stripe", "evt_1", "cus_1", now, DateTime.add(now, 60)),
+             :meter_id},
+            {MishkaPay.deactivate_meter("stripe", "../charges"), :meter_id},
+            {MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: "prod_1",
+               amount: %{amount: "1", currency: "USD"},
+               meter_id: "mtr_1"
+             }), :interval},
+            {MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: "prod_1",
+               amount: %{amount: "1", currency: "USD"},
+               interval: :month,
+               meter_id: "evt_1"
+             }), :meter_id},
+            {MishkaPay.create_feature(%{provider: "stripe", name: "No key"}), :lookup_key},
+            {MishkaPay.attach_feature("stripe", "prod_1", "price_1"), :feature_id},
+            {MishkaPay.attach_feature("stripe", "../prod", "feat_1"), :product_id},
+            {MishkaPay.list_entitlements("stripe", "sub_1"), :customer_id},
+            {MishkaPay.list_balance_transactions("stripe", nil, payout_id: "tr_1"), :payout_id},
+            {MishkaPay.list_balance_transactions("stripe", nil, type: "a&b"), :type},
+            {MishkaPay.adjust_customer_balance("stripe", "cus_1", %{amount: "x", currency: "USD"}),
+             :amount},
+            {MishkaPay.adjust_customer_balance("stripe", "cus_1", Money.new(:ISK, "-0.5")),
+             :amount},
+            {MishkaPay.adjust_customer_balance("stripe", "sub_1", Money.new(:USD, 5)),
+             :customer_id},
+            {MishkaPay.list_customer_balance("stripe", "../cus"), :customer_id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = result
+        assert Enum.any?(errors, &(&1.field == field)), inspect({field, errors})
+      end
+    end
+
     test "a refund is read again and listed by payment, as Stripe's spec answers" do
       assert {:ok, %Refund{provider: "stripe", id: "re_" <> _, amount: %Elixir.Money{}}} =
                MishkaPay.fetch_refund("stripe", "re_123", "site-a")
@@ -1957,7 +2291,12 @@ defmodule MishkaPay.Providers.StripeTest do
     "promotion_code" => %{"object" => "promotion_code", "id" => "promo_1"},
     "payment_link" => %{"object" => "payment_link", "id" => "plink_1"},
     "payment_method" => %{"object" => "payment_method", "id" => "pm_1", "customer" => "cus_1"},
-    "setup_intent" => %{"object" => "setup_intent", "id" => "seti_1", "customer" => "cus_1"}
+    "setup_intent" => %{"object" => "setup_intent", "id" => "seti_1", "customer" => "cus_1"},
+    "entitlements.active_entitlement_summary" => %{
+      "object" => "entitlements.active_entitlement_summary",
+      "customer" => "cus_1",
+      "entitlements" => %{"object" => "list", "data" => []}
+    }
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do

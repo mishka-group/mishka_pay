@@ -22,6 +22,7 @@ In Stripe's Dashboard, point each site's endpoint at
 | `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.trial_will_end` | the subscription |
 | `customer.created`, `customer.updated`, `customer.deleted` | the customer |
 | `setup_intent.succeeded`, `setup_intent.setup_failed`, `payment_method.attached`, `payment_method.detached`, `payment_method.updated`, `payment_method.automatically_updated` | the customer the setup or the payment method names |
+| `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed |
 
 Each listed event is tested to name what it updates. Any other event is verified and stored, and
 changes nothing.
