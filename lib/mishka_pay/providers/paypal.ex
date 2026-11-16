@@ -121,7 +121,10 @@ defmodule MishkaPay.Providers.PayPal do
   @impl MishkaPay.Provider
   def fetch_checkout("I-" <> _rest = subscription_id, keys) do
     with :ok <- subscription_id(subscription_id, :checkout_id),
-         {:ok, sub} <- request(:get, "/v1/billing/subscriptions/#{subscription_id}", %{}, keys) do
+         {:ok, sub} <-
+           :get
+           |> request("/v1/billing/subscriptions/#{subscription_id}", %{}, keys)
+           |> unknown_id() do
       {:ok, Mapper.subscription_checkout(sub)}
     end
   end
@@ -295,9 +298,19 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp read_subscription(subscription_id, keys) do
     with :ok <- subscription_id(subscription_id, :subscription_id) do
-      request(:get, "/v1/billing/subscriptions/#{subscription_id}", %{"fields" => "plan"}, keys)
+      :get
+      |> request("/v1/billing/subscriptions/#{subscription_id}", %{"fields" => "plan"}, keys)
+      |> unknown_id()
     end
   end
+
+  # PayPal answers an id it never made, read by its path, as a bad parameter: it is one it has not.
+  defp unknown_id(
+         {:error, %Errors.Rejected{status: 400, code: "INVALID_PARAMETER_SYNTAX"} = error}
+       ),
+       do: {:error, %{error | code: "resource_missing"}}
+
+  defp unknown_id(answer), do: answer
 
   defp transactions(subscription_id, limit, keys) do
     with {:ok, sub} <- read_subscription(subscription_id, keys) do
@@ -514,6 +527,17 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp answer({:ok, %Req.Response{status: status, body: body}}, _keys), do: rejected(status, body)
   defp answer({:error, _unreachable} = error, _keys), do: error
+
+  # PayPal's "not found" is Stripe's `resource_missing`: one code, one plain message.
+  defp rejected(404, body) do
+    {:error,
+     Errors.Rejected.exception(
+       provider: "paypal",
+       status: 404,
+       code: "resource_missing",
+       message: error_field(body, "message")
+     )}
+  end
 
   defp rejected(status, body) do
     {:error,
