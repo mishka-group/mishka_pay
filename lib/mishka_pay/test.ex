@@ -54,19 +54,63 @@ defmodule MishkaPay.Test do
   import ExUnit.Callbacks, only: [on_exit: 1, start_supervised!: 1]
 
   alias MishkaInstaller.Event.{Event, EventHandler, ModuleStateCompiler}
-  alias MishkaInstaller.QueueAssistant
+  alias MishkaInstaller.{MnesiaRepo, QueueAssistant}
   alias MishkaPay.Test.Keys
 
   @doc """
-  Prepares a test run: the table `put_keys/3` writes to and the keys plugin that reads it, started
-  once and waited for. Call it in `test_helper.exs`.
+  Prepares a test run: mishka_installer's plugin registry (`start_registry!/0`), the table
+  `put_keys/3` writes to and the keys plugin that reads it, started once and waited for. Call it in
+  `test_helper.exs`.
   """
   @spec setup!() :: :ok
   def setup! do
+    start_registry!()
     Keys.new_table()
     {:ok, _supervisor} = Supervisor.start_link([Keys], strategy: :one_for_one)
     await(Keys)
   end
+
+  @doc """
+  Starts `MishkaPay.Registry` (mishka_installer's plugin registry) when its parts are not running
+  and returns once it is synchronized: for a test run with no application that lists it, such as a
+  library's own. A project whose application lists `MishkaPay.Registry` starts nothing here;
+  `setup!/0` calls it first.
+  """
+  @spec start_registry!() :: :ok
+  def start_registry! do
+    case MishkaPay.Registry.missing() do
+      [] ->
+        :ok
+
+      missing ->
+        MishkaInstaller.subscribe("mnesia")
+
+        try do
+          {:ok, _supervisor} = Supervisor.start_link([MishkaPay.Registry], strategy: :one_for_one)
+          if MnesiaRepo in missing, do: synchronized()
+        after
+          MishkaInstaller.unsubscribe("mnesia")
+        end
+
+        :ok
+    end
+  end
+
+  defp synchronized do
+    receive do
+      %{channel: "mnesia", status: :synchronized} -> :ok
+    after
+      :timer.seconds(30) -> raise "the mishka_installer registry never synchronized"
+    end
+  end
+
+  @doc """
+  Returns once `plugin`, which the application already starts (its provider, its keys plugin),
+  runs: its event registers it a moment after boot, so the first test could otherwise come first.
+  Call it in `test_helper.exs`, after `setup!/0`.
+  """
+  @spec await_plugin!(module()) :: :ok
+  def await_plugin!(plugin), do: await(plugin)
 
   @doc """
   Starts `plugin` (a project's provider or keys plugin) under the test supervisor and returns once

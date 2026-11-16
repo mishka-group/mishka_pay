@@ -20,6 +20,8 @@ defmodule Shop.Application do
         {DNSCluster, query: Application.get_env(:shop, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Shop.PubSub},
         {Oban, AshOban.config(Application.fetch_env!(:shop, :ash_domains), oban())},
+        # mishka_installer's plugin registry when nothing else starts it, before every plugin.
+        MishkaPay.Registry,
         MishkaPay.Providers.Stripe,
         MishkaPay.Providers.PayPal,
         Shop.Pay.Keys,

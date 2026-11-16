@@ -17,11 +17,16 @@ defmodule Mix.Tasks.MishkaPay.Install.Docs do
 
     It adds, and never twice:
 
-      * the Stripe provider and a keys plugin (`<App>.Pay.Keys`) to the application's children;
+      * `MishkaPay.Registry` first, which starts mishka_installer's plugin registry when nothing else
+        does (as in a project's test run), then the Stripe provider and a keys plugin (`<App>.Pay.Keys`) to the application's children;
         the keys plugin answers each site's Stripe keys at runtime, from the environment until the
         project keeps them per site;
       * the webhook endpoint (`plug MishkaPay.Webhook, at: "/pay/webhooks"`) before
         `Plug.Parsers` in the endpoint, which needs the raw body;
+      * `MishkaPay.Test.setup!/0` and `MishkaPay.Test.await_plugin!/1` before `ExUnit.start()`, so
+        tests start once Stripe is registered;
+      * mishka_installer's plugin registry in `.mnesia/<env>` (left out of git), where providers,
+        keys and listeners are kept;
       * the test config that lets `MishkaPay.Test.stub_http/1` answer every provider call, and
         `config :ex_money, auto_start_exchange_rate_service: false` (Mishka Pay converts no
         currencies).
@@ -31,8 +36,10 @@ defmodule Mix.Tasks.MishkaPay.Install.Docs do
       * `--ash`: the Ash layer: a `<App>.Pay` domain with the webhook inbox, payments,
         subscriptions, customers and disputes as resources of the project
         (`MishkaPay.Ash.Resource`), the listener the extension makes for each in the application's
-        children, and the inbox's Oban queue. It needs ash_postgres and ash_oban (`mix igniter.install ash_postgres
-        ash_oban`), then `mix ash.codegen mishka_pay`.
+        children, the inbox's Oban queue, `config :ash, default_string_length_count: :codepoints`
+        when the project has no such setting, and `:mishka_pay` in the formatter's `import_deps`
+        (its DSL is written without parentheses). It needs ash_postgres and ash_oban
+        (`mix igniter.install ash_postgres ash_oban`), then `mix ash.codegen mishka_pay`.
       * `--pubsub`: `<App>.Pay.Broadcast`, Mishka Pay's PubSub plugin on the project's
         `<App>.PubSub`.
     """
@@ -75,10 +82,13 @@ if Code.ensure_loaded?(Igniter) do
       keys = Igniter.Project.Module.module_name(igniter, "Pay.Keys")
 
       igniter
-      |> Igniter.Project.Module.create_module(keys, keys_module(), on_exists: :skip)
-      |> Application.add_new_child(MishkaPay.Providers.Stripe)
+      |> create_once(keys, keys_module())
+      |> Application.add_new_child(MishkaPay.Registry)
+      |> Application.add_new_child(MishkaPay.Providers.Stripe, after: [MishkaPay.Registry])
       |> Application.add_new_child(keys, after: [MishkaPay.Providers.Stripe])
       |> webhook_plug()
+      |> registry()
+      |> test_helper()
       |> Config.configure_new(
         "test.exs",
         :mishka_pay,
@@ -131,6 +141,71 @@ if Code.ensure_loaded?(Igniter) do
 
       def credentials(_provider, _tenant), do: nil
       """
+    end
+
+    # Providers, keys and listeners are mishka_installer plugins, kept in its Mnesia registry: one
+    # folder per environment (a test run never reads dev's) that git leaves out.
+    defp registry(igniter) do
+      dir = Sourceror.parse_string!(~S|Path.expand("../.mnesia/#{config_env()}", __DIR__)|)
+
+      igniter
+      |> Config.configure_new(
+        "config.exs",
+        :mishka_installer,
+        [MishkaInstaller.MnesiaRepo, :mnesia_dir],
+        {:code, dir}
+      )
+      |> Config.configure_new(
+        "config.exs",
+        :mishka_installer,
+        [MishkaInstaller.MnesiaRepo, :essential],
+        [MishkaInstaller.Event.Event, MishkaInstaller.Installer.Installer]
+      )
+      |> Igniter.create_or_update_file(".gitignore", "/.mnesia/\n", fn source ->
+        content = Rewrite.Source.get(source, :content)
+
+        case String.contains?(content, "/.mnesia/") do
+          true ->
+            source
+
+          false ->
+            Rewrite.Source.update(
+              source,
+              :content,
+              String.trim_trailing(content) <> "\n\n/.mnesia/\n"
+            )
+        end
+      end)
+    end
+
+    # A module the project already has stays as the project wrote it, so running again is safe.
+    defp create_once(igniter, module, contents) do
+      Igniter.Project.Module.find_and_update_or_create_module(
+        igniter,
+        module,
+        contents,
+        &{:ok, &1}
+      )
+    end
+
+    # Tests wait for the provider the application starts, and get `MishkaPay.Test.put_keys/3`.
+    defp test_helper(igniter) do
+      code = """
+      MishkaPay.Test.setup!()
+      MishkaPay.Test.await_plugin!(MishkaPay.Providers.Stripe)
+      """
+
+      igniter
+      |> Igniter.include_existing_file("test/test_helper.exs", required?: false)
+      |> Igniter.update_elixir_file("test/test_helper.exs", fn zipper ->
+        with :error <- Function.move_to_function_call(zipper, {MishkaPay.Test, :setup!}, 0),
+             {:ok, start} <- Function.move_to_function_call(zipper, {ExUnit, :start}, [0, 1]) do
+          {:ok, Common.add_code(start, code, placement: :before)}
+        else
+          {:ok, _set_up} -> {:ok, zipper}
+          :error -> {:ok, zipper}
+        end
+      end)
     end
 
     # The webhook needs the raw body: its plug goes right before `Plug.Parsers`, once.
@@ -186,23 +261,22 @@ if Code.ensure_loaded?(Igniter) do
       domain = Igniter.Project.Module.module_name(igniter, "Pay")
       repo = Igniter.Project.Module.module_name(igniter, "Repo")
 
+      # Its DSL is written without parentheses: the formatter learns that before the resources.
+      igniter = Igniter.Project.Formatter.import_dep(igniter, :mishka_pay)
+
       igniter =
         Enum.reduce(@resources, igniter, fn {name, kind, table}, igniter ->
           resource = Module.concat(domain, name)
 
           igniter
-          |> Igniter.Project.Module.create_module(
-            resource,
-            resource_body(domain, kind, table, repo),
-            on_exists: :skip
-          )
+          |> create_once(resource, resource_body(domain, kind, table, repo))
           |> Application.add_new_child(Module.concat(resource, MishkaPayListener),
             after: [MishkaPay.Providers.Stripe]
           )
         end)
 
       igniter
-      |> Igniter.Project.Module.create_module(domain, domain_body(domain), on_exists: :skip)
+      |> create_once(domain, domain_body(domain))
       |> Config.configure_new("config.exs", app_name, [:ash_domains], [])
       |> Config.configure(
         "config.exs",
@@ -217,6 +291,7 @@ if Code.ensure_loaded?(Igniter) do
         [Oban, :queues, :mishka_pay_inbox],
         5
       )
+      |> Config.configure_new("config.exs", :ash, [:default_string_length_count], :codepoints)
       |> Igniter.add_notice("""
       Mishka Pay's Ash layer is in #{inspect(domain)}: run `mix ash.codegen mishka_pay` and migrate.
       It needs ash_postgres and ash_oban (`mix igniter.install ash_postgres ash_oban`).
@@ -261,11 +336,7 @@ if Code.ensure_loaded?(Igniter) do
       pubsub = Igniter.Project.Module.module_name(igniter, "PubSub")
 
       igniter
-      |> Igniter.Project.Module.create_module(
-        broadcast,
-        "use MishkaPay.PubSub, pubsub: #{inspect(pubsub)}",
-        on_exists: :skip
-      )
+      |> create_once(broadcast, "use MishkaPay.PubSub, pubsub: #{inspect(pubsub)}")
       |> Application.add_new_child(broadcast, after: [Phoenix.PubSub])
     end
   end

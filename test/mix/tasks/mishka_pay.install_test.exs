@@ -12,6 +12,7 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
     |> Igniter.compose_task("mishka_pay.install", [])
     |> assert_creates("lib/test/pay/keys.ex")
     |> assert_has_patch("lib/test/application.ex", """
+    + |      MishkaPay.Registry,
     + |      MishkaPay.Providers.Stripe,
     """)
     |> assert_has_patch("config/test.exs", """
@@ -19,6 +20,19 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
     """)
     |> assert_has_patch("config/config.exs", """
     + |config :ex_money, auto_start_exchange_rate_service: false
+    """)
+    |> assert_has_patch("config/config.exs", """
+    + |config :mishka_installer, MishkaInstaller.MnesiaRepo,
+    """)
+    |> assert_has_patch("config/config.exs", """
+    + |      "../.mnesia/\#{config_env()}",
+    """)
+    |> assert_has_patch("config/config.exs", """
+    + |  essential: [MishkaInstaller.Event.Event, MishkaInstaller.Installer.Installer]
+    """)
+    |> assert_has_patch("test/test_helper.exs", """
+    + |MishkaPay.Test.setup!()
+    + |MishkaPay.Test.await_plugin!(MishkaPay.Providers.Stripe)
     """)
   end
 
@@ -36,9 +50,20 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
     [before_parsers, _after] = String.split(endpoint, ~r/plug\(?\s*Plug\.Parsers/, parts: 2)
     assert before_parsers =~ ~r/plug\(?MishkaPay\.Webhook, at: "\/pay\/webhooks"\)?/
 
-    igniter
-    |> Igniter.compose_task("mishka_pay.install", [])
-    |> assert_unchanged()
+    again = Igniter.compose_task(igniter, "mishka_pay.install", [])
+    assert again.issues == []
+    assert_unchanged(again)
+  end
+
+  test "--ash --pubsub run again on a project that has them changes nothing and raises no issue" do
+    igniter =
+      phx_test_project()
+      |> Igniter.compose_task("mishka_pay.install", ["--ash", "--pubsub"])
+      |> apply_igniter!()
+
+    again = Igniter.compose_task(igniter, "mishka_pay.install", ["--ash", "--pubsub"])
+    assert again.issues == []
+    assert_unchanged(again)
   end
 
   test "--ash adds the domain, the five resources and their listeners; --pubsub the broadcast" do
@@ -48,6 +73,12 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
       |> assert_creates("lib/test/pay.ex")
       |> assert_creates("lib/test/pay/webhook_event.ex")
       |> assert_creates("lib/test/pay/broadcast.ex")
+      |> assert_has_patch("config/config.exs", """
+      + |config :ash, default_string_length_count: :codepoints
+      """)
+      |> assert_has_patch(".formatter.exs", """
+      + |  import_deps: [:mishka_pay, :ecto, :ecto_sql, :phoenix],
+      """)
       |> assert_has_patch("lib/test/application.ex", """
       + |      Test.Pay.Dispute.MishkaPayListener,
       """)
