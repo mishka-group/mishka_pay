@@ -12,6 +12,9 @@ defmodule MishkaPay.Event do
       than once: a listener keeps what it did by this id.
     * `:type`: the provider's own name for what happened, such as `"checkout.session.completed"`.
     * `:object_id`, `:object_type`: what it is about (`"pi_..."`, `"payment_intent"`).
+    * `:payment_id`: the payment it concerns, when it concerns one: the object itself for a
+      payment, or the payment a checkout, charge, refund or dispute belongs to. The id
+      `MishkaPay.fetch_payment/3` takes.
     * `:livemode`: whether it came from live or test mode.
     * `:account`: the connected account it is for, when the provider has those.
     * `:created_at`: when the provider made it.
@@ -30,6 +33,7 @@ defmodule MishkaPay.Event do
     field :type, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
     field :object_id, String.t(), derives: "validate(string)"
     field :object_type, String.t(), derives: "validate(string)"
+    field :payment_id, String.t(), derives: "validate(string)"
     field :livemode, boolean(), default: false, derives: "validate(boolean)"
     field :account, String.t(), derives: "validate(string)"
     field :created_at, DateTime.t(), derives: "validate(struct)"

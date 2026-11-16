@@ -25,6 +25,23 @@ end
 
 MishkaInstaller.unsubscribe("mnesia")
 
+# The Ash layer's database, as a host runs it: the repo, Oban's tables and Oban itself, with each
+# test checking out its own sandboxed connection (MishkaPay.DataCase).
+repo = MishkaPay.Support.Repo
+{:ok, _} = Supervisor.start_link([repo], strategy: :one_for_one)
+
+Ecto.Migrator.run(repo, [{20_000_101_000_000, MishkaPay.Support.ObanMigration}], :up,
+  all: true,
+  log: false
+)
+
+{:ok, _} =
+  Supervisor.start_link([{Oban, Application.fetch_env!(:mishka_pay, Oban)}],
+    strategy: :one_for_one
+  )
+
+Ecto.Adapters.SQL.Sandbox.mode(repo, :manual)
+
 # A run killed part-way leaves its test plugins registered on disk; take them out first. Then the
 # test kit starts, as a project using Mishka Pay starts it.
 MishkaPay.Test.sweep!(["Elixir.MishkaPay.Support."])

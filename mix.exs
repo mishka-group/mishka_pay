@@ -90,6 +90,10 @@ defmodule MishkaPay.MixProject do
       # The Ash layer (`MishkaPay.Ash.*`) compiles only when the host has Ash. Without it the SDK
       # works on plain structs.
       {:ash, "~> 3.37", optional: true},
+      # The inbox processes each webhook event as an AshOban job, with retries.
+      {:ash_oban, "~> 0.10.3", optional: true},
+      # The Ash layer's own tests keep their resources in Postgres, as a host does.
+      {:ash_postgres, "~> 2.15", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.19", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
@@ -134,6 +138,8 @@ defmodule MishkaPay.MixProject do
 
   defp aliases do
     [
+      # The Ash layer's tests run on a database made from the test resources (mix ash.codegen).
+      test: ["ash.setup --quiet", "test"],
       ci: [
         # First: after `compile` Mix has pruned the code path and the Hex archive's task is gone.
         "hex.audit",

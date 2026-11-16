@@ -161,6 +161,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       type: event["type"],
       object_id: object["id"],
       object_type: object["object"],
+      payment_id: payment_of(object),
       livemode: event["livemode"],
       account: event["account"],
       created_at: time(event["created"])
@@ -168,6 +169,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Event.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # A PaymentIntent is the payment; a session, charge, refund or dispute points at its own.
+  defp payment_of(%{"object" => "payment_intent", "id" => id}) when is_binary(id), do: id
+  defp payment_of(%{"payment_intent" => payment}), do: id_of(payment)
+  defp payment_of(_other), do: nil
 
   defp object_of(%{"data" => %{"object" => %{} = object}}), do: object
   defp object_of(_no_object), do: %{}
