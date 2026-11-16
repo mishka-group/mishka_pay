@@ -382,7 +382,10 @@ defmodule ShopWeb.PayComponents do
             data-status={payment.status}
           >
             <td>
-              <div class="font-medium">{product_name(payment.reference, @names)}</div>
+              <div class="font-medium flex items-center gap-2">
+                {product_name(payment.reference, @names)}
+                <.provider_badge provider={payment.provider} />
+              </div>
               <div class="text-xs opacity-60 font-mono">{payment.provider_id}</div>
             </td>
             <td class="text-sm">
@@ -423,6 +426,7 @@ defmodule ShopWeb.PayComponents do
         <div class="flex flex-wrap items-center gap-3">
           <h2 class="card-title flex-1 min-w-0 flex-wrap">
             {product_name(@selected.payment.reference, @names)}
+            <.provider_badge provider={@selected.payment.provider} />
             <code class="text-sm opacity-70 break-all">{@selected.payment.provider_id}</code>
           </h2>
           <a
@@ -920,6 +924,15 @@ defmodule ShopWeb.PayComponents do
         <div><button class="btn btn-sm" data-testid="settings-save">Save settings</button></div>
       </form>
     </section>
+    """
+  end
+
+  @doc "Which provider took a payment."
+  attr :provider, :string, required: true
+
+  def provider_badge(assigns) do
+    ~H"""
+    <span class="badge badge-outline badge-xs" data-testid="provider-badge">{@provider}</span>
     """
   end
 
