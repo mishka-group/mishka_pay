@@ -57,8 +57,8 @@ defmodule Shop.Pay.Keys do
     |> Ash.Query.filter(tenant == ^tenant)
     |> Ash.read_one(authorize?: false)
     |> case do
-      {:ok, %{refunds: refunds, merchant_of_record: merchant_of_record}} ->
-        %{refunds: refunds, merchant_of_record: merchant_of_record}
+      {:ok, %{refunds: refunds, merchant_of_record: merchant_of_record, automatic_tax: tax}} ->
+        %{refunds: refunds, merchant_of_record: merchant_of_record, automatic_tax: tax}
 
       _none ->
         %{}

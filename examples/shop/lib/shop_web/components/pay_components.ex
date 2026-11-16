@@ -86,6 +86,8 @@ defmodule ShopWeb.PayComponents do
             <dd data-testid="site-refunds">{@keys.refunds}</dd>
             <dt class="opacity-70">Merchant of record</dt>
             <dd data-testid="site-merchant">{on_off(@keys.merchant_of_record)}</dd>
+            <dt class="opacity-70">Stripe Tax</dt>
+            <dd data-testid="site-automatic-tax">{on_off(@keys.automatic_tax)}</dd>
             <dt class="opacity-70">Shop</dt>
             <dd data-testid="site-open">
               <span class={["badge badge-sm", (@setting.open && "badge-success") || "badge-error"]}>
@@ -293,14 +295,22 @@ defmodule ShopWeb.PayComponents do
           </select>
         </label>
         <div class="fieldset gap-1">
+          <label class="fieldset">
+            <span class="fieldset-legend">Stripe Tax, this checkout</span>
+            <select name="automatic_tax" class="select select-sm" data-testid="option-automatic-tax">
+              <option value="">The site's setting</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
           <label class="label gap-2 text-sm">
             <input
               type="checkbox"
-              name="automatic_tax"
+              name="invoice"
               value="true"
               class="checkbox checkbox-sm"
-              data-testid="option-automatic-tax"
-            /> Stripe Tax counts the tax
+              data-testid="option-invoice"
+            /> Make an invoice (one-time only)
           </label>
           <label class="label gap-2 text-sm">
             <input
@@ -818,6 +828,14 @@ defmodule ShopWeb.PayComponents do
       <dd data-testid="checkout-discount">
         {(@checkout.amount_discount && Money.to_string!(@checkout.amount_discount)) || "–"}
       </dd>
+      <dt :if={@checkout.invoice_id} class="opacity-70">Invoice</dt>
+      <dd :if={@checkout.invoice_id} class="font-mono text-xs" data-testid="checkout-invoice">
+        {@checkout.invoice_id}
+      </dd>
+      <dt :if={@checkout.payment_link_id} class="opacity-70">From payment link</dt>
+      <dd :if={@checkout.payment_link_id} class="font-mono text-xs" data-testid="checkout-link">
+        {@checkout.payment_link_id}
+      </dd>
       <dt :if={@checkout.expires_at} class="opacity-70">Expires</dt>
       <dd :if={@checkout.expires_at} class="text-xs" data-testid="checkout-expires">
         {Calendar.strftime(@checkout.expires_at, "%Y-%m-%d %H:%M")} UTC
@@ -1077,6 +1095,20 @@ defmodule ShopWeb.PayComponents do
               <option value="on" selected={@setting.merchant_of_record == true}>On</option>
               <option value="off" selected={@setting.merchant_of_record == false}>Off</option>
             </select>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Stripe Tax for every checkout</legend>
+            <label class="label">
+              <input
+                type="checkbox"
+                name="automatic_tax"
+                value="true"
+                class="checkbox checkbox-sm"
+                checked={@setting.automatic_tax}
+                data-testid="setting-automatic-tax"
+              /> Count the tax from the buyer's address
+            </label>
           </fieldset>
 
           <fieldset class="fieldset">

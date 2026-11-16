@@ -13,6 +13,8 @@ defmodule ShopWeb.ShopLive do
       and buy as that customer;
     * the catalog: the shop's products published to Stripe as products and prices, sold by price
       id, and every Stripe list read page by page;
+    * payment links for catalog prices, with every limit a developer can choose, and one buyer's
+      address; invoices for one-time checkouts; the site's Stripe Tax setting;
     * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
@@ -261,6 +263,7 @@ defmodule ShopWeb.ShopLive do
       tenant: @tenant,
       refunds: params["refunds"],
       merchant_of_record: on_off(params["merchant_of_record"]),
+      automatic_tax: params["automatic_tax"] == "true",
       open: params["open"] == "true"
     }
 
@@ -399,6 +402,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.DiscountsComponent} id="discounts" tenant={@tenant} />
 
       <.live_component module={ShopWeb.CatalogComponent} id="catalog" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.PaymentLinksComponent} id="payment-links" tenant={@tenant} />
 
       <.live_component module={ShopWeb.StripeListsComponent} id="stripe-lists" tenant={@tenant} />
 
@@ -545,7 +550,8 @@ defmodule ShopWeb.ShopLive do
     %{
       discounts: discounts(params["discount_mode"], blank_nil(params["discount_id"])),
       allow_promotion_codes: (params["discount_mode"] == "typed" && true) || nil,
-      automatic_tax: (params["automatic_tax"] == "true" && true) || nil,
+      automatic_tax: on_off(params["automatic_tax"]),
+      invoice: (params["invoice"] == "true" && true) || nil,
       tax_id_collection: (params["tax_id_collection"] == "true" && true) || nil,
       locale: blank_nil(params["locale"]),
       billing_address: blank_nil(params["billing_address"]),
