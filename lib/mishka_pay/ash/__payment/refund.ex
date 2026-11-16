@@ -6,7 +6,8 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.Refund do
     @moduledoc """
     The `:refund` action of `MishkaPay.Ash.Payment`: refunds the stored payment through its
-    provider before the transaction starts, reads the payment again and writes it, keeps the
+    provider before the transaction starts (as often as the tenant allows, see
+    `MishkaPay.Refund`), reads the payment again and writes it, keeps the
     `MishkaPay.Refund` in the record's `:refund` metadata, and fires `mishka_pay:payment:changed`.
     When the payment cannot be read again, the row counts the refund itself (never past the
     payment's amount), and the announcement waits for the next sync.

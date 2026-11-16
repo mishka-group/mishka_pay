@@ -29,6 +29,8 @@ defmodule MishkaPay.Checkout do
     * `:url`: the page to send the buyer to.
     * `:status`: `:open`, `:complete` or `:expired`.
     * `:payment_id`: the payment it made, once there is one.
+    * `:amount_total`, `:amount_tax`: what the buyer pays in all and the tax in it, as `Money`,
+      once the provider has counted them (the tax may change as the buyer fills in an address).
   """
 
   use GuardedStruct
@@ -73,6 +75,8 @@ defmodule MishkaPay.Checkout do
       derives: "validate(enum=Atom[open::complete::expired])"
 
     field :payment_id, String.t(), derives: "validate(string)"
+    field :amount_total, Money.t(), validator: {MishkaPay.Money, :field}
+    field :amount_tax, Money.t(), validator: {MishkaPay.Money, :field}
   end
 
   @doc false

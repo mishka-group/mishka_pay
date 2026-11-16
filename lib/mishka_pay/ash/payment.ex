@@ -31,7 +31,9 @@ if Code.ensure_loaded?(Ash) do
 
     The provider and its payment id, the tenant, the `:status` (see `MishkaPay.Payment`), the
     `:amount`, `:amount_refunded` and `:currency`, the caller's `:reference` from the checkout, the
-    provider's `:customer_id`, when the provider made it and when it was last synced. An identity on
+    buyer (`:customer_id`, `:customer_email`, `:customer_name`), the card (`:card_brand`,
+    `:card_last4`), why the last try failed (`:failure_message`), when the provider made it and when
+    it was last synced. An identity on
     provider and payment id keeps one row per payment. The `:money` and `:money_refunded`
     calculations give them back as `Money`.
 
@@ -54,11 +56,11 @@ if Code.ensure_loaded?(Ash) do
 
     `:refund` refunds a stored payment through its provider (`MishkaPay.refund/1`), in full or by
     `:amount`, with an optional `:reason`, then syncs the row from the provider and keeps the
-    `MishkaPay.Refund` in the record's `:refund` metadata. Its `:reference` is required: the
-    caller's own id for this refund, which makes the idempotency key, so a refund sent again after a
-    lost answer is the same refund, never a second one. When the refund went through but the payment
-    cannot be read again, the action still succeeds: the row counts the refund itself, and the next
-    sync or webhook brings the provider's word.
+    `MishkaPay.Refund` in the record's `:refund` metadata. How often a payment may be refunded is
+    the tenant's runtime setting (`MishkaPay.Credentials`, `:refunds`): once by default, or many
+    times, each with its own `:reference`. When the refund went through
+    but the payment cannot be read again, the action still succeeds: the row counts the refund
+    itself, and the next sync or webhook brings the provider's word.
 
     Errors come back as Ash errors (`MishkaPay.Ash.to_ash_error/1`).
 
@@ -88,6 +90,11 @@ if Code.ensure_loaded?(Ash) do
       attribute :currency, :string, allow_nil?: false, public?: true
       attribute :reference, :string, public?: true
       attribute :customer_id, :string, public?: true
+      attribute :customer_email, :string, public?: true
+      attribute :customer_name, :string, public?: true
+      attribute :card_brand, :string, public?: true
+      attribute :card_last4, :string, public?: true
+      attribute :failure_message, :string, public?: true
       attribute :provider_created_at, :utc_datetime_usec, public?: true
       attribute :synced_at, :utc_datetime_usec, allow_nil?: false, public?: true
       create_timestamp :inserted_at
@@ -122,6 +129,11 @@ if Code.ensure_loaded?(Ash) do
           :currency,
           :reference,
           :customer_id,
+          :customer_email,
+          :customer_name,
+          :card_brand,
+          :card_last4,
+          :failure_message,
           :provider_created_at,
           :synced_at
         ]
@@ -142,7 +154,8 @@ if Code.ensure_loaded?(Ash) do
         argument :reason, :atom,
           constraints: [one_of: [:requested_by_customer, :duplicate, :fraudulent]]
 
-        argument :reference, :string, allow_nil?: false
+        argument :reference, :string
+
         change MishkaPay.Ash.Payment.Refund
       end
     end

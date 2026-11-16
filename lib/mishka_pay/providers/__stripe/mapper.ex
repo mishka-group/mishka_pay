@@ -14,6 +14,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @checkout_statuses %{"open" => :open, "complete" => :complete, "expired" => :expired}
 
+  @refund_reasons %{
+    "requested_by_customer" => :requested_by_customer,
+    "duplicate" => :duplicate,
+    "fraudulent" => :fraudulent
+  }
+
   @refund_statuses %{
     "pending" => :pending,
     "succeeded" => :succeeded,
@@ -70,6 +76,20 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp customer(%{email: email}) when is_binary(email), do: %{"customer_email" => email}
   defp customer(_none), do: %{}
 
+  @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
+  @spec checkout(map()) :: Checkout.t()
+  def checkout(session) do
+    read_back =
+      struct(Checkout,
+        provider: "stripe",
+        items: [],
+        reference: session["client_reference_id"],
+        customer: buyer(get_in(session, ["customer_details", "email"]))
+      )
+
+    checkout(session, read_back)
+  end
+
   @doc "The checkout with Stripe's answer: its session id, page, status and payment."
   @spec checkout(map(), Checkout.t()) :: Checkout.t()
   def checkout(session, %Checkout{} = checkout) do
@@ -78,11 +98,28 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       | id: session["id"],
         url: session["url"],
         status: Map.get(@checkout_statuses, session["status"]),
-        payment_id: id_of(session["payment_intent"])
+        payment_id: id_of(session["payment_intent"]),
+        amount_total: money(session["amount_total"], session["currency"]),
+        amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"])
     }
   end
 
-  @doc "A PaymentIntent, with its latest charge expanded, as a `MishkaPay.Payment`."
+  defp buyer(email) when is_binary(email), do: struct(MishkaPay.Customer, email: email)
+  defp buyer(_none), do: nil
+
+  defp money(minor, currency) when is_integer(minor) and is_binary(currency) do
+    case Money.from_minor(minor, currency) do
+      {:ok, money} -> money
+      {:error, _odd} -> nil
+    end
+  end
+
+  defp money(_minor, _currency), do: nil
+
+  @doc """
+  A PaymentIntent, with its latest charge, the charge's refunds and the customer expanded, as a
+  `MishkaPay.Payment`.
+  """
   @spec payment(map()) :: {:ok, Payment.t()} | {:error, Splode.Error.t()}
   def payment(intent) do
     charge = expanded(intent["latest_charge"])
@@ -96,11 +133,68 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         amount_refunded: refunded,
         status: payment_status(intent, refunded, amount),
         reference: get_in(intent, ["metadata", @reference]),
-        customer_id: id_of(intent["customer"]),
+        description: intent["description"],
+        metadata: Map.delete(intent["metadata"] || %{}, @reference),
+        refunds: refunds(charge, intent["id"]),
         created_at: time(intent["created"])
       }
+      |> Map.merge(buyer_of(intent, charge))
+      |> Map.merge(charge_of(intent, charge))
       |> Payment.builder()
       |> MishkaPay.Errors.from_builder()
+    end
+  end
+
+  # The buyer from the expanded customer, or from the charge's billing details.
+  defp buyer_of(intent, charge) do
+    customer = expanded(intent["customer"])
+    billing = charge["billing_details"] || %{}
+
+    %{
+      customer_id: id_of(intent["customer"]),
+      customer_email: customer["email"] || billing["email"] || intent["receipt_email"],
+      customer_name: customer["name"] || billing["name"]
+    }
+  end
+
+  # How it was paid, its receipt, and why the last try failed.
+  defp charge_of(intent, charge) do
+    card = get_in(charge, ["payment_method_details", "card"]) || %{}
+    failure = intent["last_payment_error"] || %{}
+
+    %{
+      payment_method: get_in(charge, ["payment_method_details", "type"]),
+      card_brand: card["brand"],
+      card_last4: card["last4"],
+      receipt_url: charge["receipt_url"],
+      failure_code: failure["decline_code"] || failure["code"],
+      failure_message: failure["message"]
+    }
+  end
+
+  defp refunds(%{"refunds" => %{"data" => refunds}}, payment_id) when is_list(refunds),
+    do: Enum.flat_map(refunds, &refund_of(&1, payment_id))
+
+  defp refunds(_charge, _payment_id), do: []
+
+  defp refund_of(refund, payment_id) do
+    case money(refund["amount"], refund["currency"]) do
+      nil ->
+        []
+
+      amount ->
+        [
+          %{
+            provider: "stripe",
+            payment_id: payment_id,
+            id: refund["id"],
+            amount: amount,
+            status: Map.get(@refund_statuses, refund["status"]),
+            reason: Map.get(@refund_reasons, refund["reason"]),
+            reference: get_in(refund, ["metadata", @reference]),
+            created_at: time(refund["created"])
+          }
+        ]
     end
   end
 
@@ -131,7 +225,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "payment_intent" => refund.payment_id,
       "amount" => refund.amount && Money.to_minor(refund.amount),
       "reason" => refund.reason && Atom.to_string(refund.reason),
-      "metadata" => %{@reference => refund.reference}
+      "metadata" => refund.reference && %{@reference => refund.reference}
     }
   end
 

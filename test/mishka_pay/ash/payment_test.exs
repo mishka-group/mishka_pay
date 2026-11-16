@@ -136,8 +136,7 @@ defmodule MishkaPay.Ash.PaymentTest do
                payment
                |> Ash.Changeset.for_update(:refund, %{
                  amount: %{amount: "5", currency: "USD"},
-                 reason: :requested_by_customer,
-                 reference: "refund-1"
+                 reason: :requested_by_customer
                })
                |> Ash.update(authorize?: false)
 
@@ -154,19 +153,27 @@ defmodule MishkaPay.Ash.PaymentTest do
         assert {:error,
                 %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidArgument{field: :amount}]}} =
                  payment
-                 |> Ash.Changeset.for_update(:refund, %{amount: amount, reference: "refund-2"})
+                 |> Ash.Changeset.for_update(:refund, %{amount: amount})
                  |> Ash.update(authorize?: false)
       end
     end
   end
 
   describe "safety" do
-    test "a refund needs its own reference, so sending it again can never refund twice" do
+    test "a site that refunds many times needs a reference on each refund, as an Ash error" do
       {:ok, payment} = sync()
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a", refunds: "many"})
 
       assert {:error,
-              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.Required{field: :reference}]}} =
+              %Ash.Error.Invalid{
+                errors: [%Ash.Error.Changes.InvalidArgument{field: :reference}]
+              }} =
                payment |> Ash.Changeset.for_update(:refund, %{}) |> Ash.update(authorize?: false)
+
+      assert {:ok, %{__metadata__: %{refund: %MishkaPay.Refund{reference: "refund-4"}}}} =
+               payment
+               |> Ash.Changeset.for_update(:refund, %{reference: "refund-4"})
+               |> Ash.update(authorize?: false)
     end
 
     test "a refund that went through still succeeds when the payment cannot be read again" do
@@ -190,8 +197,7 @@ defmodule MishkaPay.Ash.PaymentTest do
       assert {:ok, refunded} =
                payment
                |> Ash.Changeset.for_update(:refund, %{
-                 amount: %{amount: "5", currency: "USD"},
-                 reference: "refund-3"
+                 amount: %{amount: "5", currency: "USD"}
                })
                |> Ash.update(authorize?: false)
 
@@ -207,6 +213,46 @@ defmodule MishkaPay.Ash.PaymentTest do
 
       assert again.id == first.id
       assert again.tenant == "site-a"
+    end
+
+    test "a refund of less than zero says it must be more than zero, as zero does" do
+      {:ok, payment} = sync()
+
+      for amount <- ["-5", "0"] do
+        assert {:error, %Ash.Error.Invalid{} = error} =
+                 payment
+                 |> Ash.Changeset.for_update(:refund, %{
+                   amount: %{amount: amount, currency: "USD"}
+                 })
+                 |> Ash.update(authorize?: false)
+
+        assert MishkaPay.Ash.message(error) =~ "more than zero"
+      end
+    end
+
+    test "a nested input's error reaches Ash at its inner field, and no message carries breadcrumbs" do
+      checkout = %{
+        provider: "stripe",
+        items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+        success_url: "https://shop.test/thanks",
+        cancel_url: "https://shop.test/cart",
+        customer: %{email: "not-an-email"}
+      }
+
+      assert {:error,
+              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidArgument{} = inner]} = error} =
+               @payment
+               |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout})
+               |> Ash.run_action(authorize?: false)
+
+      assert inner.field == :email
+      refute MishkaPay.Ash.message(error) =~ "customer field"
+
+      assert {:error, required} =
+               Ash.create(@payment, %{provider: "stripe"}, action: :sync, authorize?: false)
+
+      refute MishkaPay.Ash.message(required) =~ "Bread Crumbs"
+      assert MishkaPay.Ash.message(required) =~ "payment_id"
     end
 
     test "errors reach Ash as plain words, with no stack trace" do

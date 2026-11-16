@@ -39,6 +39,14 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(@checkout)
     end
 
+    test "a checkout is read back by its session id, and a bad id never reaches a path" do
+      assert {:ok, %Checkout{id: "cs_" <> _, provider: "stripe"}} =
+               MishkaPay.fetch_checkout("stripe", "cs_test_123", "site-a")
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.fetch_checkout("stripe", "cs_1/../../v1/charges", "site-a")
+    end
+
     test "a tax code and the merchant-of-record choice are sent as Stripe expects" do
       ebook = [
         %{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}, tax_code: "txcd_10302000"}
@@ -140,6 +148,119 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a whole refund of a payment with nothing left is refused before Stripe, many or once" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn
+        %{method: "GET"} = conn ->
+          {:ok, %{body: intent}} =
+            Req.get("http://localhost:12111#{conn.request_path}?#{conn.query_string}",
+              auth: {:bearer, "sk_test_123"}
+            )
+
+          Req.Test.json(
+            conn,
+            put_in(intent, ["latest_charge", "amount_refunded"], intent["amount"])
+          )
+
+        conn ->
+          send(test, :refund_sent)
+          StripeMock.forward(conn)
+      end)
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", refunds: :many})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id, message: message}]}} =
+               MishkaPay.refund(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 payment_id: "pi_123",
+                 reference: "r-9"
+               })
+
+      assert message =~ "nothing is left to refund"
+      refute_received :refund_sent
+    end
+
+    test "a site that refunds once is refused a second refund; one that refunds many is not" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn
+        %{method: "GET"} = conn ->
+          {:ok, %{body: intent}} =
+            Req.get("http://localhost:12111#{conn.request_path}?#{conn.query_string}",
+              auth: {:bearer, "sk_test_123"}
+            )
+
+          Req.Test.json(conn, put_in(intent, ["latest_charge", "amount_refunded"], 500))
+
+        conn ->
+          send(test, :refund_sent)
+          StripeMock.forward(conn)
+      end)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      refute_received :refund_sent
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", refunds: :many})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :reference}]}} =
+               MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      refute_received :refund_sent
+
+      assert {:ok, %Refund{status: :succeeded}} =
+               MishkaPay.refund(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 payment_id: "pi_123",
+                 amount: %{amount: "1", currency: "USD"},
+                 reference: "refund-2"
+               })
+
+      assert_received :refund_sent
+    end
+
+    test "many refunds: the same reference sends the same key, another reference another one" do
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", refunds: "many"})
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
+
+      for reference <- ["r-1", "r-1", "r-2"],
+          do:
+            MishkaPay.refund(%{
+              provider: "stripe",
+              tenant: "site-a",
+              payment_id: "pi_123",
+              reference: reference
+            })
+
+      keys =
+        for _call <- 1..3 do
+          assert_received {_, ^ref, _, %{path: "/v1/refunds", idempotency_key: key}}
+          key
+        end
+
+      assert [same, same, other] = keys
+      refute same == other
+    end
+
+    test "refunding once: two refunds of one payment sent at once carry one key, so Stripe makes one" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
+
+      for _twice <- 1..2,
+          do: MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      keys =
+        for _call <- 1..2 do
+          assert_received {_, ^ref, _, %{path: "/v1/refunds", idempotency_key: key}}
+          key
+        end
+
+      assert ["mishka_pay-refund-" <> _digest = same, same] = keys
+    end
+
     test "a part refund in another currency or over what is left is refused before Stripe" do
       for amount <- [%{amount: "5", currency: "EUR"}, %{amount: "11", currency: "USD"}] do
         assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
@@ -198,6 +319,19 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_payment("stripe", "pi_1/../../v1/charges", "site-a")
     end
 
+    test "an id of another kind is refused before Stripe: a checkout id is not a payment id" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id, message: message}]}} =
+               MishkaPay.fetch_payment("stripe", "cs_test_123", "site-a")
+
+      assert message =~ "pi_"
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :checkout_id}]}} =
+               MishkaPay.fetch_checkout("stripe", "pi_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "ch_123"})
+    end
+
     test "a currency Stripe counts differently from ISO 4217 is refused, not charged wrong" do
       huf = %{@checkout | items: [%{name: "Ebook", amount: %{amount: "1000", currency: "HUF"}}]}
 
@@ -222,6 +356,104 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:error, %Errors.Declined{provider: "stripe", reason: "insufficient_funds"}} =
                MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
     end
+  end
+
+  test "a payment brings its buyer, card, receipt, failure and every refund, and keeps the reference out of metadata" do
+    intent = %{
+      "id" => "pi_full",
+      "amount" => 4900,
+      "currency" => "usd",
+      "status" => "succeeded",
+      "description" => "1 × LiveView course",
+      "metadata" => %{"mishka_pay_reference" => "course-1", "channel" => "web"},
+      "customer" => %{"id" => "cus_1", "email" => "ava@example.com", "name" => "Ava Martin"},
+      "latest_charge" => %{
+        "amount_refunded" => 1000,
+        "receipt_url" => "https://pay.stripe.com/receipts/r_1",
+        "billing_details" => %{"email" => "billing@example.com", "name" => "Billing Name"},
+        "payment_method_details" => %{
+          "type" => "card",
+          "card" => %{"brand" => "mastercard", "last4" => "4444"}
+        },
+        "refunds" => %{
+          "data" => [
+            %{
+              "id" => "re_1",
+              "amount" => 1000,
+              "currency" => "usd",
+              "status" => "succeeded",
+              "reason" => "requested_by_customer",
+              "created" => 1_794_000_000
+            },
+            %{
+              "id" => "re_odd",
+              "amount" => 1,
+              "currency" => "usd",
+              "reason" => "expired_uncaptured_charge"
+            }
+          ]
+        }
+      }
+    }
+
+    assert {:ok, payment} = Stripe.Mapper.payment(intent)
+    assert payment.status == :partially_refunded
+    assert {payment.customer_email, payment.customer_name} == {"ava@example.com", "Ava Martin"}
+
+    assert {payment.payment_method, payment.card_brand, payment.card_last4} ==
+             {"card", "mastercard", "4444"}
+
+    assert payment.receipt_url == "https://pay.stripe.com/receipts/r_1"
+    assert payment.metadata == %{"channel" => "web"}
+    assert payment.description == "1 × LiveView course"
+
+    assert [
+             %Refund{
+               id: "re_1",
+               reason: :requested_by_customer,
+               status: :succeeded,
+               payment_id: "pi_full"
+             },
+             %Refund{id: "re_odd", reason: nil}
+           ] = payment.refunds
+
+    declined = %{
+      "id" => "pi_declined",
+      "amount" => 1999,
+      "currency" => "usd",
+      "status" => "requires_payment_method",
+      "customer" => "cus_2",
+      "last_payment_error" => %{
+        "code" => "card_declined",
+        "decline_code" => "insufficient_funds",
+        "message" => "Your card has insufficient funds."
+      }
+    }
+
+    assert {:ok, failed} = Stripe.Mapper.payment(declined)
+    assert {failed.status, failed.customer_id, failed.refunds} == {:failed, "cus_2", []}
+
+    assert {failed.failure_code, failed.failure_message} ==
+             {"insufficient_funds", "Your card has insufficient funds."}
+  end
+
+  test "a checkout read back brings its totals and the buyer's email" do
+    checkout =
+      Stripe.Mapper.checkout(%{
+        "id" => "cs_1",
+        "status" => "complete",
+        "currency" => "usd",
+        "amount_total" => 2139,
+        "total_details" => %{"amount_tax" => 140},
+        "customer_details" => %{"email" => "ava@example.com"},
+        "payment_intent" => "pi_1",
+        "client_reference_id" => "ebook-1"
+      })
+
+    assert checkout.amount_total == Money.new(:USD, "21.39")
+    assert checkout.amount_tax == Money.new(:USD, "1.40")
+    assert checkout.customer.email == "ava@example.com"
+    assert {checkout.payment_id, checkout.reference} == {"pi_1", "ebook-1"}
   end
 
   test "Stripe's form encoding nests maps and lists and leaves out nil" do

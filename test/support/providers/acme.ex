@@ -39,6 +39,19 @@ defmodule MishkaPay.Support.Acme do
     do: {:error, Errors.Declined.exception(provider: "acme", reason: "bad_keys")}
 
   @impl MishkaPay.Provider
+  def fetch_checkout("acme_cs_" <> reference = id, %{secret_key: "sk_acme"}) do
+    {:ok,
+     struct(Checkout,
+       provider: "acme",
+       items: [],
+       id: id,
+       reference: reference,
+       status: :complete,
+       payment_id: "acme_paid"
+     )}
+  end
+
+  @impl MishkaPay.Provider
   def fetch_payment("acme_" <> status = id, %{secret_key: "sk_acme"}) do
     Payment.builder(%{
       provider: "acme",

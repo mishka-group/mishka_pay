@@ -24,8 +24,11 @@ defmodule MishkaPay.Providers.Stripe do
       on every price. The caller's
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
-    * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.
-    * `refund/2` refunds a PaymentIntent, in full or in part.
+    * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
+    * `fetch_payment/2` reads a PaymentIntent with its latest charge, the charge's refunds and the
+      customer, in one request: the buyer, the card, the receipt, why it failed and every refund.
+    * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
+      allows (`MishkaPay.Refund`).
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
@@ -41,9 +44,9 @@ defmodule MishkaPay.Providers.Stripe do
   takes BHD, JOD, KWD, OMR and TND only with a last decimal of 0, and metadata up to 49 keys of 40
   characters with values of 500; anything past that is an `:invalid` error before any request.
 
-  A part refund first reads the payment, since Stripe counts a refund in the payment's own
-  currency: an amount in another currency, or more than is left, is refused. A whole refund sends
-  no amount and needs no read.
+  A refund first reads the payment. A tenant that refunds once is refused a second refund, and a
+  part refund in another currency than the payment's, or over what is left, is refused, since
+  Stripe counts a refund in the payment's own currency.
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
   another address, such as Stripe's own mock server in tests.
@@ -79,13 +82,25 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
+  def fetch_checkout(checkout_id, keys) do
+    with :ok <- stripe_id(checkout_id, "cs_", :checkout_id),
+         {:ok, session} <- request(:get, "/v1/checkout/sessions/#{checkout_id}", [], keys) do
+      {:ok, Mapper.checkout(session)}
+    end
+  end
+
+  @impl MishkaPay.Provider
   def fetch_payment(payment_id, keys) do
-    with :ok <- stripe_id(payment_id),
+    with :ok <- stripe_id(payment_id, "pi_", :payment_id),
          {:ok, intent} <-
            request(
              :get,
              "/v1/payment_intents/#{payment_id}",
-             [{"expand[]", "latest_charge"}],
+             [
+               {"expand[]", "latest_charge"},
+               {"expand[]", "latest_charge.refunds"},
+               {"expand[]", "customer"}
+             ],
              keys
            ) do
       Mapper.payment(intent)
@@ -94,13 +109,12 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def refund(%Refund{} = refund, keys) do
-    with :ok <- stripe_id(refund.payment_id),
+    with :ok <- stripe_id(refund.payment_id, "pi_", :payment_id),
          :ok <- currencies([refund], :refund),
+         {:ok, key} <- refund_key(refund, keys),
          :ok <- refundable(refund, keys),
          {:ok, answer} <-
-           request(:post, "/v1/refunds", Mapper.refund_params(refund), keys,
-             key: idempotency_key("refund", refund.tenant, refund.reference)
-           ) do
+           request(:post, "/v1/refunds", Mapper.refund_params(refund), keys, key: key) do
       Mapper.refund(answer, refund)
     end
   end
@@ -255,9 +269,11 @@ defmodule MishkaPay.Providers.Stripe do
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
 
-  # A Stripe id is letters, digits and underscores; anything else never reaches a path.
-  defp stripe_id(id) do
-    case is_binary(id) and Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
+  # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
+  # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
+  defp stripe_id(id, prefix, field) do
+    case is_binary(id) and String.starts_with?(id, prefix) and
+           Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
       true ->
         :ok
 
@@ -266,25 +282,42 @@ defmodule MishkaPay.Providers.Stripe do
           {:error,
            [
              %{
-               field: :payment_id,
+               field: field,
                action: :stripe_id,
-               message: Messages.text(:stripe_id)
+               message: Messages.text(:stripe_id, field: field, prefix: prefix)
              }
            ]}
         )
     end
   end
 
-  # Stripe has no currency on a refund: it counts the amount in the payment's own currency. So a
-  # part refund reads the payment first, and refuses another currency or more than is left. A
-  # whole refund (no amount) needs no read.
-  defp refundable(%Refund{amount: nil}, _keys), do: :ok
+  # A tenant that refunds once has one refund per payment, so the payment is the key; one that
+  # refunds many times names each refund with its reference.
+  defp refund_key(refund, %{refunds: :once}),
+    do: {:ok, idempotency_key("refund", refund.tenant, refund.payment_id)}
 
+  defp refund_key(%Refund{reference: nil}, _many),
+    do: invalid(:reference, Messages.text(:refund_reference))
+
+  defp refund_key(refund, _many),
+    do: {:ok, idempotency_key("refund", refund.tenant, {refund.payment_id, refund.reference})}
+
+  # Stripe has no currency on a refund: it counts the amount in the payment's own currency, so a
+  # part refund in another currency, or over what is left, is refused.
   defp refundable(%Refund{amount: amount, payment_id: id}, keys) do
     with {:ok, payment} <- fetch_payment(id, keys) do
       left = Decimal.sub(payment.amount.amount, payment.amount_refunded.amount)
 
       cond do
+        keys.refunds == :once and Money.positive?(payment.amount_refunded) ->
+          invalid(:payment_id, Messages.text(:refund_once))
+
+        not Decimal.positive?(left) ->
+          invalid(:payment_id, Messages.text(:refund_nothing_left))
+
+        is_nil(amount) ->
+          :ok
+
         amount.currency != payment.amount.currency ->
           invalid(
             :amount,

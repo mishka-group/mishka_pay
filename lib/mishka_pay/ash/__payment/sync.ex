@@ -51,6 +51,11 @@ if Code.ensure_loaded?(Ash) do
         currency: to_string(payment.amount.currency),
         reference: payment.reference,
         customer_id: payment.customer_id,
+        customer_email: payment.customer_email,
+        customer_name: payment.customer_name,
+        card_brand: payment.card_brand,
+        card_last4: payment.card_last4,
+        failure_message: payment.failure_message,
         provider_created_at: payment.created_at,
         synced_at: DateTime.utc_now()
       }
