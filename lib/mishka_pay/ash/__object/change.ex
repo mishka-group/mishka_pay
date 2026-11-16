@@ -30,9 +30,7 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp ask(changeset, kind, :sync) do
-      provider = Ash.Changeset.get_argument(changeset, :provider)
-      id = Ash.Changeset.get_argument(changeset, Spec.id_argument(kind))
-      tenant = MishkaPay.Ash.Tenant.of(changeset)
+      {provider, id, tenant} = MishkaPay.Ash.object_ref(changeset, Spec.id_argument(kind))
 
       changeset
       |> Ash.Changeset.force_change_attributes(%{

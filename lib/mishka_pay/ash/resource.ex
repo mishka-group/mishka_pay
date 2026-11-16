@@ -83,6 +83,15 @@ if Code.ensure_loaded?(Ash) do
           takes it as an input. It may be nil, for a sale with no owner.
           """
         ],
+        resync_after: [
+          type: :pos_integer,
+          doc: """
+          Hours after which a row still open at its provider is read again by an hourly AshOban
+          trigger running `:resync`, in case a webhook never came: a pending or authorized
+          payment, a subscription that has not ended, an open dispute, a draft or open bill.
+          Runs on the inbox's queue, `mishka_pay_inbox`. Off unless given.
+          """
+        ],
         keep_events_for: [
           type: {:or, [:pos_integer, {:literal, :forever}]},
           default: 30,

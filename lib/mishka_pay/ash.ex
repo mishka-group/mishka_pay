@@ -107,6 +107,18 @@ if Code.ensure_loaded?(Ash) do
     end
 
     @doc false
+    # The provider object a sync reads: from a `:sync` create's arguments, or from the row a
+    # `:resync` update runs on.
+    @spec object_ref(Ash.Changeset.t(), atom()) :: {String.t(), String.t(), String.t() | nil}
+    def object_ref(%{action_type: :update, data: row}, _id_argument),
+      do: {row.provider, row.provider_id, row.tenant}
+
+    def object_ref(changeset, id_argument) do
+      {Ash.Changeset.get_argument(changeset, :provider),
+       Ash.Changeset.get_argument(changeset, id_argument), MishkaPay.Ash.Tenant.of(changeset)}
+    end
+
+    @doc false
     # Runs `ask` (the provider call of a change) and keeps when it started in `:synced_at`: the
     # moment the provider's word was read. A `:sync` upsert writes over a row only when its read is
     # not older (`stale?/1`), so a slow read that ends after a newer one never wins.

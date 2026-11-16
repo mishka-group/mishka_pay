@@ -118,6 +118,12 @@ The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.
   attributes beside them.
 - A `:sync` that read the provider before a newer sync wrote is skipped (`MishkaPay.Ash.stale?/1`
   on its error); the listeners count it as done.
+- `:resync` (update, no arguments) on every provider kind reads the row again; `resync_after 6`
+  adds an hourly trigger for rows still open (pending payments, live subscriptions, open disputes,
+  draft or open bills).
+- Read-only generic actions: payment `:refunds`, subscription `:upcoming_invoice` and
+  `:preview_change` (the `:change` arguments), each with the row's `id`.
+- `:register` with a `reference` reuses the site's customer for it.
 - `keep_events_for 30` (inbox, default): processed events are deleted daily; `:forever` keeps them.
 - Inbox telemetry: `[:mishka_pay, :inbox, :process, :stop]` (`:outcome`, `:lag`) and
   `[:mishka_pay, :inbox, :failed]`.

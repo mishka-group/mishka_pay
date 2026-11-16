@@ -21,9 +21,7 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp fetch(changeset) do
-      provider = Ash.Changeset.get_argument(changeset, :provider)
-      payment_id = Ash.Changeset.get_argument(changeset, :payment_id)
-      tenant = MishkaPay.Ash.Tenant.of(changeset)
+      {provider, payment_id, tenant} = MishkaPay.Ash.object_ref(changeset, :payment_id)
 
       case MishkaPay.fetch_payment(provider, payment_id, tenant) do
         {:ok, %Payment{} = payment} ->

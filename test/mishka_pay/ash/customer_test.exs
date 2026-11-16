@@ -58,6 +58,29 @@ defmodule MishkaPay.Ash.CustomerTest do
     assert id == first.id
   end
 
+  test "register for a person the site has already reads them again instead of making a second customer" do
+    test_pid = self()
+
+    :telemetry.attach_many(
+      "register-test",
+      [[:mishka_pay, :customer_create, :stop], [:mishka_pay, :customer, :stop]],
+      fn [_, operation, _], _measurements, _meta, _config ->
+        send(test_pid, {:called, operation})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("register-test") end)
+
+    assert {:ok, first} = register()
+    assert_received {:called, :customer_create}
+
+    assert {:ok, again} = register()
+    assert again.id == first.id
+    assert_received {:called, :customer}
+    refute_received {:called, :customer_create}
+  end
+
   test "edit sends the change to the provider and writes its answer" do
     {:ok, row} = register()
     MishkaPay.Test.start_plugin!(CustomerWatcher)

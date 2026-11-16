@@ -12,6 +12,7 @@ spark_locals_without_parens = [
   keep_events_for: 1,
   kind: 1,
   listen?: 1,
+  resync_after: 1,
   tenant_from: 1
 ]
 

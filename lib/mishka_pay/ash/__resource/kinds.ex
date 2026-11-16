@@ -347,12 +347,25 @@ if Code.ensure_loaded?(Ash) do
     def calculations(_kind), do: []
 
     @doc """
-    The actions of a kind. `announce?: false` builds their changes without the
+    The actions of a kind, with `:resync` for every provider object's kind. `announce?: false`
+    builds their changes without the
     `mishka_pay:<kind>:changed` event; `user:` names the `belongs_to_user` attribute, which a sync
     writes from the owner and a customer's `:register` accepts.
     """
     @spec actions(kind(), keyword()) :: [action()]
-    def actions(:inbox, _opts) do
+    def actions(:inbox, opts), do: kind_actions(:inbox, opts)
+
+    # Every provider object's kind also re-reads one row from its provider: `:resync`, the
+    # admin's refresh, and what the `resync_after` trigger runs.
+    def actions(kind, opts) do
+      actions = kind_actions(kind, opts)
+      {:sync, :create, sync} = List.keyfind(actions, :sync, 0)
+
+      actions ++
+        [{:resync, :update, [require_atomic?: false, changes: Keyword.fetch!(sync, :changes)]}]
+    end
+
+    defp kind_actions(:inbox, _opts) do
       fields =
         for {name, _type, _opts} <- attributes(:inbox), name not in @inbox_bookkeeping, do: name
 
@@ -380,7 +393,7 @@ if Code.ensure_loaded?(Ash) do
       ]
     end
 
-    def actions(:payment, opts) do
+    defp kind_actions(:payment, opts) do
       [
         sync(:payment, :payment_id, {MishkaPay.Ash.Payment.Sync, announce(opts)}, opts[:user]),
         {:start_checkout, :action,
@@ -396,11 +409,12 @@ if Code.ensure_loaded?(Ash) do
             constraints: [one_of: [:requested_by_customer, :duplicate, :fraudulent]]
           ),
           argument(:reference, :string)
-        ])
+        ]),
+        read_action(:refunds, {:array, :struct}, [items: [instance_of: MishkaPay.Refund]], [])
       ]
     end
 
-    def actions(:subscription, opts) do
+    defp kind_actions(:subscription, opts) do
       [
         sync(
           :subscription,
@@ -416,26 +430,7 @@ if Code.ensure_loaded?(Ash) do
           )
         ]),
         subscription_update(:resume, opts, []),
-        subscription_update(:change, opts, [
-          argument(:price_id, :string),
-          argument(:quantity, :integer, constraints: [min: 1]),
-          argument(:item_id, :string),
-          argument(:proration, :atom,
-            constraints: [one_of: [:create_prorations, :always_invoice, :none]]
-          ),
-          argument(:proration_date, :utc_datetime),
-          argument(:billing_cycle_anchor, :atom, constraints: [one_of: [:now, :unchanged]]),
-          argument(:payment_behavior, :atom,
-            constraints: [
-              one_of: [
-                :allow_incomplete,
-                :error_if_incomplete,
-                :pending_if_incomplete,
-                :default_incomplete
-              ]
-            ]
-          )
-        ]),
+        subscription_update(:change, opts, change_arguments()),
         subscription_update(:pause, opts, [
           argument(:behavior, :atom,
             constraints: [one_of: @pause_behaviors],
@@ -444,11 +439,18 @@ if Code.ensure_loaded?(Ash) do
           ),
           argument(:resumes_at, :utc_datetime)
         ]),
-        subscription_update(:resume_collection, opts, [])
+        subscription_update(:resume_collection, opts, []),
+        read_action(:upcoming_invoice, :struct, [instance_of: MishkaPay.Invoice], []),
+        read_action(
+          :preview_change,
+          :struct,
+          [instance_of: MishkaPay.Invoice],
+          change_arguments()
+        )
       ]
     end
 
-    def actions(:customer, opts) do
+    defp kind_actions(:customer, opts) do
       change = &{MishkaPay.Ash.Customer.Sync, [operation: &1] ++ announce(opts)}
 
       [
@@ -492,7 +494,7 @@ if Code.ensure_loaded?(Ash) do
       ]
     end
 
-    def actions(:dispute, opts) do
+    defp kind_actions(:dispute, opts) do
       change = &{MishkaPay.Ash.Dispute.Sync, [operation: &1] ++ announce(opts)}
 
       [
@@ -505,7 +507,7 @@ if Code.ensure_loaded?(Ash) do
       ]
     end
 
-    def actions(:product, opts) do
+    defp kind_actions(:product, opts) do
       object_actions(:product, opts,
         add: [
           argument(:name, :string, allow_nil?: false),
@@ -525,7 +527,7 @@ if Code.ensure_loaded?(Ash) do
       )
     end
 
-    def actions(:price, opts) do
+    defp kind_actions(:price, opts) do
       object_actions(:price, opts,
         add: [
           argument(:product_id, :string, allow_nil?: false),
@@ -540,7 +542,7 @@ if Code.ensure_loaded?(Ash) do
       )
     end
 
-    def actions(:coupon, opts) do
+    defp kind_actions(:coupon, opts) do
       object_actions(:coupon, opts,
         add: [
           argument(:id, :string),
@@ -557,7 +559,7 @@ if Code.ensure_loaded?(Ash) do
       )
     end
 
-    def actions(:promotion_code, opts) do
+    defp kind_actions(:promotion_code, opts) do
       object_actions(:promotion_code, opts,
         add: [
           argument(:coupon_id, :string, allow_nil?: false),
@@ -573,14 +575,14 @@ if Code.ensure_loaded?(Ash) do
       )
     end
 
-    def actions(:payment_link, opts) do
+    defp kind_actions(:payment_link, opts) do
       object_actions(:payment_link, opts,
         add: [argument(:link, :map, allow_nil?: false)],
         edit: [argument(:changes, :map, allow_nil?: false)]
       )
     end
 
-    def actions(:invoice, opts) do
+    defp kind_actions(:invoice, opts) do
       object_actions(:invoice, opts,
         add: [argument(:draft, :map, allow_nil?: false)],
         finalize: [],
@@ -590,6 +592,41 @@ if Code.ensure_loaded?(Ash) do
         mark_uncollectible: [],
         remove: []
       )
+    end
+
+    # The arguments of a plan or quantity change, and of its preview.
+    defp change_arguments do
+      [
+        argument(:price_id, :string),
+        argument(:quantity, :integer, constraints: [min: 1]),
+        argument(:item_id, :string),
+        argument(:proration, :atom,
+          constraints: [one_of: [:create_prorations, :always_invoice, :none]]
+        ),
+        argument(:proration_date, :utc_datetime),
+        argument(:billing_cycle_anchor, :atom, constraints: [one_of: [:now, :unchanged]]),
+        argument(:payment_behavior, :atom,
+          constraints: [
+            one_of: [
+              :allow_incomplete,
+              :error_if_incomplete,
+              :pending_if_incomplete,
+              :default_incomplete
+            ]
+          ]
+        )
+      ]
+    end
+
+    # A read-only generic action on one row (`MishkaPay.Ash.RowRead`), by the row's `:id`.
+    defp read_action(name, returns, constraints, arguments) do
+      {name, :action,
+       [
+         returns: returns,
+         constraints: constraints,
+         arguments: [argument(:id, :uuid, allow_nil?: false) | arguments],
+         run: {MishkaPay.Ash.RowRead, read: name}
+       ]}
     end
 
     # A site-managed object kind (`MishkaPay.Ash.Object.Spec`): `:sync` from the provider, `:add`
@@ -637,6 +674,57 @@ if Code.ensure_loaded?(Ash) do
         scheduler_module_name: Module.concat(resource, MishkaPayScheduler)
       ]
     end
+
+    @doc """
+    The hourly AshOban trigger that reads again, with `:resync`, the rows of `kind` still open at
+    their provider and not read for `hours`; `nil` for a kind whose rows are never open.
+    """
+    @spec resync_trigger(module(), kind(), pos_integer()) :: keyword() | nil
+    # sobelow_skip ["DOS.ModuleConcat"]
+    def resync_trigger(resource, kind, hours) do
+      case open(kind, hours) do
+        nil ->
+          nil
+
+        where ->
+          [
+            name: :resync,
+            action: :resync,
+            where: where,
+            queue: :mishka_pay_inbox,
+            max_attempts: 3,
+            scheduler_cron: "@hourly",
+            worker_module_name: Module.concat(resource, MishkaPayResyncWorker),
+            scheduler_module_name: Module.concat(resource, MishkaPayResyncScheduler)
+          ]
+      end
+    end
+
+    defp open(:payment, hours),
+      do: Ash.Expr.expr(status in [:pending, :requires_action] and synced_at < ago(^hours, :hour))
+
+    defp open(:subscription, hours),
+      do:
+        Ash.Expr.expr(
+          status not in [:canceled, :incomplete_expired] and synced_at < ago(^hours, :hour)
+        )
+
+    defp open(:dispute, hours),
+      do:
+        Ash.Expr.expr(
+          status in [
+            :warning_needs_response,
+            :warning_under_review,
+            :needs_response,
+            :under_review
+          ] and
+            synced_at < ago(^hours, :hour)
+        )
+
+    defp open(:invoice, hours),
+      do: Ash.Expr.expr(status in [:draft, :open] and synced_at < ago(^hours, :hour))
+
+    defp open(_kind, _hours), do: nil
 
     @doc """
     The inbox's daily AshOban trigger that deletes processed events older than `days`.

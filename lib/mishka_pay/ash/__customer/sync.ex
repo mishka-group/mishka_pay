@@ -14,6 +14,8 @@ if Code.ensure_loaded?(Ash) do
 
     use Ash.Resource.Change
 
+    require Ash.Query
+
     alias MishkaPay.{Customer, Errors, Events}
     alias MishkaPay.Helpers.Plugins
 
@@ -33,14 +35,11 @@ if Code.ensure_loaded?(Ash) do
 
       changeset
       |> Ash.Changeset.force_change_attribute(:tenant, attrs[:tenant])
-      |> write(MishkaPay.create_customer(attrs))
+      |> write(registered(changeset, attrs) || MishkaPay.create_customer(attrs))
     end
 
     defp ask(changeset, :sync) do
-      [provider, id] =
-        Enum.map([:provider, :customer_id], &Ash.Changeset.get_argument(changeset, &1))
-
-      tenant = MishkaPay.Ash.Tenant.of(changeset)
+      {provider, id, tenant} = MishkaPay.Ash.object_ref(changeset, :customer_id)
 
       changeset
       |> Ash.Changeset.force_change_attributes(%{
@@ -60,6 +59,26 @@ if Code.ensure_loaded?(Ash) do
 
       write(changeset, MishkaPay.update_customer(attrs))
     end
+
+    # A person the site already registered, by the host's reference, is read again rather than
+    # made twice at the provider: `:register` is safe to call on every purchase.
+    defp registered(_changeset, %{reference: nil}), do: nil
+
+    defp registered(changeset, %{provider: provider, reference: reference} = attrs)
+         when is_binary(reference) do
+      changeset.resource
+      |> Ash.Query.filter(
+        provider == ^provider and reference == ^reference and is_nil(deleted_at)
+      )
+      |> Ash.Query.limit(1)
+      |> Ash.read_one(tenant: changeset.tenant, authorize?: false)
+      |> case do
+        {:ok, %{provider_id: id}} -> MishkaPay.fetch_customer(provider, id, attrs[:tenant])
+        _none -> nil
+      end
+    end
+
+    defp registered(_changeset, _attrs), do: nil
 
     defp write(changeset, {:ok, %Customer{} = customer}) do
       changeset

@@ -62,6 +62,7 @@ if Code.ensure_loaded?(Ash) do
         |> tenant_change(tenant_from)
         |> trigger(kind, module)
         |> forget(kind, module, Info.mishka_pay_keep_events_for!(dsl))
+        |> resync(kind, module, Info.mishka_pay_resync_after(dsl))
         |> listener(Info.mishka_pay_listen?(dsl), kind, module)
       end
     end
@@ -258,6 +259,39 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp forget(result, _kind, _module, _keep), do: result
+
+    defp resync({:ok, dsl}, kind, module, {:ok, hours}) do
+      with trigger when not is_nil(trigger) <- Kinds.resync_trigger(module, kind, hours),
+           true <- AshOban in Transformer.get_persisted(dsl, :spark_extensions, []),
+           false <-
+             Enum.any?(Transformer.get_entities(dsl, [:oban, :triggers]), &(&1.name == :resync)),
+           {:ok, entity} <-
+             Transformer.build_entity(AshOban, [:oban, :triggers], :trigger, trigger) do
+        {:ok, Transformer.add_entity(dsl, [:oban, :triggers], entity, type: :append)}
+      else
+        nil ->
+          error(
+            module,
+            [:mishka_pay, :resync_after],
+            "A #{inspect(kind)} row is never open at its provider: leave `resync_after` out."
+          )
+
+        false ->
+          error(
+            module,
+            [:mishka_pay, :resync_after],
+            "`resync_after` runs as an AshOban trigger: add AshOban to the resource's extensions."
+          )
+
+        true ->
+          {:ok, dsl}
+
+        error ->
+          error
+      end
+    end
+
+    defp resync(result, _kind, _module, _off), do: result
 
     # sobelow_skip ["DOS.ModuleConcat"]
     defp listener({:ok, dsl}, true, kind, module) do

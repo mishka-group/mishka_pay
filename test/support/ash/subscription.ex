@@ -17,5 +17,6 @@ defmodule MishkaPay.Support.Subscription do
 
   mishka_pay do
     kind :subscription
+    resync_after 6
   end
 end

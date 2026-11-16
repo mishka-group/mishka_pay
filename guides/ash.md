@@ -29,9 +29,14 @@ by hand, `MishkaPay.Ash.listeners(MyApp.Pay)` lists them all in the domain's ord
 
 - **inbox**: stores each verified webhook once and works it with retries (10 tries, the reason of
   each failure kept on the row).
-- **payment**: `:sync` reads a payment from the provider; `:start_checkout`; `:refund`.
+- **payment**: `:sync` reads a payment from the provider; `:start_checkout`; `:refund`;
+  `:refunds` (read-only: the row's refunds).
 - **subscription**: `:sync`, `:cancel`, `:resume`, `:change` (plan or quantity, with proration),
-  `:pause`, `:resume_collection`.
+  `:pause`, `:resume_collection`; read-only `:upcoming_invoice` and `:preview_change`.
+- Every provider object's kind has `:resync`, which reads its row again (an admin's refresh), and
+  `resync_after: hours` reads open rows again every hour when no webhook came.
+- A customer's `:register` reads again the customer the site already has for that `reference`
+  instead of making a second one, so it is safe to call on every purchase.
 - **customer**: `:register`, `:sync`, `:edit`, `:portal`.
 - **dispute**: `:sync`, `:submit_evidence`, `:accept`.
 - **product**: `:sync`, `:add`, `:edit`, `:archive`. **price**: `:sync`, `:add`, `:archive`.
