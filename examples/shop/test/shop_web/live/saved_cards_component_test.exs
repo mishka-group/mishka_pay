@@ -58,7 +58,7 @@ defmodule ShopWeb.SavedCardsComponentTest do
 
     {:ok, view, _html} = live(conn, ~p"/?session_id=cs_test_setup")
 
-    assert render(view) =~ "Card saved"
+    assert render_async(view) =~ "Card saved"
   end
 
   test "no customer given is refused in plain words before Stripe is asked", %{conn: conn} do

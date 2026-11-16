@@ -594,12 +594,14 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
-  @doc "One payment: the row the shop keeps, the payment as Stripe has it, its events and actions."
+  @doc "One payment: the row the shop keeps, the payment as its provider has it, its events and actions."
   attr :selected, :map, required: true
   attr :live, :any, required: true
   attr :names, :map, required: true
 
   def payment_details(assigns) do
+    assigns = assign(assigns, :at, MishkaPay.Provider.label_of(assigns.selected.payment.provider))
+
     ~H"""
     <section
       id="payment-details"
@@ -669,7 +671,7 @@ defmodule ShopWeb.PayComponents do
               <dd class="font-mono text-xs">{@selected.payment.customer_id || "none"}</dd>
               <dt class="opacity-70">Site</dt>
               <dd>{@selected.payment.tenant}</dd>
-              <dt class="opacity-70">Made at Stripe</dt>
+              <dt class="opacity-70">Made at {@at}</dt>
               <dd class="text-xs">{time(@selected.payment.provider_created_at)}</dd>
               <dt class="opacity-70">Last synced</dt>
               <dd class="text-xs" data-testid="stored-synced">{time(@selected.payment.synced_at)}</dd>
@@ -680,16 +682,16 @@ defmodule ShopWeb.PayComponents do
               phx-value-payment_id={@selected.payment.provider_id}
               data-testid="details-sync"
             >
-              <.icon name="hero-arrow-path" class="size-4" /> Sync from Stripe
+              <.icon name="hero-arrow-path" class="size-4" /> Sync from {@at}
             </button>
           </div>
 
           <div class="rounded-box bg-base-100 p-4" data-testid="details-live">
-            <h3 class="font-medium">Live from Stripe</h3>
+            <h3 class="font-medium">Live from {@at}</h3>
             <.hint>MishkaPay.fetch_payment/3</.hint>
             <.async_result :let={live} assign={@live}>
               <:loading>
-                <span class="loading loading-dots loading-sm"></span> Asking Stripe...
+                <span class="loading loading-dots loading-sm"></span> Asking {@at}...
               </:loading>
               <:failed :let={{:error, reason}}>
                 <span class="text-error text-sm" data-testid="live-error">{reason}</span>

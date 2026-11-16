@@ -136,6 +136,7 @@ defmodule ShopWeb.SavedCardsComponent do
         </form>
 
         <form
+          id="portal-flow-form"
           phx-submit="portal"
           phx-target={@myself}
           class="rounded-box bg-base-200 p-4 space-y-3"
