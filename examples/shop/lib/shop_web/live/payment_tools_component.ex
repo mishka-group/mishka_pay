@@ -286,8 +286,19 @@ defmodule ShopWeb.PaymentToolsComponent do
     |> Ash.read!(authorize?: false)
   end
 
-  defp amount(%{amount: amount, currency: currency}),
-    do: currency |> Money.new(amount) |> Money.to_string!()
+  # A hold taken in part shows what was taken beside what was asked.
+  defp amount(%{amount: amount, amount_captured: captured, currency: currency})
+       when not is_nil(captured) do
+    case Decimal.equal?(captured, amount) do
+      true ->
+        money(Money.new(currency, amount))
+
+      false ->
+        "#{money(Money.new(currency, captured))} taken of #{money(Money.new(currency, amount))}"
+    end
+  end
+
+  defp amount(%{amount: amount, currency: currency}), do: money(Money.new(currency, amount))
 
   defp money(nil), do: "–"
   defp money(money), do: Money.to_string!(money)
