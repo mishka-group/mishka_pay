@@ -91,6 +91,7 @@ defmodule MishkaPay.Messages do
           | :paypal_id
           | :no_upcoming_invoice
           | :paypal_not_approved
+          | :paypal_custom_id
           | :refund_currency
           | :refund_left
           | :capture_over
@@ -526,6 +527,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The buyer has not approved this subscription on PayPal yet, so there is nothing to cancel: it ends by itself"
+      )
+
+  defp msgid(:paypal_custom_id),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "PayPal keeps 127 characters for the reference and the owner together: use shorter ones"
       )
 
   defp msgid(:paypal_id),

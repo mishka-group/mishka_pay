@@ -23,7 +23,8 @@ defmodule MishkaPay.Providers.PayPal do
   ## How a payment goes
 
     * `checkout/2` creates an Order (`intent: CAPTURE`) with the items and totals, the return and
-      cancel URLs, and the reference as its `custom_id`; the idempotency key (`PayPal-Request-Id`)
+      cancel URLs, and the reference (with the checkout's owner, when it names one) as its
+      `custom_id`; the idempotency key (`PayPal-Request-Id`)
       comes from the reference. The buyer approves it on PayPal's page and comes back to the return
       URL with the Order id in its `token` parameter.
     * PayPal takes the money only when an approved Order is captured. `fetch_checkout/2` and
@@ -79,6 +80,7 @@ defmodule MishkaPay.Providers.PayPal do
   @impl MishkaPay.Provider
   def checkout(%Checkout{mode: :subscription} = checkout, keys) do
     with :ok <- no_merchant(checkout),
+         :ok <- custom_id_fits(checkout),
          :ok <- no_options(checkout),
          :ok <- named_prices(checkout.items),
          :ok <- currencies(checkout.items, :checkout),
@@ -106,6 +108,7 @@ defmodule MishkaPay.Providers.PayPal do
 
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- no_merchant(checkout),
+         :ok <- custom_id_fits(checkout),
          :ok <- no_options(checkout),
          :ok <- named_prices(checkout.items),
          :ok <- currencies(checkout.items, :checkout),
@@ -259,6 +262,17 @@ defmodule MishkaPay.Providers.PayPal do
     case Mapper.capture(order) do
       %{"id" => id} -> {:ok, id}
       nil -> ProviderKit.invalid(:payment_id, Messages.text(:refund_nothing_left))
+    end
+  end
+
+  # PayPal keeps 127 characters of the caller's own: the reference and the owner together.
+  defp custom_id_fits(checkout) do
+    case Mapper.custom_id(checkout) do
+      long when is_binary(long) and byte_size(long) > 127 ->
+        ProviderKit.invalid(:reference, Messages.text(:paypal_custom_id))
+
+      _fits ->
+        :ok
     end
   end
 
