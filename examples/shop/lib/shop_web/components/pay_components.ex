@@ -241,6 +241,7 @@ defmodule ShopWeb.PayComponents do
         and keeps the payment on their record.
       </span>
       <input type="hidden" name="customer_id" value={@buyer.provider_id} />
+      <input type="hidden" name="buyer" value={@buyer.id} />
       <button
         type="button"
         class="btn btn-ghost btn-xs"

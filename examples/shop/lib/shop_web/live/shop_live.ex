@@ -77,10 +77,16 @@ defmodule ShopWeb.ShopLive do
   end
 
   @impl true
-  def handle_params(%{"session_id" => session_id}, _uri, socket) do
+  # A buyer picked with "Buy as this customer" comes back in the URL: the shop keeps buying as them,
+  # and reads their customer again, since Stripe's page may have changed it (the name on the card).
+  def handle_params(%{"session_id" => session_id} = params, _uri, socket) do
     case connected?(socket) do
       true ->
-        {:noreply, socket |> back_from_checkout("stripe", session_id) |> push_patch(to: ~p"/")}
+        {:noreply,
+         socket
+         |> back_from_checkout("stripe", session_id)
+         |> refresh_buyer(params["buyer"])
+         |> push_patch(to: home(params["buyer"]))}
 
       false ->
         {:noreply, socket}
@@ -124,7 +130,15 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  def handle_params(_params, _uri, socket), do: {:noreply, socket}
+  # The buyer picked with "Buy as this customer" lives in the URL, so a reload keeps it.
+  def handle_params(%{"buyer" => id}, _uri, socket) do
+    case Ash.get(Shop.Pay.Customer, id, authorize?: false) do
+      {:ok, %{deleted_at: nil} = customer} -> {:noreply, assign(socket, buyer: customer)}
+      _gone -> {:noreply, socket |> assign(buyer: nil) |> push_patch(to: ~p"/")}
+    end
+  end
+
+  def handle_params(_params, _uri, socket), do: {:noreply, assign(socket, buyer: nil)}
 
   @impl true
   def handle_event("buy", %{"product" => slug} = params, socket) do
@@ -138,7 +152,7 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  def handle_event("clear_buyer", _params, socket), do: {:noreply, assign(socket, buyer: nil)}
+  def handle_event("clear_buyer", _params, socket), do: {:noreply, push_patch(socket, to: ~p"/")}
 
   def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
 
@@ -273,7 +287,7 @@ defmodule ShopWeb.ShopLive do
   def handle_info({:buyer, customer}, socket) do
     {:noreply,
      socket
-     |> assign(buyer: customer)
+     |> push_patch(to: ~p"/?buyer=#{customer.id}")
      |> flash(:info, "The next checkout pays as #{customer.name || customer.email}.")}
   end
 
@@ -433,7 +447,7 @@ defmodule ShopWeb.ShopLive do
           interval_count: product.interval && product.interval_count
         }
       ],
-      success_url: success_url(provider),
+      success_url: success_url(provider, params["buyer"]),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
       customer: buyer(params),
@@ -687,8 +701,34 @@ defmodule ShopWeb.ShopLive do
   defp provider_choice(_stripe), do: "stripe"
 
   # Stripe sends the buyer back with the session id in the URL; PayPal adds its own `token`.
-  defp success_url("stripe"), do: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}"
-  defp success_url("paypal"), do: url(~p"/?provider=paypal")
+  defp success_url("stripe", buyer),
+    do: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}" <> buyer_param(buyer)
+
+  defp success_url("paypal", _buyer), do: url(~p"/?provider=paypal")
+
+  defp buyer_param(buyer) when buyer in [nil, ""], do: ""
+  defp buyer_param(buyer), do: "&" <> URI.encode_query(buyer: buyer)
+
+  defp home(buyer) when buyer in [nil, ""], do: ~p"/"
+  defp home(buyer), do: ~p"/?buyer=#{buyer}"
+
+  defp refresh_buyer(socket, buyer) when buyer in [nil, ""], do: socket
+
+  defp refresh_buyer(socket, buyer) do
+    with {:ok, row} <- Ash.get(Shop.Pay.Customer, buyer, authorize?: false),
+         {:ok, synced} <-
+           Ash.create(
+             Shop.Pay.Customer,
+             %{provider: row.provider, customer_id: row.provider_id, tenant: row.tenant},
+             action: :sync,
+             authorize?: false
+           ) do
+      send_update(ShopWeb.CustomersComponent, id: "customers", changed: synced)
+      socket
+    else
+      _not_found -> socket
+    end
+  end
 
   # Stripe ids carry their object's prefix; a PayPal Order id is letters and digits.
   defp provider_of("pi_" <> _), do: "stripe"

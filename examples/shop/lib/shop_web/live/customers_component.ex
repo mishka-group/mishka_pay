@@ -12,11 +12,21 @@ defmodule ShopWeb.CustomersComponent do
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
+  require Ash.Query
+
   alias Shop.Pay.Customer
 
   @impl true
   def mount(socket),
-    do: {:ok, assign(socket, selected: nil, found: nil, loaded?: false, new_open?: false)}
+    do:
+      {:ok,
+       assign(socket,
+         selected: nil,
+         found: nil,
+         saved: MapSet.new(),
+         loaded?: false,
+         new_open?: false
+       )}
 
   @impl true
   def update(%{changed: record}, socket) do
@@ -37,23 +47,24 @@ defmodule ShopWeb.CustomersComponent do
   def handle_event("toggle_new", _params, socket),
     do: {:noreply, assign(socket, new_open?: !socket.assigns.new_open?)}
 
+  # Stripe accepts a customer with no details at all; the shop needs an email to reach them.
   def handle_event("register", params, socket) do
     args = Map.put(fields(params, ~w(email name phone reference)), :tenant, socket.assigns.tenant)
 
-    case Ash.create(Customer, Map.put(args, :provider, "stripe"),
-           action: :register,
-           authorize?: false
-         ) do
-      {:ok, row} ->
-        {:noreply,
-         socket
-         |> assign(new_open?: false)
-         |> stream_insert(:customers, row, at: 0)
-         |> select(row.id)
-         |> say(:info, "Customer made on Stripe and saved.")}
-
-      {:error, error} ->
-        {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+    with {:ok, args} <- needs_email(args),
+         {:ok, row} <-
+           Ash.create(Customer, Map.put(args, :provider, "stripe"),
+             action: :register,
+             authorize?: false
+           ) do
+      {:noreply,
+       socket
+       |> assign(new_open?: false)
+       |> stream_insert(:customers, row, at: 0)
+       |> select(row.id)
+       |> say(:info, "Customer made on Stripe and saved.")}
+    else
+      {:error, error} -> {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
 
@@ -61,7 +72,7 @@ defmodule ShopWeb.CustomersComponent do
     opts = [limit: 10] ++ if(blank?(email), do: [], else: [email: String.trim(email)])
 
     case MishkaPay.list_customers("stripe", socket.assigns.tenant, opts) do
-      {:ok, customers} -> {:noreply, assign(socket, found: customers)}
+      {:ok, customers} -> {:noreply, assign(socket, found: customers, saved: saved(customers))}
       {:error, error} -> {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
@@ -74,6 +85,7 @@ defmodule ShopWeb.CustomersComponent do
         {:noreply,
          socket
          |> stream_insert(:customers, row, at: 0)
+         |> update(:saved, &MapSet.put(&1 || MapSet.new(), id))
          |> select(row.id)
          |> say(:info, "Customer read from Stripe and saved.")}
 
@@ -161,7 +173,7 @@ defmodule ShopWeb.CustomersComponent do
       </div>
 
       <.new_customer :if={@new_open?} myself={@myself} />
-      <.found :if={@found} found={@found} myself={@myself} />
+      <.found :if={@found} found={@found} saved={@saved} myself={@myself} />
 
       <div class="overflow-x-auto rounded-box border border-base-300">
         <table class="table">
@@ -169,7 +181,7 @@ defmodule ShopWeb.CustomersComponent do
             <tr>
               <th>Customer</th>
               <th>Reference</th>
-              <th>Card on file</th>
+              <th>Default card</th>
               <th>State</th>
               <th>Last synced</th>
             </tr>
@@ -271,6 +283,7 @@ defmodule ShopWeb.CustomersComponent do
   end
 
   attr :found, :list, required: true
+  attr :saved, :any, required: true
   attr :myself, :any, required: true
 
   defp found(assigns) do
@@ -291,7 +304,8 @@ defmodule ShopWeb.CustomersComponent do
         </div>
         <.hint>MishkaPay.list_customers/3</.hint>
         <p :if={@found == []} class="text-sm opacity-70" data-testid="found-empty">
-          Stripe has no customer with that email.
+          Stripe has no customer with that email. Stripe's list leaves out customers made on a
+          test clock: open those from their subscription instead.
         </p>
         <ul class="space-y-1">
           <li
@@ -303,6 +317,13 @@ defmodule ShopWeb.CustomersComponent do
             <span class="font-medium">{customer.name || "–"}</span>
             <span class="opacity-70">{customer.email}</span>
             <code class="text-xs opacity-60">{customer.id}</code>
+            <span
+              :if={MapSet.member?(@saved, customer.id)}
+              class="badge badge-sm badge-success"
+              data-testid="found-saved"
+            >
+              in the shop
+            </span>
             <button
               class="btn btn-xs"
               phx-click="keep"
@@ -311,7 +332,7 @@ defmodule ShopWeb.CustomersComponent do
               phx-disable-with="Saving..."
               data-testid="found-keep"
             >
-              Save to the shop
+              {if MapSet.member?(@saved, customer.id), do: "Sync again", else: "Save to the shop"}
             </button>
           </li>
         </ul>
@@ -399,7 +420,10 @@ defmodule ShopWeb.CustomersComponent do
                 <dt class="opacity-70">Phone</dt>
                 <dd>{live.phone || "–"}</dd>
                 <dt class="opacity-70">Default card</dt>
-                <dd class="font-mono text-xs">{live.default_payment_method || "none yet"}</dd>
+                <dd class="font-mono text-xs">
+                  {live.default_payment_method ||
+                    "not set: a card saved at checkout shows in the portal"}
+                </dd>
                 <dt class="opacity-70">Metadata</dt>
                 <dd class="text-xs" data-testid="customer-live-metadata">
                   <span :for={{key, value} <- live.metadata || %{}} class="block">
@@ -596,6 +620,17 @@ defmodule ShopWeb.CustomersComponent do
   defp reselect(%{assigns: %{selected: %{id: id}}} = socket, %{id: id}), do: select(socket, id)
   defp reselect(socket, _other), do: socket
 
+  # Which of the customers found on Stripe the shop keeps already, in one read.
+  defp saved(customers) do
+    ids = Enum.map(customers, & &1.id)
+
+    Customer
+    |> Ash.Query.filter(provider == "stripe" and provider_id in ^ids)
+    |> Ash.Query.select([:provider_id])
+    |> Ash.read!(authorize?: false)
+    |> MapSet.new(& &1.provider_id)
+  end
+
   defp newest do
     Customer
     |> Ash.Query.sort(provider_created_at: :desc_nils_last, inserted_at: :desc)
@@ -609,6 +644,9 @@ defmodule ShopWeb.CustomersComponent do
       {String.to_existing_atom(name), String.trim(params[name])}
     end
   end
+
+  defp needs_email(%{email: _email} = args), do: {:ok, args}
+  defp needs_email(_args), do: {:error, "Type the customer's email first."}
 
   defp edit_args(params) do
     args = fields(params, ~w(email name phone))
