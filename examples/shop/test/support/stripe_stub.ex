@@ -18,7 +18,7 @@ defmodule ShopWeb.StripeStub do
     MishkaPay.Test.stub_http(fn conn ->
       conn = Plug.Conn.fetch_query_params(conn)
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      params = Map.merge(conn.query_params, Plug.Conn.Query.decode(body))
+      params = Map.merge(conn.query_params, form(conn, body))
 
       case answer.(conn.method, conn.request_path, params) do
         nil -> default(conn)
@@ -35,6 +35,15 @@ defmodule ShopWeb.StripeStub do
   def error(message, code \\ "parameter_invalid") do
     {400,
      %{"error" => %{"type" => "invalid_request_error", "message" => message, "code" => code}}}
+  end
+
+  # A form body as params; a file upload (multipart) only by its parts' names.
+  defp form(conn, body) do
+    case Plug.Conn.get_req_header(conn, "content-type") do
+      ["application/x-www-form-urlencoded" <> _rest] -> Plug.Conn.Query.decode(body)
+      ["multipart/form-data" <> _rest] -> %{"multipart" => body}
+      _other -> %{}
+    end
   end
 
   defp default(%{method: "GET"} = conn), do: Req.Test.json(conn, list([]))
