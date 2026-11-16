@@ -323,7 +323,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       assert {:ok, %Invoice{total: next_total}} = MishkaPay.upcoming_invoice("stripe", id)
       assert Money.equal?(next_total, Money.new(:USD, "9.00"))
 
-      {:ok, %TestClock{}} = TestClock.advance(nil, clock, DateTime.add(now, 32, :day))
+      # Past the renewal (day 30) and Stripe's 72-hour wait: an account with webhook endpoints has
+      # each new bill finalized once its webhook is delivered, or 72 hours later at most.
+      {:ok, %TestClock{}} = TestClock.advance(nil, clock, DateTime.add(now, 34, :day))
       :ready = clock_ready(clock, 60)
 
       assert {:ok, %MishkaPay.Page{items: [%Invoice{status: :paid}, %Invoice{status: :paid} | _]}} =
