@@ -1420,6 +1420,20 @@ defmodule MishkaPay.Providers.StripeTest do
         assert named?(event, update), "#{type} does not name its #{update}"
       end
     end
+
+    # The bill a renewal will make has no id yet, and still names its subscription.
+    upcoming = %{
+      "object" => "invoice",
+      "id" => nil,
+      "parent" => %{"subscription_details" => %{"subscription" => "sub_1"}}
+    }
+
+    assert {:ok, %{subscription_id: "sub_1", object_id: nil}} =
+             Stripe.Mapper.event(%{
+               "id" => "evt_2",
+               "type" => "invoice.upcoming",
+               "data" => %{"object" => upcoming}
+             })
   end
 
   defp named?(event, :payment), do: event.payment_id == "pi_1"

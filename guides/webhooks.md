@@ -18,7 +18,7 @@ In Stripe's Dashboard, point each site's endpoint at
 | `refund.created`, `refund.updated`, `refund.failed` | the payment |
 | `invoice_payment.paid` | the payment an invoice was paid with |
 | `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`, `charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated` | the dispute and its payment |
-| `invoice.paid`, `invoice.payment_failed`, `invoice.finalized` | the subscription |
+| `invoice.paid`, `invoice.payment_failed`, `invoice.finalized`, `invoice.payment_action_required`, `invoice.voided`, `invoice.marked_uncollectible`, `invoice.overdue`, `invoice.upcoming` | the subscription |
 | `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `customer.subscription.trial_will_end` | the subscription |
 | `customer.created`, `customer.updated`, `customer.deleted` | the customer |
 

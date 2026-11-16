@@ -40,7 +40,7 @@ webhook endpoint to these:
 | `payment_intent.succeeded`, `.payment_failed`, `.canceled`, `.processing`, `.requires_action` | the payment |
 | `charge.succeeded`, `.failed`, `.refunded`; `refund.created`, `.updated`, `.failed` | the payment |
 | `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated` | the dispute and its payment |
-| `invoice.paid`, `.payment_failed`, `.finalized` | the subscription |
+| `invoice.paid`, `.payment_failed`, `.finalized`, `.payment_action_required`, `.voided`, `.marked_uncollectible`, `.overdue`, `.upcoming` | the subscription |
 | `invoice_payment.paid` | the payment |
 | `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`, `.trial_will_end` | the subscription |
 | `customer.created`, `.updated`, `.deleted` | the customer |
