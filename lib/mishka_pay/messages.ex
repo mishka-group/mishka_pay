@@ -90,6 +90,7 @@ defmodule MishkaPay.Messages do
           | :stripe_id
           | :paypal_id
           | :no_upcoming_invoice
+          | :paypal_not_approved
           | :refund_currency
           | :refund_left
           | :capture_over
@@ -518,6 +519,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The subscription %{id} has no next bill: it is not active, or it ends without one"
+      )
+
+  defp msgid(:paypal_not_approved),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The buyer has not approved this subscription on PayPal yet, so there is nothing to cancel: it ends by itself"
       )
 
   defp msgid(:paypal_id),

@@ -141,16 +141,12 @@ defmodule MishkaPay.Providers.PayPal do
   end
 
   # PayPal ends a subscription at once: it has no cancel at the period's end to set or take back.
+  # One the buyer never approved cannot be canceled (PayPal answers that it is not found); it ends
+  # by itself, and the error says so.
   @impl MishkaPay.Provider
   def cancel_subscription(subscription_id, :now, keys) do
     with :ok <- subscription_id(subscription_id, :subscription_id),
-         {:ok, _no_content} <-
-           request(
-             :post,
-             "/v1/billing/subscriptions/#{subscription_id}/cancel",
-             %{"reason" => "Canceled by the site"},
-             keys
-           ) do
+         {:ok, _no_content} <- cancel_request(subscription_id, keys) do
       fetch_subscription(subscription_id, keys)
     end
   end
@@ -271,6 +267,31 @@ defmodule MishkaPay.Providers.PayPal do
   # A PayPal subscription follows one plan: one recurring price.
   defp one_plan([%Price{interval: interval} = price]) when not is_nil(interval), do: {:ok, price}
   defp one_plan(_items), do: unsupported("subscription checkout with more than one price")
+
+  defp cancel_request(subscription_id, keys) do
+    case request(
+           :post,
+           "/v1/billing/subscriptions/#{subscription_id}/cancel",
+           %{"reason" => "Canceled by the site"},
+           keys
+         ) do
+      {:error, %Errors.Rejected{status: 404}} = error ->
+        not_approved(subscription_id, error, keys)
+
+      answer ->
+        answer
+    end
+  end
+
+  defp not_approved(subscription_id, error, keys) do
+    case read_subscription(subscription_id, keys) do
+      {:ok, %{"status" => status}} when status in ["APPROVAL_PENDING", "APPROVED"] ->
+        ProviderKit.invalid(:subscription_id, Messages.text(:paypal_not_approved))
+
+      _other ->
+        error
+    end
+  end
 
   defp read_subscription(subscription_id, keys) do
     with :ok <- subscription_id(subscription_id, :subscription_id) do

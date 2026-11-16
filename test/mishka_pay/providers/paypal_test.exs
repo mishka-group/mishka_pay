@@ -405,6 +405,15 @@ defmodule MishkaPay.Providers.PayPalTest do
                MishkaPay.upcoming_invoice("paypal", id, "site-a")
     end
 
+    test "one the buyer never approved is not canceled, and the error says why" do
+      {:ok, %Checkout{id: id}} = MishkaPay.checkout(Map.put(@monthly, :mode, :subscription))
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id, message: message}]}} =
+               MishkaPay.cancel_subscription("paypal", id, "site-a", at: :now)
+
+      assert message =~ "has not approved this subscription"
+    end
+
     test "an id that is not a PayPal subscription id never reaches a path" do
       for id <- ["I-../../v1/x", "sub_123", "I-"] do
         assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
