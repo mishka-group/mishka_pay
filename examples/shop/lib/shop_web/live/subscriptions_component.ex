@@ -2,7 +2,7 @@ defmodule ShopWeb.SubscriptionsComponent do
   @moduledoc """
   The subscriptions part of the demo shop: every subscription the shop keeps, live, and one at a
   time in detail: the stored row beside the subscription read live from Stripe
-  (`MishkaPay.fetch_subscription/3`), its invoices (`MishkaPay.invoices/3`), and the `:cancel`
+  (`MishkaPay.fetch_subscription/3`), its invoices (`MishkaPay.list_invoices/3`), and the `:cancel`
   (at the period's end or now), `:resume` and `:sync` actions. The page sends it each changed
   subscription (`changed`) and a subscription to open (`open`).
   """
@@ -219,7 +219,7 @@ defmodule ShopWeb.SubscriptionsComponent do
 
           <div class="rounded-box bg-base-100 p-4" data-testid="subscription-live">
             <h4 class="font-medium">Live from Stripe</h4>
-            <.hint>MishkaPay.fetch_subscription/3 and MishkaPay.invoices/3</.hint>
+            <.hint>MishkaPay.fetch_subscription/3 and MishkaPay.list_invoices/3</.hint>
             <.async_result :let={live} assign={@live}>
               <:loading>
                 <span class="loading loading-dots loading-sm"></span> Asking Stripe...
@@ -400,7 +400,11 @@ defmodule ShopWeb.SubscriptionsComponent do
       fn ->
         with {:ok, subscription} <-
                MishkaPay.fetch_subscription(row.provider, row.provider_id, row.tenant),
-             {:ok, invoices} <- MishkaPay.invoices(row.provider, row.provider_id, row.tenant) do
+             {:ok, %MishkaPay.Page{items: invoices}} <-
+               MishkaPay.list_invoices(row.provider, row.tenant,
+                 subscription_id: row.provider_id,
+                 limit: 24
+               ) do
           {:ok, %{live: %{subscription: subscription, invoices: invoices}}}
         else
           {:error, error} -> {:error, MishkaPay.Ash.message(error)}

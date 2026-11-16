@@ -1,7 +1,9 @@
 defmodule Shop.Catalog.Product do
   @moduledoc """
   A product the demo shop sells, paid once or, with an `:interval`, a plan sold as a subscription.
-  The seeds (`priv/repo/seeds.exs`) fill them.
+  The seeds (`priv/repo/seeds.exs`) fill them. Once published to Stripe's catalog
+  (`Shop.Pay.CatalogPublisher`) it keeps its Stripe product and price ids, and a checkout sells
+  that price by its id.
   """
 
   use Ash.Resource, domain: Shop.Pay, data_layer: AshPostgres.DataLayer
@@ -43,6 +45,10 @@ defmodule Shop.Catalog.Product do
         :trial_days
       ]
     end
+
+    update :published do
+      accept [:stripe_product_id, :stripe_price_id]
+    end
   end
 
   attributes do
@@ -62,6 +68,10 @@ defmodule Shop.Catalog.Product do
     attribute :interval, :atom, constraints: [one_of: [:day, :week, :month, :year]], public?: true
     attribute :interval_count, :integer, allow_nil?: false, default: 1, public?: true
     attribute :trial_days, :integer, public?: true
+
+    # Set by publishing to Stripe's catalog: the product there and the price a checkout sells.
+    attribute :stripe_product_id, :string, public?: true
+    attribute :stripe_price_id, :string, public?: true
     timestamps()
   end
 

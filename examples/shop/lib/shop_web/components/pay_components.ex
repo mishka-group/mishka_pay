@@ -138,6 +138,14 @@ defmodule ShopWeb.PayComponents do
         <span :if={@product.trial_days} class="badge badge-info badge-sm" data-testid="product-trial">
           {@product.trial_days}-day free trial
         </span>
+        <span
+          :if={@product.stripe_price_id}
+          class="badge badge-ghost badge-sm"
+          title={@product.stripe_price_id}
+          data-testid="product-catalog-price"
+        >
+          sold by Stripe price
+        </span>
         <button
           name="product"
           value={@product.slug}

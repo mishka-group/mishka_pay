@@ -15,7 +15,16 @@ defmodule ShopWeb.DiscountsComponent do
 
   @impl true
   def mount(socket),
-    do: {:ok, assign(socket, coupons: [], codes: %{}, open: nil, loaded?: false, new?: false)}
+    do:
+      {:ok,
+       assign(socket,
+         coupons: [],
+         coupons_next: nil,
+         codes: %{},
+         open: nil,
+         loaded?: false,
+         new?: false
+       )}
 
   @impl true
   def update(assigns, socket) do
@@ -30,6 +39,9 @@ defmodule ShopWeb.DiscountsComponent do
   @impl true
   def handle_event("toggle_new", _params, socket),
     do: {:noreply, assign(socket, new?: !socket.assigns.new?)}
+
+  def handle_event("more_coupons", _params, socket),
+    do: {:noreply, more_coupons(socket, socket.assigns.coupons_next)}
 
   def handle_event("create_coupon", params, socket) do
     case MishkaPay.create_coupon(coupon_attrs(params, socket.assigns.tenant)) do
@@ -159,6 +171,17 @@ defmodule ShopWeb.DiscountsComponent do
           </tbody>
         </table>
       </div>
+
+      <button
+        :if={@coupons_next}
+        class="btn btn-sm btn-ghost"
+        phx-click="more_coupons"
+        phx-target={@myself}
+        phx-disable-with="Asking Stripe..."
+        data-testid="coupons-more"
+      >
+        More coupons from Stripe
+      </button>
 
       <.coupon_card
         :for={coupon <- @coupons}
@@ -357,7 +380,7 @@ defmodule ShopWeb.DiscountsComponent do
           <h4 class="font-medium">New promotion code</h4>
           <.hint>MishkaPay.create_promotion_code/1</.hint>
           <input type="hidden" name="coupon_id" value={@coupon.id} />
-          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 items-end">
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6 items-end">
             <label class="fieldset">
               <span class="fieldset-legend">Code</span>
               <input
@@ -392,6 +415,15 @@ defmodule ShopWeb.DiscountsComponent do
               <span class="fieldset-legend">Last day</span>
               <input name="expires_at" type="date" class="input input-sm" data-testid="code-expires" />
             </label>
+            <label class="fieldset">
+              <span class="fieldset-legend">Only for customer</span>
+              <input
+                name="customer_id"
+                placeholder="cus_... (empty: anyone)"
+                class="input input-sm"
+                data-testid="code-customer"
+              />
+            </label>
             <label class="label gap-2 text-sm">
               <input
                 type="checkbox"
@@ -415,15 +447,21 @@ defmodule ShopWeb.DiscountsComponent do
     """
   end
 
+  # The first page of coupons again, and the open coupon's codes.
   defp load(socket) do
-    case MishkaPay.list_coupons("stripe", socket.assigns.tenant, limit: 20) do
-      {:ok, coupons} ->
-        socket = assign(socket, coupons: coupons)
+    socket = socket |> assign(coupons: []) |> more_coupons(nil)
 
-        case socket.assigns.open do
-          nil -> socket
-          id -> load_codes(socket, id)
-        end
+    case socket.assigns.open do
+      nil -> socket
+      id -> load_codes(socket, id)
+    end
+  end
+
+  # One more page of coupons from Stripe, 10 at a time.
+  defp more_coupons(socket, cursor) do
+    case MishkaPay.list_coupons("stripe", socket.assigns.tenant, limit: 10, after: cursor) do
+      {:ok, %MishkaPay.Page{items: coupons, next: next}} ->
+        assign(socket, coupons: socket.assigns.coupons ++ coupons, coupons_next: next)
 
       {:error, error} ->
         say(socket, :error, MishkaPay.Ash.message(error))
@@ -435,8 +473,11 @@ defmodule ShopWeb.DiscountsComponent do
            coupon_id: coupon_id,
            limit: 20
          ) do
-      {:ok, codes} -> assign(socket, codes: Map.put(socket.assigns.codes, coupon_id, codes))
-      {:error, error} -> say(socket, :error, MishkaPay.Ash.message(error))
+      {:ok, %MishkaPay.Page{items: codes}} ->
+        assign(socket, codes: Map.put(socket.assigns.codes, coupon_id, codes))
+
+      {:error, error} ->
+        say(socket, :error, MishkaPay.Ash.message(error))
     end
   end
 
@@ -466,6 +507,7 @@ defmodule ShopWeb.DiscountsComponent do
       max_redemptions: integer(params["max_redemptions"]),
       minimum_amount: usd(params["minimum_amount"]),
       expires_at: end_of_day(params["expires_at"]),
+      customer_id: present(params["customer_id"]),
       first_time_transaction: params["first_time_transaction"] == "true" || nil
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
@@ -528,6 +570,7 @@ defmodule ShopWeb.DiscountsComponent do
       code.max_redemptions && "used #{code.times_redeemed || 0} of #{code.max_redemptions}",
       code.minimum_amount && "order at least #{Money.to_string!(code.minimum_amount)}",
       code.first_time_transaction && "first purchase only",
+      code.customer_id && "only for #{code.customer_id}",
       code.expires_at && "until #{Calendar.strftime(code.expires_at, "%Y-%m-%d")}"
     ]
     |> Enum.reject(&(&1 in [nil, false]))

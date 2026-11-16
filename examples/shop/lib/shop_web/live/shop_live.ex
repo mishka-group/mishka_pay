@@ -11,6 +11,8 @@ defmodule ShopWeb.ShopLive do
       refunds), its webhook events, sync and refund;
     * the customers: register one on Stripe, find and keep one, edit it, open its customer portal,
       and buy as that customer;
+    * the catalog: the shop's products published to Stripe as products and prices, sold by price
+      id, and every Stripe list read page by page;
     * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
@@ -308,6 +310,9 @@ defmodule ShopWeb.ShopLive do
      )}
   end
 
+  def handle_info(:catalog_published, socket),
+    do: {:noreply, assign(socket, products: Shop.Catalog.all())}
+
   def handle_info({:flash, kind, message}, socket), do: {:noreply, flash(socket, kind, message)}
 
   def handle_info({:telemetry, entry}, socket),
@@ -393,6 +398,10 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.DiscountsComponent} id="discounts" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.CatalogComponent} id="catalog" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.StripeListsComponent} id="stripe-lists" tenant={@tenant} />
+
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
 
       <section data-testid="read-checkout">
@@ -456,16 +465,7 @@ defmodule ShopWeb.ShopLive do
       tenant: @tenant,
       mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
       trial_days: product.trial_days,
-      items: [
-        %{
-          name: product.name,
-          amount: %{amount: product.price, currency: "USD"},
-          tax_code: product.tax_code,
-          quantity: count,
-          interval: product.interval,
-          interval_count: product.interval && product.interval_count
-        }
-      ],
+      items: [item(product, count)],
       success_url: success_url(provider, params["buyer"]),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
@@ -474,6 +474,22 @@ defmodule ShopWeb.ShopLive do
       metadata: metadata(params["meta_key"], params["meta_value"])
     }
     |> Map.merge(options(params))
+  end
+
+  # A product published to Stripe's catalog sells its Stripe price by id; one not published yet
+  # sends its name, amount and schedule.
+  defp item(%{stripe_price_id: price_id}, count) when is_binary(price_id),
+    do: %{id: price_id, quantity: count}
+
+  defp item(product, count) do
+    %{
+      name: product.name,
+      amount: %{amount: product.price, currency: "USD"},
+      tax_code: product.tax_code,
+      quantity: count,
+      interval: product.interval,
+      interval_count: product.interval && product.interval_count
+    }
   end
 
   # "Open it here" keeps the buyer on the shop with the checkout shown, to pay or end later; the
