@@ -322,7 +322,7 @@ defmodule ShopWeb.PayComponents do
                 <option value="">No reason</option>
                 <option value="requested_by_customer">Requested by customer</option>
                 <option value="duplicate">Duplicate</option>
-                <option value="fraudulent">Fraudulent</option>
+                <option value="fraudulent">Fraudulent (Stripe then blocks this card)</option>
               </select>
               <button class="btn btn-sm btn-warning" phx-disable-with="Refunding...">Refund</button>
             </div>

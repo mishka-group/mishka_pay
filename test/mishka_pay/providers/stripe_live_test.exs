@@ -95,7 +95,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   test "a paid payment is read as paid and refunded once, in part, or many times when allowed",
        %{key: key} do
-    {200, %{"id" => id}} = pay(key, "pm_card_visa")
+    {200, %{"id" => id}} = pay(key, "pm_card_mastercard")
 
     assert {:ok, %Payment{status: :paid}} = MishkaPay.fetch_payment("stripe", id)
 
