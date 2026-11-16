@@ -38,8 +38,7 @@ defmodule Mix.Tasks.MishkaPay.Stripe.CleanClocks do
     case TestClock.list(tenant) do
       {:ok, clocks} ->
         clocks
-        |> Enum.filter(&old?(&1, since))
-        |> Enum.filter(&named?(&1, opts[:name]))
+        |> Enum.filter(&(old?(&1, since) and named?(&1, opts[:name])))
         |> Enum.each(&clean(&1, tenant, opts[:dry_run]))
 
       {:error, error} ->
