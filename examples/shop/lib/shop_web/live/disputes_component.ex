@@ -1,11 +1,11 @@
 defmodule ShopWeb.DisputesComponent do
   @moduledoc """
-  The disputes part of the demo shop, on `MishkaPay.Ash.Dispute`: every chargeback the shop keeps,
-  live (`charge.dispute.*` webhooks through the inbox, or "Read disputes from Stripe" with
-  `MishkaPay.list_disputes/3`), and one at a time: its amount, status, reason and due date, an
-  evidence form (`:submit_evidence`, `MishkaPay.update_dispute/1`) and accepting the loss
-  (`:accept`, `MishkaPay.accept_dispute/3`). Pay with the dispute test card to make one. The page
-  sends it each changed dispute (`changed`).
+  The disputes part of the demo shop, on Mishka Pay's `:dispute` kind (`MishkaPay.Ash.Resource`):
+  every chargeback the shop keeps, live (`charge.dispute.*` webhooks through the inbox, or "Read
+  disputes from Stripe" with `MishkaPay.list_disputes/3`), and one at a time: its amount, status,
+  reason and due date, an evidence form (`:submit_evidence`, `MishkaPay.update_dispute/1`) and
+  accepting the loss (`:accept`, `MishkaPay.accept_dispute/3`). Pay with the dispute test card to
+  make one. The page sends it each changed dispute (`changed`).
   """
 
   use ShopWeb, :live_component

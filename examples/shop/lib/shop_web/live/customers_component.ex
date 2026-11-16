@@ -1,11 +1,11 @@
 defmodule ShopWeb.CustomersComponent do
   @moduledoc """
-  The customers part of the demo shop, on `MishkaPay.Ash.Customer`: register a Stripe customer
-  (`:register`), find customers on Stripe by email (`MishkaPay.list_customers/3`) and keep one
-  (`:sync`), and open one at a time: the stored row beside the customer read live from Stripe
-  (`MishkaPay.fetch_customer/3`), an edit form (`:edit`), its customer portal (`:portal`), and
-  "Buy as this customer", which makes the next checkout pay as that customer. The page sends it
-  each changed customer (`changed`).
+  The customers part of the demo shop, on Mishka Pay's `:customer` kind
+  (`MishkaPay.Ash.Resource`): register a Stripe customer (`:register`), find customers on Stripe
+  by email (`MishkaPay.list_customers/3`) and keep one (`:sync`), and open one at a time: the
+  stored row beside the customer read live from Stripe (`MishkaPay.fetch_customer/3`), an edit
+  form (`:edit`), its customer portal (`:portal`), and "Buy as this customer", which makes the
+  next checkout pay as that customer. The page sends it each changed customer (`changed`).
   """
 
   use ShopWeb, :live_component
