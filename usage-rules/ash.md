@@ -79,6 +79,10 @@ yourself with `pre_check_with`.
 
 ## Many sites (Mishka CMS)
 
+- A CMS extension lists `MishkaPay.Ash.listeners(MyExtension.Pay)` in its application's
+  `plugins/0` and children (the CMS checks every plugin is started by its application), and adds
+  `mishka_pay_inbox` to Oban's queues.
+
 A resource may carry Ash multitenancy on the host's own attribute; then each action runs with the
 site as Ash's tenant, the provider's keys are read for that site, and each webhook's row is synced
 inside the site its URL names (`/pay/webhooks/stripe/<site id>`). The row's `:tenant` keeps it for
