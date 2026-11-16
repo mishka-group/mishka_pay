@@ -9,7 +9,7 @@ defmodule MishkaPay.Providers.PayPalTest do
   alias MishkaPay.{Checkout, Errors, Event, Invoice, Page, Payment, Price, Refund, Subscription}
   alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.PayPal
-  alias MishkaPay.Support.PayPalStub
+  alias MishkaPay.Test.PayPal, as: PayPalStub
 
   @keys %{
     publishable_key: "client_a",
@@ -31,7 +31,7 @@ defmodule MishkaPay.Providers.PayPalTest do
   setup do
     MishkaPay.Test.start_plugin!(PayPal)
     MishkaPay.Test.put_keys("paypal", @keys)
-    MishkaPay.Test.stub_http(&PayPalStub.forward/1)
+    PayPalStub.stub!()
     TokenCache.drop({:paypal, "client_a", :test})
     :ok
   end

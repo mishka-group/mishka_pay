@@ -38,7 +38,7 @@ defmodule MishkaPay.Providers.PayPalLiveTest do
   end
 
   test "an Order opens on PayPal's sandbox and reads back as an open checkout and a waiting payment" do
-    reference = "live-#{System.unique_integer([:positive])}"
+    reference = "live-#{run_id()}"
 
     assert {:ok, %Checkout{id: id, status: :open, url: "https://www.sandbox.paypal.com/" <> _}} =
              MishkaPay.checkout(%{
@@ -59,7 +59,7 @@ defmodule MishkaPay.Providers.PayPalLiveTest do
   end
 
   test "a subscription with a trial opens on PayPal's sandbox, waiting for the buyer to approve it" do
-    reference = "live-sub-#{System.unique_integer([:positive])}"
+    reference = "live-sub-#{run_id()}"
 
     assert {:ok, %Checkout{id: "I-" <> _ = id, status: :open, url: url}} =
              MishkaPay.checkout(%{
@@ -100,4 +100,8 @@ defmodule MishkaPay.Providers.PayPalLiveTest do
     assert {:error, %Errors.Rejected{provider: "paypal", status: 404}} =
              MishkaPay.fetch_payment("paypal", "0000000000000000X")
   end
+
+  # Stripe and PayPal keep codes, lookup keys and idempotency keys between runs; a counter alone
+  # starts again each run, so the run's time makes every name new.
+  defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

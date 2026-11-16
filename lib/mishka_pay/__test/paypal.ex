@@ -2,23 +2,72 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-defmodule MishkaPay.Support.PayPalStub do
+defmodule MishkaPay.Test.PayPal do
   @moduledoc """
-  A stand-in for PayPal's REST API behind the test kit's HTTP stub, answering in PayPal's own
-  shapes (Orders v2, captures, refunds, catalog products, billing plans, subscriptions and their
-  transactions, OAuth, webhook verification) from what the test set up.
-  It keeps the orders of the running test in its process, and tells the test every request it
-  got as `{:paypal, method, path, headers, body}`.
+  A stand-in for PayPal's REST API for a project's tests: it answers in PayPal's own shapes
+  (Orders v2, captures, refunds, catalog products, billing plans, subscriptions and their
+  transactions, OAuth, webhook verification), so a host tests its PayPal flows with no keys and
+  no network. Mishka Pay's own PayPal tests run on it, and its sandbox tests check it against
+  PayPal (`mix test --only paypal_live`).
 
-  `order/2` puts an Order in a state, `subscription/3` a subscription; `forward/1` is the plug.
+      setup do
+        MishkaPay.Test.start_plugin!(MishkaPay.Providers.PayPal)
+        MishkaPay.Test.put_keys("paypal", %{publishable_key: "client_1", secret_key: "secret_1",
+          webhook_secret: "WH-1", mode: :test})
+        MishkaPay.Test.PayPal.stub!()
+      end
+
+      test "the buyer pays and comes back" do
+        {:ok, checkout} = MishkaPay.checkout(%{provider: "paypal", ...})
+        MishkaPay.Test.PayPal.order(checkout.id, "APPROVED")
+        {:ok, %{payment_id: _paid}} = MishkaPay.fetch_checkout("paypal", checkout.id)
+      end
+
+  `order/3` puts an Order in a state (an `"APPROVED"` one is captured when read; `declined: true`
+  declines the capture), `subscription/3` a subscription (`"ACTIVE"` with `:billing_info` and
+  `:transactions`). A webhook message is verified when its `paypal-transmission-sig` header is
+  `"good"`.
+
+  `MishkaPay.Test.setup!/0` makes its table. What it holds belongs to the test that called `stub!/0`, read from any process the test starts
+  (through `$callers`), so async tests never see each other's. It tells the test every request
+  it got as `{:paypal, method, path, headers, body}`.
   """
+
+  @table __MODULE__
+
+  @doc "Answers this test's PayPal requests with the stand-in, holding what it makes for this test."
+  @spec stub!() :: :ok
+  def stub! do
+    test = self()
+    ExUnit.Callbacks.on_exit(fn -> :ets.match_delete(@table, {{test, :_}, :_}) end)
+    MishkaPay.Test.stub_http(&forward/1)
+  end
+
+  # Made by `MishkaPay.Test.setup!/0` in the test run's own process, so it outlives every test.
+  @doc false
+  def new_table do
+    case :ets.whereis(@table) do
+      :undefined -> :ets.new(@table, [:named_table, :public, :set])
+      _exists -> @table
+    end
+  end
+
+  defp held(kind) do
+    case :ets.lookup(@table, {test(), kind}) do
+      [{_key, map}] -> map
+      [] -> %{}
+    end
+  end
+
+  defp hold(kind, map), do: :ets.insert(@table, {{test(), kind}, map})
+
+  defp put_held(kind, id, value), do: hold(kind, Map.put(held(kind), id, value))
 
   import Plug.Conn
 
   @doc "Keeps the Order `id` for this test, in PayPal's `status` (APPROVED, COMPLETED...) with `opts`."
   def order(id, status, opts \\ []) do
-    orders = Process.get(:paypal_orders, %{})
-    Process.put(:paypal_orders, Map.put(orders, id, build(id, status, opts)))
+    put_held(:orders, id, build(id, status, opts))
     :ok
   end
 
@@ -27,8 +76,7 @@ defmodule MishkaPay.Support.PayPalStub do
   SUSPENDED...): `:billing_info` and `:transactions` as PayPal would answer them.
   """
   def subscription(id, status, opts \\ []) do
-    subs = Process.get(:paypal_subscriptions, %{})
-    sub = Map.get(subs, id) || new_subscription(id, opts[:plan] || plan(%{}))
+    sub = Map.get(held(:subscriptions), id) || new_subscription(id, opts[:plan] || plan(%{}))
 
     sub =
       sub
@@ -37,14 +85,14 @@ defmodule MishkaPay.Support.PayPalStub do
       |> put_billing(opts[:billing_info])
       |> Map.put("transactions", opts[:transactions] || sub["transactions"] || [])
 
-    Process.put(:paypal_subscriptions, Map.put(subs, id, sub))
+    put_held(:subscriptions, id, sub)
     :ok
   end
 
   defp put_billing(sub, nil), do: sub
   defp put_billing(sub, billing), do: Map.put(sub, "billing_info", billing)
 
-  @doc "The plug for `MishkaPay.Test.stub_http/1`."
+  @doc "The plug `stub!/0` answers with, for `MishkaPay.Test.stub_http/1`."
   def forward(conn) do
     {:ok, body, conn} = read_body(conn)
     json = if body == "", do: %{}, else: decode(body)
@@ -93,13 +141,13 @@ defmodule MishkaPay.Support.PayPalStub do
         order =
           build(id, "PAYER_ACTION_REQUIRED", amount: unit["amount"], custom_id: unit["custom_id"])
 
-        Process.put(:paypal_orders, Map.put(Process.get(:paypal_orders, %{}), id, order))
+        put_held(:orders, id, order)
         reply(conn, 200, order)
     end
   end
 
   defp answer(conn, "GET", ["v2", "checkout", "orders", id], _body) do
-    case Process.get(:paypal_orders, %{})[id] do
+    case held(:orders)[id] do
       nil ->
         reply(conn, 404, %{
           "name" => "RESOURCE_NOT_FOUND",
@@ -112,7 +160,7 @@ defmodule MishkaPay.Support.PayPalStub do
   end
 
   defp answer(conn, "POST", ["v2", "checkout", "orders", id, "capture"], _body) do
-    order = Process.get(:paypal_orders)[id]
+    order = held(:orders)[id]
 
     case order["payment_source"]["paypal"]["declined"] do
       true ->
@@ -128,7 +176,7 @@ defmodule MishkaPay.Support.PayPalStub do
             captures: [capture(id)]
           )
 
-        Process.put(:paypal_orders, Map.put(Process.get(:paypal_orders), id, captured))
+        put_held(:orders, id, captured)
         reply(conn, 201, captured)
     end
   end
@@ -141,8 +189,7 @@ defmodule MishkaPay.Support.PayPalStub do
       "create_time" => "2026-11-16T10:00:00Z"
     }
 
-    orders = Process.get(:paypal_orders)
-    order = orders[id]
+    order = held(:orders)[id]
     unit = hd(order["purchase_units"])
 
     unit =
@@ -152,7 +199,7 @@ defmodule MishkaPay.Support.PayPalStub do
         &Map.update(&1, "refunds", [refund], fn rs -> rs ++ [refund] end)
       )
 
-    Process.put(:paypal_orders, Map.put(orders, id, %{order | "purchase_units" => [unit]}))
+    put_held(:orders, id, %{order | "purchase_units" => [unit]})
     reply(conn, 201, refund)
   end
 
@@ -165,32 +212,32 @@ defmodule MishkaPay.Support.PayPalStub do
 
   defp answer(conn, "POST", ["v1", "billing", "plans"], body) do
     plan = plan(body)
-    Process.put(:paypal_plans, Map.put(Process.get(:paypal_plans, %{}), plan["id"], plan))
+    put_held(:plans, plan["id"], plan)
     reply(conn, 201, Map.take(plan, ["id", "product_id", "name", "status"]))
   end
 
   defp answer(conn, "POST", ["v1", "billing", "subscriptions"], body) do
-    id = "I-SUB#{System.unique_integer([:positive])}"
-    plan = Process.get(:paypal_plans, %{})[body["plan_id"]]
+    id = "I-" <> paypal_id()
+    plan = held(:plans)[body["plan_id"]]
 
     sub =
       new_subscription(id, plan)
       |> Map.merge(Map.take(body, ["quantity", "custom_id"]))
       |> Map.put("subscriber", Map.get(body, "subscriber", %{}))
 
-    Process.put(:paypal_subscriptions, Map.put(Process.get(:paypal_subscriptions, %{}), id, sub))
+    put_held(:subscriptions, id, sub)
     reply(conn, 201, Map.drop(sub, ["plan", "transactions"]))
   end
 
   defp answer(conn, "GET", ["v1", "billing", "subscriptions", id], _body) do
-    case Process.get(:paypal_subscriptions, %{})[id] do
+    case held(:subscriptions)[id] do
       nil -> not_found(conn)
       sub -> reply(conn, 200, Map.drop(sub, ["transactions"]))
     end
   end
 
   defp answer(conn, "GET", ["v1", "billing", "subscriptions", id, "transactions"], _body) do
-    case Process.get(:paypal_subscriptions, %{})[id] do
+    case held(:subscriptions)[id] do
       %{"status" => status} = sub when status not in ["APPROVAL_PENDING", "APPROVED"] ->
         reply(conn, 200, %{"transactions" => sub["transactions"], "total_items" => 1})
 
@@ -200,12 +247,10 @@ defmodule MishkaPay.Support.PayPalStub do
   end
 
   defp answer(conn, "POST", ["v1", "billing", "subscriptions", id, "cancel"], _body) do
-    subs = Process.get(:paypal_subscriptions, %{})
-
-    case subs[id] do
+    case held(:subscriptions)[id] do
       %{"status" => status} = sub when status in ["ACTIVE", "SUSPENDED"] ->
         canceled = Map.merge(sub, %{"status" => "CANCELLED"})
-        Process.put(:paypal_subscriptions, Map.put(subs, id, canceled))
+        put_held(:subscriptions, id, canceled)
         send_resp(conn, 204, "")
 
       _not_cancelable ->
@@ -217,6 +262,11 @@ defmodule MishkaPay.Support.PayPalStub do
     status = if body["transmission_sig"] == "good", do: "SUCCESS", else: "FAILURE"
     reply(conn, 200, %{"verification_status" => status})
   end
+
+  # A PayPal id is twelve or more letters and digits, whatever the counter is.
+  defp paypal_id,
+    do:
+      "SUB" <> String.pad_leading(Integer.to_string(System.unique_integer([:positive])), 10, "0")
 
   defp not_found(conn) do
     reply(conn, 404, %{
@@ -317,9 +367,10 @@ defmodule MishkaPay.Support.PayPalStub do
     }
   end
 
+  # The test: the last of the callers, as a test's tasks and their tasks carry it.
   defp test do
     case Process.get(:"$callers") do
-      [first | _] -> first
+      [_ | _] = callers -> List.last(callers)
       _none -> self()
     end
   end
