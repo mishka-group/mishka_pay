@@ -30,6 +30,12 @@ defmodule MishkaPay.Messages do
           | :path_root
           | :params_plain
           | :one_body
+          | :multipart_parts
+          | :filename_plain
+          | :file_empty
+          | :stripe_file_type
+          | :stripe_file_size
+          | :file_content
           | :return_url
           | :metadata_strings
           | :items_empty
@@ -160,7 +166,37 @@ defmodule MishkaPay.Messages do
     do: dgettext_noop("mishka_pay", "The params field must hold plain values only")
 
   defp msgid(:one_body),
-    do: dgettext_noop("mishka_pay", "Send form or json, not both")
+    do: dgettext_noop("mishka_pay", "Send one body: form, json or multipart")
+
+  defp msgid(:multipart_parts),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The multipart field must be a list of names with bytes, and a filename and content type for a file"
+      )
+
+  defp msgid(:filename_plain),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The filename field must be a plain name, with no folder or control character"
+      )
+
+  defp msgid(:file_empty),
+    do: dgettext_noop("mishka_pay", "The content field must hold the file's bytes")
+
+  defp msgid(:stripe_file_type),
+    do: dgettext_noop("mishka_pay", "Stripe takes this file only as %{types}")
+
+  defp msgid(:stripe_file_size),
+    do: dgettext_noop("mishka_pay", "The file is over Stripe's limit of %{megabytes} MB")
+
+  defp msgid(:file_content),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The file's bytes are not the %{content_type} its content_type field names"
+      )
 
   defp msgid(:return_url),
     do: dgettext_noop("mishka_pay", "The %{field} field must be an https address")
@@ -229,7 +265,7 @@ defmodule MishkaPay.Messages do
       )
 
   defp msgid(:expires_past),
-    do: dgettext_noop("mishka_pay", "The checkout's expiry must be a time still to come")
+    do: dgettext_noop("mishka_pay", "The expiry must be a time still to come")
 
   defp msgid(:expires_range),
     do:
