@@ -790,7 +790,7 @@ defmodule ShopWeb.PayComponents do
 
   defp simulated_meaning(:listener_fails),
     do:
-      "A listener could not take it: 500, so Stripe sends it again later. The inbox still kept it."
+      "A listener could not take it: 500, so Stripe sends it again later. The inbox already kept the event, so when Stripe sends it again it is stored once (the row can be processed while the answer was 500)."
 
   defp simulated_meaning(:twice),
     do: "Both are answered 200, and the inbox keeps it once: a provider may send an event twice."

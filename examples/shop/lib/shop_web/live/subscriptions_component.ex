@@ -268,6 +268,13 @@ defmodule ShopWeb.SubscriptionsComponent do
                   >
                     <code>{invoice.id}</code>
                     <span class="badge badge-xs">{invoice.status}</span>
+                    <span
+                      :if={invoice.status == :open}
+                      class="opacity-60"
+                      data-testid="sub-invoice-open-note"
+                    >
+                      not paid yet: the charge failed or is waiting
+                    </span>
                     <span>{money(invoice.amount_paid)} of {money(invoice.amount_due)}</span>
                     <span class="opacity-60">{time(invoice.created_at)}</span>
                     <a :if={invoice.hosted_url} href={invoice.hosted_url} target="_blank" class="link">
