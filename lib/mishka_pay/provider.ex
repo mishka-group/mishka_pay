@@ -422,7 +422,14 @@ defmodule MishkaPay.Provider do
             ) ::
               {:ok, MishkaPay.Event.t()} | {:error, Splode.Error.t()}
 
+  @doc """
+  Optional. Whether the provider takes `keys`, with one read call that changes nothing
+  (`MishkaPay.Check`).
+  """
+  @callback check_keys(MishkaPay.Credentials.t()) :: :ok | {:error, Splode.Error.t()}
+
   @optional_callbacks offered?: 0,
+                      check_keys: 1,
                       checkout: 2,
                       fetch_checkout: 2,
                       fetch_payment: 2,

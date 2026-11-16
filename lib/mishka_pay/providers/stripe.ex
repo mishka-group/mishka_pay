@@ -860,6 +860,12 @@ defmodule MishkaPay.Providers.Stripe do
   defp maybe_id(id, "", field), do: plain_id(id, field)
   defp maybe_id(id, prefix, field), do: stripe_id(id, prefix, field)
 
+  # The lightest read every key may make: one customer, or none.
+  @impl MishkaPay.Provider
+  def check_keys(keys) do
+    with {:ok, _page} <- request(:get, "/v1/customers", [{"limit", "1"}], keys), do: :ok
+  end
+
   # Stripe keeps events for 30 days and filters them by type, up to 20 types a call.
   @impl MishkaPay.Provider
   def list_events(opts, keys) do

@@ -778,6 +778,10 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     MishkaPay.archive_price("stripe", price_id)
   end
 
+  test "the setup check takes the sandbox keys" do
+    assert {:keys_accepted, :ok} = List.keyfind(MishkaPay.Check.run([]), :keys_accepted, 0)
+  end
+
   test "a payment that does not exist is a rejection" do
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_payment("stripe", "pi_doesnotexist")

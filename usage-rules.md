@@ -110,6 +110,9 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.update_customer(attrs)` | the customer after (`attrs` has `:provider` and `:id`) |
 | `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
 | `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | a `MishkaPay.Page` of `%MishkaPay.Customer{}` |
+| `MishkaPay.list_events(provider, tenant, since: dt, types: [...])` | a `MishkaPay.Page` of `%MishkaPay.Event{}` |
+| `MishkaPay.replay_events(provider, tenant, since: dt)` | `%{delivered: n, failed: [{id, reason}]}`: missed events handed to the listeners again |
+| `MishkaPay.Check.run(tenant: t, webhook_url: url, domain: MyApp.Pay)` | `[{check, :ok \| {:error, reason}}]`: the site's setup |
 | `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
 | `MishkaPay.expire_checkout(provider, checkout_id, tenant)` | the checkout, `status: :expired`: it can no longer be paid |
 | `MishkaPay.create_coupon(attrs)`, `fetch_coupon/3`, `list_coupons/3`, `delete_coupon/3` | `%MishkaPay.Coupon{}` |

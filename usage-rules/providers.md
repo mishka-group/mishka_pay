@@ -29,6 +29,7 @@ end
     `pause_collection/3`, `resume_collection/2`;
   - `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
     `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
+  - `:event_list`: `list_events/2`; optional `check_keys/1` (one read that changes nothing);
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
   - `:portal`: `portal_session/2`;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
