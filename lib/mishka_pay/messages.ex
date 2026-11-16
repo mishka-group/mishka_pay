@@ -234,7 +234,7 @@ defmodule MishkaPay.Messages do
     do: dgettext_noop("mishka_pay", "The metadata field must map string keys to string values")
 
   defp msgid(:items_empty),
-    do: dgettext_noop("mishka_pay", "A checkout needs at least one item")
+    do: dgettext_noop("mishka_pay", "Give at least one item")
 
   defp msgid(:items_currency),
     do: dgettext_noop("mishka_pay", "All items must be in one currency")

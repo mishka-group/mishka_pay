@@ -41,11 +41,6 @@ msgstr ""
 msgid "%{provider} refused the request: %{code} (HTTP %{status})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:237
-#, elixir-autogen, elixir-format
-msgid "A checkout needs at least one item"
-msgstr ""
-
 #: lib/mishka_pay/messages.ex:500
 #, elixir-autogen, elixir-format
 msgid "A customer is an id or an email, one of them"
@@ -529,4 +524,9 @@ msgstr ""
 #: lib/mishka_pay/messages.ex:335
 #, elixir-autogen, elixir-format
 msgid "The tax id number does not have the form its kind needs: check the number and its country"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:237
+#, elixir-autogen, elixir-format
+msgid "Give at least one item"
 msgstr ""
