@@ -44,12 +44,19 @@ defmodule MishkaPay.Provider do
   them does not compile:
 
     * `:checkout`: `checkout/2`, `fetch_checkout/2` and `fetch_payment/2`;
+    * `:expire`: `expire_checkout/2`;
+    * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
     * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
       `list_invoices/2` (a subscription starts with a checkout in `mode: :subscription`);
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
     * `:portal`: `portal_session/2`;
+    * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
+    * `:catalog`: products and prices (`create_product/2` and the rest);
     * `:webhook`: `verify_webhook/3`.
+
+  Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
+  page before; and its own filters) and answers one `MishkaPay.Page`.
 
   Every operation takes a guarded_struct and the tenant's `MishkaPay.Credentials`, and answers a
   guarded_struct or a `MishkaPay.Errors` error. A project calls them through `MishkaPay`, which
@@ -64,11 +71,13 @@ defmodule MishkaPay.Provider do
   @capabilities [
     :checkout,
     :expire,
+    :payment_list,
     :refund,
     :subscription,
     :customer,
     :portal,
     :discount,
+    :catalog,
     :webhook,
     :return_verify
   ]
@@ -78,11 +87,13 @@ defmodule MishkaPay.Provider do
 
     * `:checkout`: sends the buyer to pay, or embeds a payment form.
     * `:expire`: ends an open checkout before the buyer pays, so its stock is free again.
+    * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
     * `:subscription`: charges again on a schedule.
     * `:customer`: keeps buyers (create, read, update, list).
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:discount`: keeps coupons and the promotion codes buyers type.
+    * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:webhook`: sends signed messages when something changes.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
@@ -95,6 +106,8 @@ defmodule MishkaPay.Provider do
           | :customer
           | :portal
           | :discount
+          | :catalog
+          | :payment_list
           | :webhook
           | :return_verify
 
@@ -158,9 +171,16 @@ defmodule MishkaPay.Provider do
   @callback resume_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:subscription`. Lists a subscription's invoices, newest first."
-  @callback list_invoices(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, [MishkaPay.Invoice.t()]} | {:error, Splode.Error.t()}
+  @doc """
+  With `:subscription`. One page of invoices, newest first: those of `:subscription_id` or of
+  `:customer_id`.
+  """
+  @callback list_invoices(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_list`. One page of payments, newest first; only `:customer_id`'s when given."
+  @callback list_payments(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:customer`. Makes a customer at the provider and answers it with its `:id`."
   @callback create_customer(MishkaPay.Customer.t(), MishkaPay.Credentials.t()) ::
@@ -174,12 +194,9 @@ defmodule MishkaPay.Provider do
   @callback update_customer(MishkaPay.Customer.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
 
-  @doc """
-  With `:customer`. The newest customers, at most `:limit` (100), only those with `:email` when it
-  is given.
-  """
+  @doc "With `:customer`. One page of customers, newest first; only those with `:email` when given."
   @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
-              {:ok, [MishkaPay.Customer.t()]} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:portal`. Opens the provider's billing page for a customer and answers its `:url`."
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
@@ -193,9 +210,9 @@ defmodule MishkaPay.Provider do
   @callback fetch_coupon(coupon_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Coupon.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:discount`. The newest coupons, at most `:limit` (100)."
+  @doc "With `:discount`. One page of coupons, newest first."
   @callback list_coupons(opts :: keyword(), MishkaPay.Credentials.t()) ::
-              {:ok, [MishkaPay.Coupon.t()]} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:discount`. Removes a coupon so it can no longer be applied."
   @callback delete_coupon(coupon_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -210,11 +227,46 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
 
   @doc """
-  With `:discount`. The newest promotion codes, at most `:limit` (100); only those with `:code`,
-  of `:coupon_id`, or `:active` when given.
+  With `:discount`. One page of promotion codes, newest first; only those with `:code`, of
+  `:coupon_id`, or `:active` when given.
   """
   @callback list_promotion_codes(opts :: keyword(), MishkaPay.Credentials.t()) ::
-              {:ok, [MishkaPay.PromotionCode.t()]} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. Makes a product and answers it with its `:id`."
+  @callback create_product(MishkaPay.Product.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Product.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. Reads one product again."
+  @callback fetch_product(product_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Product.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. Changes the fields set on the product whose `:id` it carries."
+  @callback update_product(MishkaPay.Product.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Product.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. One page of products, newest first; only `:active` ones when given."
+  @callback list_products(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. Makes a price of a product (`:product_id`) and answers it with its `:id`."
+  @callback create_price(MishkaPay.Price.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Price.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. Reads one price again."
+  @callback fetch_price(price_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Price.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:catalog`. Changes whether a price is on sale (`:active`), and its metadata."
+  @callback update_price(MishkaPay.Price.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Price.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:catalog`. One page of prices, newest first; only those of `:product_id`, with
+  `:lookup_key`, or `:active` when given.
+  """
+  @callback list_prices(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:discount`. Turns a promotion code off or on again (`:active`), and its metadata."
   @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
@@ -255,11 +307,21 @@ defmodule MishkaPay.Provider do
                       fetch_promotion_code: 2,
                       list_promotion_codes: 2,
                       update_promotion_code: 2,
+                      list_payments: 2,
+                      create_product: 2,
+                      fetch_product: 2,
+                      update_product: 2,
+                      list_products: 2,
+                      create_price: 2,
+                      fetch_price: 2,
+                      update_price: 2,
+                      list_prices: 2,
                       verify_webhook: 3
 
   @operations %{
     checkout: [checkout: 2, fetch_checkout: 2, fetch_payment: 2],
     expire: [expire_checkout: 2],
+    payment_list: [list_payments: 2],
     refund: [refund: 2],
     subscription: [
       fetch_subscription: 2,
@@ -278,6 +340,16 @@ defmodule MishkaPay.Provider do
       fetch_promotion_code: 2,
       list_promotion_codes: 2,
       update_promotion_code: 2
+    ],
+    catalog: [
+      create_product: 2,
+      fetch_product: 2,
+      update_product: 2,
+      list_products: 2,
+      create_price: 2,
+      fetch_price: 2,
+      update_price: 2,
+      list_prices: 2
     ],
     webhook: [verify_webhook: 3]
   }

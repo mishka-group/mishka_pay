@@ -65,6 +65,68 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "products and prices are made, read, archived and listed as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.Product{id: product_id}} =
+               MishkaPay.create_product(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: "shop-ebook",
+                 name: "Ebook",
+                 description: "An Elixir ebook",
+                 tax_code: "txcd_10302000"
+               })
+
+      assert {:ok, %MishkaPay.Price{id: "price_" <> _ = price_id}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 product_id: product_id,
+                 amount: %{amount: "9.00", currency: "USD"},
+                 interval: :month,
+                 lookup_key: "pro-monthly"
+               })
+
+      assert {:ok, %MishkaPay.Product{}} = MishkaPay.fetch_product("stripe", product_id, "site-a")
+      assert {:ok, %MishkaPay.Price{}} = MishkaPay.fetch_price("stripe", price_id, "site-a")
+
+      assert {:ok, %MishkaPay.Product{}} =
+               MishkaPay.archive_product("stripe", product_id, "site-a")
+
+      assert {:ok, %MishkaPay.Price{}} = MishkaPay.archive_price("stripe", price_id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Product{} | _]}} =
+               MishkaPay.list_products("stripe", "site-a", active: true, limit: 2)
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Price{} | _]}} =
+               MishkaPay.list_prices("stripe", "site-a", product_id: product_id, lookup_key: "x")
+
+      assert {:ok, %MishkaPay.Page{items: [%Payment{} | _]}} =
+               MishkaPay.list_payments("stripe", "site-a", customer_id: "cus_123")
+    end
+
+    test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:query, conn.query_string})
+
+        Req.Test.json(conn, %{
+          "object" => "list",
+          "has_more" => true,
+          "data" => [
+            %{"id" => "prod_1", "object" => "product", "name" => "One", "active" => true},
+            %{"id" => "prod_2", "object" => "product", "name" => "Two", "active" => true}
+          ]
+        })
+      end)
+
+      assert {:ok, %MishkaPay.Page{items: [_, _], has_more: true, next: "prod_2"}} =
+               MishkaPay.list_products("stripe", "site-a", limit: 2, after: "prod_0")
+
+      assert_received {:query, query}
+      assert %{"limit" => "2", "starting_after" => "prod_0"} = URI.decode_query(query)
+    end
+
     test "a code already taken and an id Stripe does not have are plain rejections" do
       MishkaPay.Test.stub_http(fn conn ->
         error =
@@ -123,7 +185,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _}} =
                MishkaPay.fetch_customer("stripe", id, "site-a")
 
-      assert {:ok, [%MishkaPay.Customer{} | _]} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{} | _]}} =
                MishkaPay.list_customers("stripe", "site-a", email: "ava@example.com", limit: 3)
 
       assert {:ok, %MishkaPay.PortalSession{url: "https://" <> _}} =
@@ -185,8 +247,14 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:ok, %Subscription{}} = MishkaPay.resume_subscription("stripe", "sub_123", "site-a")
 
-      assert {:ok, [%Invoice{id: "in_" <> _} | _]} =
-               MishkaPay.invoices("stripe", "sub_123", "site-a")
+      assert {:ok, %MishkaPay.Page{items: [%Invoice{id: "in_" <> _} | _]}} =
+               MishkaPay.list_invoices("stripe", "site-a", subscription_id: "sub_123")
+
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_invoices("stripe", "site-a", customer_id: "cus_123", after: "in_1")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.list_invoices("stripe", "site-a", customer_id: "sub_123")
 
       assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
                MishkaPay.fetch_subscription("stripe", "pi_123", "site-a")
@@ -296,7 +364,9 @@ defmodule MishkaPay.Providers.StripeTest do
                })
 
       assert {:ok, %MishkaPay.Coupon{}} = MishkaPay.fetch_coupon("stripe", coupon_id, "site-a")
-      assert {:ok, [%MishkaPay.Coupon{} | _]} = MishkaPay.list_coupons("stripe", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Coupon{} | _]}} =
+               MishkaPay.list_coupons("stripe", "site-a")
 
       assert {:ok, %MishkaPay.PromotionCode{id: "promo_" <> _ = code_id}} =
                MishkaPay.create_promotion_code(%{
@@ -311,7 +381,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok, %MishkaPay.PromotionCode{}} =
                MishkaPay.fetch_promotion_code("stripe", code_id, "site-a")
 
-      assert {:ok, [%MishkaPay.PromotionCode{} | _]} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PromotionCode{} | _]}} =
                MishkaPay.list_promotion_codes("stripe", "site-a", code: "SPRING5", active: true)
 
       assert {:ok, %MishkaPay.PromotionCode{}} =

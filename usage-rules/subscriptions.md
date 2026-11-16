@@ -43,8 +43,9 @@ MishkaPay.checkout(%{
   keeps what they paid for); `at: :now` ends it at once.
 - `MishkaPay.resume_subscription(provider, id, tenant)` takes back a cancel set for the period's
   end. A subscription already canceled cannot be resumed: a new checkout starts a new one.
-- `MishkaPay.invoices(provider, id, tenant)` lists its bills, newest first, with `:hosted_url` and
-  `:pdf_url` for the buyer. An `:open` invoice is not paid yet.
+- `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` lists its bills page by page,
+  newest first (`customer_id:` lists a customer's), with `:hosted_url` and `:pdf_url` for the
+  buyer. An `:open` invoice is not paid yet.
 - Changing a plan, quantities, proration and usage-based billing are not in Mishka Pay yet.
 
 ## Keep access right

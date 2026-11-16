@@ -84,15 +84,28 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
-| `MishkaPay.invoices(provider, subscription_id, tenant)` | `[%MishkaPay.Invoice{}]`, newest first |
+| `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` (or `customer_id:`) | a `MishkaPay.Page` of `%MishkaPay.Invoice{}` |
+| `MishkaPay.list_payments(provider, tenant, customer_id: id)` | a `MishkaPay.Page` of `%MishkaPay.Payment{}` |
 | `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |
 | `MishkaPay.update_customer(attrs)` | the customer after (`attrs` has `:provider` and `:id`) |
 | `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
-| `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | `[%MishkaPay.Customer{}]` |
+| `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | a `MishkaPay.Page` of `%MishkaPay.Customer{}` |
 | `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
 | `MishkaPay.expire_checkout(provider, checkout_id, tenant)` | the checkout, `status: :expired`: it can no longer be paid |
 | `MishkaPay.create_coupon(attrs)`, `fetch_coupon/3`, `list_coupons/3`, `delete_coupon/3` | `%MishkaPay.Coupon{}` |
 | `MishkaPay.create_promotion_code(attrs)`, `fetch_promotion_code/3`, `list_promotion_codes/3`, `update_promotion_code/1` | `%MishkaPay.PromotionCode{}` |
+| `MishkaPay.create_product(attrs)`, `fetch_product/3`, `update_product/1`, `archive_product/3`, `list_products/3` | `%MishkaPay.Product{}` |
+| `MishkaPay.create_price(attrs)`, `fetch_price/3`, `archive_price/3`, `list_prices/3` | `%MishkaPay.Price{}` |
+
+Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
+(1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every
+page lazily, one request a page:
+
+```elixir
+(&MishkaPay.list_payments("stripe", site.id, &1))
+|> MishkaPay.Page.stream()
+|> Enum.take(500)
+```
 
 A one-time checkout:
 
@@ -150,6 +163,25 @@ MishkaPay.checkout(%{
 - A checkout read back has `amount_discount` beside `amount_total` and `amount_tax`.
 - `expire_checkout/3` ends an open checkout when the buyer walks away, so held stock is free again.
 - A provider refuses an option it cannot send (`Errors.Unsupported`); it never drops one.
+
+## The catalog
+
+```elixir
+{:ok, product} =
+  MishkaPay.create_product(%{provider: "stripe", tenant: site.id, id: "ebook",
+                             name: "Elixir ebook", tax_code: "txcd_10302000"})
+
+{:ok, price} =
+  MishkaPay.create_price(%{provider: "stripe", tenant: site.id, product_id: product.id,
+                           amount: %{amount: "19.99", currency: "USD"}, lookup_key: "ebook"})
+
+MishkaPay.checkout(%{..., items: [%{id: price.id, quantity: 1}]})
+```
+
+- A price's amount never changes: make a new price and `archive_price/3` the old one.
+- `archive_product/3` takes a product off sale; a provider never deletes what sold.
+- `lookup_key` names a price for the host (`list_prices(p, t, lookup_key: "ebook")`), so code
+  never keeps a `price_...` id by hand.
 
 ## Customers and the portal
 

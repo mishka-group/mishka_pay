@@ -7,7 +7,9 @@ defmodule MishkaPay do
   The calls a project makes to take money: open a checkout, read a payment, refund one; for a
   subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
   back and list its invoices; keep customers (create, read, update, list) and open their billing
-  portal; keep coupons and promotion codes; end an open checkout.
+  portal; keep coupons and promotion codes; keep a catalog of products and prices; end an open
+  checkout; list payments, invoices, customers, coupons, codes, products and prices page by page
+  (`MishkaPay.Page`).
 
       {:ok, checkout} =
         MishkaPay.checkout(%{
@@ -44,7 +46,9 @@ defmodule MishkaPay do
   `:subscription_resume`, `:invoices`, `:customer_create`, `:customer_update`, `:customer`,
   `:customer_list`, `:portal`, `:checkout_expire`, `:coupon_create`, `:coupon`, `:coupon_list`,
   `:coupon_delete`, `:promotion_code_create`, `:promotion_code`, `:promotion_code_list` or
-  `:promotion_code_update`, with
+  `:promotion_code_update`, `:payment_list`, `:invoices`, `:product_create`, `:product`,
+  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update` or `:price_list`,
+  with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
   """
@@ -57,7 +61,10 @@ defmodule MishkaPay do
     Errors,
     Events,
     Messages,
+    Page,
     PortalSession,
+    Price,
+    Product,
     PromotionCode,
     Provider,
     Refund
@@ -158,11 +165,11 @@ defmodule MishkaPay do
   end
 
   @doc """
-  The newest customers at `provider`: `limit:` how many (at most 100, 10 by default), `email:` only
-  those with that email. Answers the first page; paging through all comes with the listing design.
+  One page of customers at `provider`, newest first (`MishkaPay.Page`): `email:` only those with
+  that email, plus the list options `limit:` and `after:`.
   """
   @spec list_customers(String.t(), term(), keyword()) ::
-          {:ok, [Customer.t()]} | {:error, Splode.Error.t()}
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_customers(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     capable(:customer, :customer_list, provider, tenant, & &1.list_customers(limited(opts), &2))
   end
@@ -197,7 +204,7 @@ defmodule MishkaPay do
   @doc "Makes a coupon from `attrs` (see `MishkaPay.Coupon`) at `attrs.provider`."
   @spec create_coupon(map()) :: {:ok, Coupon.t()} | {:error, Splode.Error.t()}
   def create_coupon(attrs) when is_map(attrs) do
-    made(:coupon_create, attrs, Coupon, [:provider], :create_coupon)
+    made(:coupon_create, :discount, attrs, Coupon, [:provider], :create_coupon)
   end
 
   @doc "Reads coupon `coupon_id` again from `provider`, with `tenant`'s keys."
@@ -208,9 +215,9 @@ defmodule MishkaPay do
     capable(:discount, :coupon, provider, tenant, & &1.fetch_coupon(coupon_id, &2))
   end
 
-  @doc "The newest coupons at `provider`: `limit:` how many (at most 100, 10 by default)."
+  @doc "One page of coupons at `provider`, newest first (`MishkaPay.Page`): `limit:`, `after:`."
   @spec list_coupons(String.t(), term(), keyword()) ::
-          {:ok, [Coupon.t()]} | {:error, Splode.Error.t()}
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_coupons(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     capable(:discount, :coupon_list, provider, tenant, & &1.list_coupons(limited(opts), &2))
   end
@@ -230,6 +237,7 @@ defmodule MishkaPay do
   def create_promotion_code(attrs) when is_map(attrs) do
     made(
       :promotion_code_create,
+      :discount,
       attrs,
       PromotionCode,
       [:provider, :coupon_id],
@@ -252,12 +260,12 @@ defmodule MishkaPay do
   end
 
   @doc """
-  The newest promotion codes at `provider`: `limit:` how many (at most 100, 10 by default),
-  `code:` the code a buyer typed, `coupon_id:` only those of one coupon, `active:` only those
-  that can (or cannot) be used now.
+  One page of promotion codes at `provider`, newest first (`MishkaPay.Page`): `code:` the code a
+  buyer typed, `coupon_id:` only those of one coupon, `active:` only those that can (or cannot)
+  be used now, plus `limit:` and `after:`.
   """
   @spec list_promotion_codes(String.t(), term(), keyword()) ::
-          {:ok, [PromotionCode.t()]} | {:error, Splode.Error.t()}
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_promotion_codes(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     capable(
       :discount,
@@ -274,7 +282,14 @@ defmodule MishkaPay do
   """
   @spec update_promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
   def update_promotion_code(attrs) when is_map(attrs) do
-    made(:promotion_code_update, attrs, PromotionCode, [:provider, :id], :update_promotion_code)
+    made(
+      :promotion_code_update,
+      :discount,
+      attrs,
+      PromotionCode,
+      [:provider, :id],
+      :update_promotion_code
+    )
   end
 
   # One call to a provider with `capability`, inside its telemetry span.
@@ -287,11 +302,102 @@ defmodule MishkaPay do
     end)
   end
 
-  # A coupon or code built from the caller's map and handed to the provider's `callback`.
-  defp made(operation, attrs, struct_module, needed, callback) do
+  @doc """
+  One page of payments at `provider`, newest first (`MishkaPay.Page`): `customer_id:` only one
+  customer's, plus `limit:` and `after:`. Each is a `MishkaPay.Payment` as `fetch_payment/3`
+  answers it.
+  """
+  @spec list_payments(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_payments(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:payment_list, :payment_list, provider, tenant, & &1.list_payments(limited(opts), &2))
+  end
+
+  @doc "Makes a product from `attrs` (see `MishkaPay.Product`) in `attrs.provider`'s catalog."
+  @spec create_product(map()) :: {:ok, Product.t()} | {:error, Splode.Error.t()}
+  def create_product(attrs) when is_map(attrs) do
+    made(:product_create, :catalog, attrs, Product, [:provider, :name], :create_product)
+  end
+
+  @doc "Reads product `product_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_product(String.t(), String.t(), term()) ::
+          {:ok, Product.t()} | {:error, Splode.Error.t()}
+  def fetch_product(provider, product_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(product_id) do
+    capable(:catalog, :product, provider, tenant, & &1.fetch_product(product_id, &2))
+  end
+
+  @doc "Changes product `attrs.id` at `attrs.provider`: only the fields given are sent."
+  @spec update_product(map()) :: {:ok, Product.t()} | {:error, Splode.Error.t()}
+  def update_product(attrs) when is_map(attrs) do
+    made(:product_update, :catalog, attrs, Product, [:provider, :id], :update_product)
+  end
+
+  @doc """
+  Takes product `product_id` off sale (`active: false`). Past sales keep it; a provider never
+  deletes a product that sold.
+  """
+  @spec archive_product(String.t(), String.t(), term()) ::
+          {:ok, Product.t()} | {:error, Splode.Error.t()}
+  def archive_product(provider, product_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(product_id) do
+    update_product(%{provider: provider, tenant: tenant, id: product_id, active: false})
+  end
+
+  @doc """
+  One page of products at `provider`, newest first (`MishkaPay.Page`): `active:` only those on (or
+  off) sale, plus `limit:` and `after:`.
+  """
+  @spec list_products(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_products(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:catalog, :product_list, provider, tenant, & &1.list_products(limited(opts), &2))
+  end
+
+  @doc """
+  Makes a price of product `attrs.product_id` from `attrs` (see `MishkaPay.Price`): an `:amount`,
+  and an `:interval` for a plan.
+  """
+  @spec create_price(map()) :: {:ok, Price.t()} | {:error, Splode.Error.t()}
+  def create_price(attrs) when is_map(attrs) do
+    made(:price_create, :catalog, attrs, Price, [:provider, :product_id, :amount], :create_price)
+  end
+
+  @doc "Reads price `price_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_price(String.t(), String.t(), term()) ::
+          {:ok, Price.t()} | {:error, Splode.Error.t()}
+  def fetch_price(provider, price_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(price_id) do
+    capable(:catalog, :price, provider, tenant, & &1.fetch_price(price_id, &2))
+  end
+
+  @doc """
+  Takes price `price_id` off sale (`active: false`): a checkout can no longer sell it. A provider
+  never deletes a price that was used.
+  """
+  @spec archive_price(String.t(), String.t(), term()) ::
+          {:ok, Price.t()} | {:error, Splode.Error.t()}
+  def archive_price(provider, price_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(price_id) do
+    attrs = %{provider: provider, tenant: tenant, id: price_id, active: false}
+    made(:price_update, :catalog, attrs, Price, [:provider, :id], :update_price)
+  end
+
+  @doc """
+  One page of prices at `provider`, newest first (`MishkaPay.Page`): `product_id:` only one
+  product's, `lookup_key:` the price the host named so, `active:` only those on (or off) sale,
+  plus `limit:` and `after:`.
+  """
+  @spec list_prices(String.t(), term(), keyword()) :: {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_prices(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:catalog, :price_list, provider, tenant, & &1.list_prices(limited(opts), &2))
+  end
+
+  # A struct built from the caller's map and handed to the provider's `callback`.
+  defp made(operation, capability, attrs, struct_module, needed, callback) do
     span(operation, attrs, fn ->
       with {:ok, struct} <- built(struct_module.builder(attrs), needed),
-           {:ok, module} <- Provider.capable(struct.provider, :discount),
+           {:ok, module} <- Provider.capable(struct.provider, capability),
            {:ok, keys} <- Credentials.fetch(struct.provider, struct.tenant) do
         apply(module, callback, [struct, keys])
       end
@@ -359,12 +465,14 @@ defmodule MishkaPay do
     )
   end
 
-  @doc "Lists the invoices of subscription `subscription_id`, newest first."
-  @spec invoices(String.t(), String.t(), term()) ::
-          {:ok, [MishkaPay.Invoice.t()]} | {:error, Splode.Error.t()}
-  def invoices(provider, subscription_id, tenant \\ nil)
-      when is_binary(provider) and is_binary(subscription_id) do
-    subscription(:invoices, provider, tenant, & &1.list_invoices(subscription_id, &2))
+  @doc """
+  One page of invoices at `provider`, newest first (`MishkaPay.Page`): `subscription_id:` one
+  subscription's, or `customer_id:` one customer's, plus `limit:` and `after:`.
+  """
+  @spec list_invoices(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_invoices(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    subscription(:invoices, provider, tenant, & &1.list_invoices(limited(opts), &2))
   end
 
   defp subscription(operation, provider, tenant, call) do

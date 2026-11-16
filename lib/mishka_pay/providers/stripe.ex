@@ -66,6 +66,8 @@ defmodule MishkaPay.Providers.Stripe do
     label: "Stripe",
     capabilities: [
       :checkout,
+      :payment_list,
+      :catalog,
       :expire,
       :refund,
       :subscription,
@@ -82,6 +84,9 @@ defmodule MishkaPay.Providers.Stripe do
     Customer,
     Errors,
     Messages,
+    Page,
+    Price,
+    Product,
     PromotionCode,
     ProviderKit,
     Refund
@@ -186,16 +191,25 @@ defmodule MishkaPay.Providers.Stripe do
     do: cancel_at_period_end(subscription_id, false, keys)
 
   @impl MishkaPay.Provider
-  def list_invoices(subscription_id, keys) do
-    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
-         {:ok, %{"data" => invoices}} <-
-           request(
-             :get,
-             "/v1/invoices",
-             [{"subscription", subscription_id}, {"limit", "100"}],
-             keys
-           ) do
-      invoices |> Enum.map(&Mapper.invoice/1) |> all_ok()
+  def list_invoices(opts, keys) do
+    with :ok <- maybe_id(opts[:subscription_id], "sub_", :subscription_id),
+         :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
+      filters = [subscription: opts[:subscription_id], customer: opts[:customer_id]]
+      page("/v1/invoices", filters, opts, keys, &Mapper.invoice/1)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_payments(opts, keys) do
+    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
+      filters = [
+        customer: opts[:customer_id],
+        "expand[]": "data.latest_charge",
+        "expand[]": "data.latest_charge.refunds",
+        "expand[]": "data.customer"
+      ]
+
+      page("/v1/payment_intents", filters, opts, keys, &Mapper.payment/1)
     end
   end
 
@@ -253,15 +267,8 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def list_customers(opts, keys) do
-    params =
-      [{"limit", Integer.to_string(opts[:limit])}] ++
-        if(opts[:email], do: [{"email", opts[:email]}], else: [])
-
-    with {:ok, %{"data" => customers}} <- request(:get, "/v1/customers", params, keys) do
-      customers |> Enum.map(&Mapper.customer/1) |> all_ok()
-    end
-  end
+  def list_customers(opts, keys),
+    do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
 
   @impl MishkaPay.Provider
   def portal_session(%MishkaPay.PortalSession{} = session, keys) do
@@ -300,12 +307,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def list_coupons(opts, keys) do
-    with {:ok, %{"data" => coupons}} <-
-           request(:get, "/v1/coupons", [{"limit", Integer.to_string(opts[:limit])}], keys) do
-      coupons |> Enum.map(&Mapper.coupon/1) |> all_ok()
-    end
-  end
+  def list_coupons(opts, keys), do: page("/v1/coupons", [], opts, keys, &Mapper.coupon/1)
 
   @impl MishkaPay.Provider
   def delete_coupon(coupon_id, keys) do
@@ -335,19 +337,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def list_promotion_codes(opts, keys) do
-    params =
-      [
-        {"limit", Integer.to_string(opts[:limit])},
-        {"code", opts[:code]},
-        {"coupon", opts[:coupon_id]},
-        {"active", opts[:active]}
-      ]
-      |> Enum.reject(fn {_name, value} -> is_nil(value) end)
-      |> Enum.map(fn {name, value} -> {name, to_string(value)} end)
-
-    with {:ok, %{"data" => codes}} <- request(:get, "/v1/promotion_codes", params, keys) do
-      codes |> Enum.map(&Mapper.promotion_code/1) |> all_ok()
-    end
+    filters = [code: opts[:code], coupon: opts[:coupon_id], active: opts[:active]]
+    page("/v1/promotion_codes", filters, opts, keys, &Mapper.promotion_code/1)
   end
 
   @impl MishkaPay.Provider
@@ -364,6 +355,108 @@ defmodule MishkaPay.Providers.Stripe do
       Mapper.promotion_code(answer)
     end
   end
+
+  @impl MishkaPay.Provider
+  def create_product(%Product{} = product, keys) do
+    with :ok <- plain_id(product.id, :id),
+         :ok <- metadata(product.metadata),
+         {:ok, answer} <- request(:post, "/v1/products", Mapper.product_params(product), keys) do
+      Mapper.product(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_product(product_id, keys) do
+    with :ok <- plain_id(product_id, :product_id),
+         {:ok, answer} <- request(:get, "/v1/products/#{product_id}", [], keys) do
+      Mapper.product(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_product(%Product{id: id} = product, keys) do
+    with :ok <- plain_id(id, :id),
+         :ok <- metadata(product.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/products/#{id}", Mapper.product_params(%{product | id: nil}), keys) do
+      Mapper.product(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_products(opts, keys),
+    do: page("/v1/products", [active: opts[:active]], opts, keys, &Mapper.product/1)
+
+  @impl MishkaPay.Provider
+  def create_price(%Price{} = price, keys) do
+    with :ok <- plain_id(price.product_id, :product_id),
+         :ok <- currencies([price], :price),
+         :ok <- metadata(price.metadata),
+         {:ok, answer} <- request(:post, "/v1/prices", Mapper.price_params(price), keys) do
+      Mapper.price(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_price(price_id, keys) do
+    with :ok <- stripe_id(price_id, "price_", :price_id),
+         {:ok, answer} <-
+           request(:get, "/v1/prices/#{price_id}", [{"expand[]", "product"}], keys) do
+      Mapper.price(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_price(%Price{id: id} = price, keys) do
+    with :ok <- stripe_id(id, "price_", :id),
+         :ok <- metadata(price.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/prices/#{id}",
+             %{"active" => price.active, "metadata" => price.metadata},
+             keys
+           ) do
+      Mapper.price(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_prices(opts, keys) do
+    with :ok <- maybe_id(opts[:product_id], "", :product_id) do
+      filters = [
+        product: opts[:product_id],
+        "lookup_keys[]": opts[:lookup_key],
+        active: opts[:active],
+        "expand[]": "data.product"
+      ]
+
+      page("/v1/prices", filters, opts, keys, &Mapper.price/1)
+    end
+  end
+
+  # One page of a Stripe list: the list options as Stripe's `limit` and `starting_after`, the
+  # filters set, each item mapped; the next cursor is the last item's id when Stripe has more.
+  defp page(path, filters, opts, keys, map) do
+    params =
+      [limit: opts[:limit], starting_after: opts[:after]]
+      |> Kernel.++(filters)
+      |> Enum.reject(fn {_name, value} -> is_nil(value) end)
+      |> Enum.map(fn {name, value} -> {Atom.to_string(name), to_string(value)} end)
+
+    with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
+         {:ok, items} <- data |> Enum.map(map) |> all_ok() do
+      more = answer["has_more"] == true and data != []
+
+      {:ok,
+       struct(Page, items: items, has_more: more, next: (more && List.last(data)["id"]) || nil)}
+    end
+  end
+
+  # A filter id is checked only when it is given: by its prefix, or as a plain id with no prefix.
+  defp maybe_id(nil, _prefix, _field), do: :ok
+  defp maybe_id(id, "", field), do: plain_id(id, field)
+  defp maybe_id(id, prefix, field), do: stripe_id(id, prefix, field)
 
   @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do

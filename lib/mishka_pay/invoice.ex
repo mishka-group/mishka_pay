@@ -4,7 +4,7 @@
 
 defmodule MishkaPay.Invoice do
   @moduledoc """
-  One bill of a subscription, as `MishkaPay.invoices/3` lists them. A guarded_struct the provider
+  One bill of a subscription, as `MishkaPay.list_invoices/3` lists them. A guarded_struct the provider
   fills in.
 
     * `:id`: the provider's id (`in_...` at Stripe); `:subscription_id`: whose bill.

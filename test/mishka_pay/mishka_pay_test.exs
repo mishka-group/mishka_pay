@@ -116,7 +116,11 @@ defmodule MishkaPayTest do
       assert {:ok, %MishkaPay.Customer{id: "acme_cus_1"}} =
                MishkaPay.fetch_customer("acme", "acme_cus_1", "site-a")
 
-      assert {:ok, [_one]} = MishkaPay.list_customers("acme", "site-a", limit: 1)
+      assert {:ok, %MishkaPay.Page{items: [_one], has_more: true, next: next}} =
+               MishkaPay.list_customers("acme", "site-a", limit: 1)
+
+      assert {:ok, %MishkaPay.Page{items: [_two, _three], has_more: false, next: nil}} =
+               MishkaPay.list_customers("acme", "site-a", limit: 5, after: next)
 
       assert {:ok, %MishkaPay.PortalSession{url: "https://pay.acme.test/portal/acme_cus_1"}} =
                MishkaPay.portal_session(%{
@@ -169,7 +173,8 @@ defmodule MishkaPayTest do
       assert {:ok, %MishkaPay.Coupon{id: "SPRING"}} =
                MishkaPay.fetch_coupon("acme", "SPRING", "site-a")
 
-      assert {:ok, [_one]} = MishkaPay.list_coupons("acme", "site-a", limit: 1)
+      assert {:ok, %MishkaPay.Page{items: [_one]}} =
+               MishkaPay.list_coupons("acme", "site-a", limit: 1)
 
       assert {:ok, %MishkaPay.PromotionCode{id: "acme_promo_1", code: "SPRING10"}} =
                MishkaPay.create_promotion_code(%{
@@ -180,7 +185,7 @@ defmodule MishkaPayTest do
                  minimum_amount: %{amount: "20", currency: "USD"}
                })
 
-      assert {:ok, [%{code: "ACME10"}]} =
+      assert {:ok, %MishkaPay.Page{items: [%{code: "ACME10"}]}} =
                MishkaPay.list_promotion_codes("acme", "site-a", code: "ACME10")
 
       assert {:ok, %MishkaPay.PromotionCode{active: false}} =
@@ -302,6 +307,84 @@ defmodule MishkaPayTest do
     end
   end
 
+  describe "the catalog and lists page by page" do
+    test "a product and its price are made, read, archived and listed" do
+      assert {:ok, %MishkaPay.Product{id: "shop-ebook", active: true}} =
+               MishkaPay.create_product(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 id: "shop-ebook",
+                 name: "Ebook",
+                 tax_code: "txcd_10302000"
+               })
+
+      assert {:ok, %MishkaPay.Price{id: "acme_price_1", product_id: "shop-ebook"}} =
+               MishkaPay.create_price(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 product_id: "shop-ebook",
+                 amount: %{amount: "19.99", currency: "USD"},
+                 lookup_key: "ebook"
+               })
+
+      assert {:ok, %MishkaPay.Product{active: false}} =
+               MishkaPay.archive_product("acme", "shop-ebook", "site-a")
+
+      assert {:ok, %MishkaPay.Price{active: false}} =
+               MishkaPay.archive_price("acme", "acme_price_1", "site-a")
+
+      assert {:ok, %MishkaPay.Product{}} =
+               MishkaPay.fetch_product("acme", "acme_prod_1", "site-a")
+
+      assert {:ok, %MishkaPay.Price{}} = MishkaPay.fetch_price("acme", "acme_price_1", "site-a")
+      assert {:ok, %MishkaPay.Page{items: [_price]}} = MishkaPay.list_prices("acme", "site-a")
+    end
+
+    test "a product needs its name, and a price its product and amount" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :name}]}} =
+               MishkaPay.create_product(%{provider: "acme"})
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.create_price(%{provider: "acme", product_id: "p"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :product_id}]}} =
+               MishkaPay.create_price(%{
+                 provider: "acme",
+                 name: "x",
+                 amount: %{amount: "1", currency: "USD"}
+               })
+    end
+
+    test "a stream pages through every item, one request a page, only as far as it is read" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :product_list, :stop]])
+      list = &MishkaPay.list_products("acme", "site-a", Keyword.put(&1, :limit, 1))
+
+      assert [_one] = list |> MishkaPay.Page.stream() |> Enum.take(1)
+      assert_received {[:mishka_pay, :product_list, :stop], ^ref, _, _}
+      refute_received {[:mishka_pay, :product_list, :stop], ^ref, _, _}
+
+      assert [_, _, _] = list |> MishkaPay.Page.stream() |> Enum.to_list()
+    end
+
+    test "a stream raises the error of a page it could not read" do
+      assert_raise Errors.UnknownProvider, fn ->
+        (&MishkaPay.list_products("nope", "site-a", &1))
+        |> MishkaPay.Page.stream()
+        |> Enum.to_list()
+      end
+    end
+
+    test "payments are listed page by page, and a provider without the capability refuses" do
+      assert {:ok, %MishkaPay.Page{items: [%Payment{}, %Payment{}], next: "2"}} =
+               MishkaPay.list_payments("acme", "site-a", limit: 2)
+
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      assert {:error, %Errors.Unsupported{operation: :payment_list}} =
+               MishkaPay.list_payments("checkout_only")
+    end
+  end
+
   describe "subscriptions" do
     test "are read, cancelled at the period's end or now, taken back, and their invoices listed" do
       assert {:ok, %MishkaPay.Subscription{id: "acme_sub_active", status: :active, items: [plan]}} =
@@ -318,8 +401,11 @@ defmodule MishkaPayTest do
       assert {:ok, %{cancel_at_period_end: false}} =
                MishkaPay.resume_subscription("acme", "acme_sub_active", "site-a")
 
-      assert {:ok, [%MishkaPay.Invoice{status: :paid, subscription_id: "acme_sub_active"}]} =
-               MishkaPay.invoices("acme", "acme_sub_active", "site-a")
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [%MishkaPay.Invoice{status: :paid, subscription_id: "acme_sub_active"}]
+              }} =
+               MishkaPay.list_invoices("acme", "site-a", subscription_id: "acme_sub_active")
 
       assert_raise ArgumentError, ~r/must be :now or :period_end/, fn ->
         MishkaPay.cancel_subscription("acme", "acme_sub_active", "site-a", at: :tomorrow)

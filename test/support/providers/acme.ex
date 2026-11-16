@@ -17,7 +17,17 @@ defmodule MishkaPay.Support.Acme do
   use MishkaPay.Provider,
     id: "acme",
     label: "Acme Pay",
-    capabilities: [:checkout, :expire, :refund, :subscription, :customer, :portal, :discount],
+    capabilities: [
+      :checkout,
+      :expire,
+      :payment_list,
+      :refund,
+      :subscription,
+      :customer,
+      :portal,
+      :discount,
+      :catalog
+    ],
     priority: 10
 
   alias MishkaPay.{
@@ -26,8 +36,11 @@ defmodule MishkaPay.Support.Acme do
     Customer,
     Errors,
     Invoice,
+    Page,
     Payment,
     PortalSession,
+    Price,
+    Product,
     PromotionCode,
     Refund,
     Subscription
@@ -92,17 +105,37 @@ defmodule MishkaPay.Support.Acme do
   def resume_subscription(id, %{secret_key: "sk_acme"}), do: subscription(id, :active, false)
 
   @impl MishkaPay.Provider
-  def list_invoices(id, %{secret_key: "sk_acme"}) do
+  def list_invoices(opts, %{secret_key: "sk_acme"}) do
     with {:ok, invoice} <-
            Invoice.builder(%{
              provider: "acme",
              id: "acme_in_1",
-             subscription_id: id,
+             subscription_id: opts[:subscription_id],
              status: :paid,
              amount_due: Elixir.Money.new(:USD, "9.00"),
              amount_paid: Elixir.Money.new(:USD, "9.00")
            }),
-         do: {:ok, [invoice]}
+         do: page([invoice], opts)
+  end
+
+  @impl MishkaPay.Provider
+  def list_payments(opts, %{secret_key: "sk_acme"} = keys) do
+    {:ok, payment} = fetch_payment("acme_paid", keys)
+    page(List.duplicate(payment, 3), opts)
+  end
+
+  # Three items or fewer, paged like a provider does: `after:` is the index already read.
+  defp page(items, opts) do
+    from = opts |> Keyword.get(:after, "0") |> String.to_integer()
+    {taken, rest} = items |> Enum.drop(from) |> Enum.split(opts[:limit] || 10)
+    more = rest != []
+
+    {:ok,
+     %Page{
+       items: taken,
+       has_more: more,
+       next: (more && Integer.to_string(from + length(taken))) || nil
+     }}
   end
 
   defp subscription(id, status, cancel_at_period_end) do
@@ -133,7 +166,7 @@ defmodule MishkaPay.Support.Acme do
   @impl MishkaPay.Provider
   def list_customers(opts, %{secret_key: "sk_acme"}) do
     {:ok, customer} = fetch_customer("acme_cus_1", %{secret_key: "sk_acme"})
-    {:ok, List.duplicate(customer, min(opts[:limit], 2))}
+    page(List.duplicate(customer, 3), opts)
   end
 
   @impl MishkaPay.Provider
@@ -169,7 +202,7 @@ defmodule MishkaPay.Support.Acme do
   @impl MishkaPay.Provider
   def list_coupons(opts, %{secret_key: "sk_acme"}) do
     {:ok, coupon} = fetch_coupon("acme_coupon_1", %{secret_key: "sk_acme"})
-    {:ok, List.duplicate(coupon, min(opts[:limit], 2))}
+    page(List.duplicate(coupon, 2), opts)
   end
 
   @impl MishkaPay.Provider
@@ -193,9 +226,50 @@ defmodule MishkaPay.Support.Acme do
   @impl MishkaPay.Provider
   def list_promotion_codes(opts, %{secret_key: "sk_acme"}) do
     {:ok, code} = fetch_promotion_code("acme_promo_1", %{secret_key: "sk_acme"})
-    {:ok, Enum.filter([code], &(opts[:code] in [nil, &1.code]))}
+    page(Enum.filter([code], &(opts[:code] in [nil, &1.code])), opts)
   end
 
   @impl MishkaPay.Provider
   def update_promotion_code(%PromotionCode{} = code, %{secret_key: "sk_acme"}), do: {:ok, code}
+
+  @impl MishkaPay.Provider
+  def create_product(%Product{} = product, %{secret_key: "sk_acme"}),
+    do: {:ok, %{product | id: product.id || "acme_prod_1", active: true}}
+
+  @impl MishkaPay.Provider
+  def fetch_product(id, %{secret_key: "sk_acme"}),
+    do: Product.builder(%{provider: "acme", id: id, name: "Ebook", active: true})
+
+  @impl MishkaPay.Provider
+  def update_product(%Product{} = product, %{secret_key: "sk_acme"}), do: {:ok, product}
+
+  @impl MishkaPay.Provider
+  def list_products(opts, %{secret_key: "sk_acme"} = keys) do
+    {:ok, product} = fetch_product("acme_prod_1", keys)
+    page(List.duplicate(product, 3), opts)
+  end
+
+  @impl MishkaPay.Provider
+  def create_price(%Price{} = price, %{secret_key: "sk_acme"}),
+    do: {:ok, %{price | id: "acme_price_1", active: true}}
+
+  @impl MishkaPay.Provider
+  def fetch_price(id, %{secret_key: "sk_acme"}),
+    do:
+      Price.builder(%{
+        provider: "acme",
+        id: id,
+        product_id: "acme_prod_1",
+        amount: Elixir.Money.new(:USD, "19.99"),
+        active: true
+      })
+
+  @impl MishkaPay.Provider
+  def update_price(%Price{} = price, %{secret_key: "sk_acme"}), do: {:ok, price}
+
+  @impl MishkaPay.Provider
+  def list_prices(opts, %{secret_key: "sk_acme"} = keys) do
+    {:ok, price} = fetch_price("acme_price_1", keys)
+    page([price], opts)
+  end
 end

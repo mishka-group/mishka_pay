@@ -18,7 +18,7 @@ defmodule MishkaPay.Subscription do
     * `:cancel_at_period_end`: `true` when it ends at `:current_period_end` (see
       `MishkaPay.cancel_subscription/4`); `:cancel_at`, `:canceled_at`: when it ends, or ended.
     * `:trial_end`: when the trial ends, for one in trial.
-    * `:latest_invoice_id`: its newest invoice (`MishkaPay.invoices/3` lists them all).
+    * `:latest_invoice_id`: its newest invoice (`MishkaPay.list_invoices/3` lists them all).
     * `:reference`, `:metadata`: the caller's own id from the checkout, and extra pairs.
     * `:created_at`: when the provider made it.
   """

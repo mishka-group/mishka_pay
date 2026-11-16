@@ -237,8 +237,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       {:ok, %TestClock{}} = TestClock.advance(nil, clock, DateTime.add(now, 32, :day))
       :ready = clock_ready(clock, 60)
 
-      assert {:ok, [%Invoice{status: :paid}, %Invoice{status: :paid} | _]} =
-               MishkaPay.invoices("stripe", id)
+      assert {:ok, %MishkaPay.Page{items: [%Invoice{status: :paid}, %Invoice{status: :paid} | _]}} =
+               MishkaPay.list_invoices("stripe", nil, subscription_id: id)
 
       assert {:ok, %Subscription{status: :active, cancel_at_period_end: true}} =
                MishkaPay.cancel_subscription("stripe", id)
@@ -304,7 +304,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %{name: "Live Buyer 2"}} =
              MishkaPay.update_customer(%{provider: "stripe", id: id, name: "Live Buyer 2"})
 
-    assert {:ok, [%MishkaPay.Customer{id: ^id}]} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{id: ^id}]}} =
              MishkaPay.list_customers("stripe", nil, email: email)
 
     assert {:ok, %MishkaPay.Customer{email: ^email}} = MishkaPay.fetch_customer("stripe", id)
@@ -331,7 +331,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                code: "LIVE#{run}"
              })
 
-    assert {:ok, [%MishkaPay.PromotionCode{id: ^code_id}]} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PromotionCode{id: ^code_id}]}} =
              MishkaPay.list_promotion_codes("stripe", nil, code: "LIVE#{run}")
 
     assert {:ok, %Checkout{id: id, status: :open, amount_total: total, amount_discount: discount}} =
@@ -360,6 +360,60 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert {:ok, %MishkaPay.PromotionCode{active: false}} =
              MishkaPay.update_promotion_code(%{provider: "stripe", id: code_id, active: false})
+  end
+
+  test "a product and its price live in Stripe's catalog, sell by price id, and lists page through" do
+    run = System.unique_integer([:positive])
+
+    assert {:ok, %MishkaPay.Product{id: product_id}} =
+             MishkaPay.create_product(%{
+               provider: "stripe",
+               id: "live-#{run}",
+               name: "Live ebook #{run}",
+               tax_code: "txcd_10302000"
+             })
+
+    on_exit(fn -> MishkaPay.archive_product("stripe", product_id) end)
+
+    assert {:ok, %MishkaPay.Price{id: price_id, product_id: ^product_id}} =
+             MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: product_id,
+               amount: %{amount: "12.00", currency: "USD"},
+               lookup_key: "live-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.Price{name: "Live ebook " <> _, amount: amount}} =
+             MishkaPay.fetch_price("stripe", price_id)
+
+    assert Money.equal?(amount, Money.new(:USD, "12.00"))
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Price{id: ^price_id}]}} =
+             MishkaPay.list_prices("stripe", nil, lookup_key: "live-#{run}")
+
+    assert {:ok, %Checkout{status: :open, amount_total: total}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{id: price_id}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-price-#{run}"
+             })
+
+    assert Money.compare(total, Money.new(:USD, "12.00")) in [:eq, :gt]
+
+    for list <- [
+          &MishkaPay.list_products("stripe", nil, &1),
+          &MishkaPay.list_payments("stripe", nil, &1),
+          &MishkaPay.list_customers("stripe", nil, &1)
+        ] do
+      assert {:ok, %MishkaPay.Page{items: [first], has_more: true, next: next}} = list.(limit: 1)
+      assert {:ok, %MishkaPay.Page{items: [second]}} = list.(limit: 1, after: next)
+      assert first.id != second.id
+      assert [_, _, _] = list |> MishkaPay.Page.stream() |> Enum.take(3)
+    end
+
+    assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
   test "a payment that does not exist is a rejection" do
