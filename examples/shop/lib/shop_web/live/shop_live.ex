@@ -447,6 +447,8 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.SavedCardsComponent} id="saved-cards" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.BillsComponent} id="bills" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
