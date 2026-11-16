@@ -33,13 +33,14 @@ defmodule MishkaPay.Test do
   `$callers`), so tests that use only them can be `async: true`. `start_plugin!/1` changes an event
   every test sees, so a test that uses it is `async: false`.
 
-  Every wait here is on a message: a plugin is ready when mishka_installer says it started and its
-  event is rebuilt. Nothing sleeps; a plugin that never starts fails the test after 30 seconds.
+  Every wait here is on a message: a plugin is ready when its event's compiled module runs it, which
+  mishka_installer announces each time it rebuilds the event. Nothing sleeps; a plugin that never
+  starts fails the test after 30 seconds.
   """
 
   import ExUnit.Callbacks, only: [on_exit: 1, start_supervised!: 1]
 
-  alias MishkaInstaller.Event.{Event, EventHandler}
+  alias MishkaInstaller.Event.{Event, EventHandler, ModuleStateCompiler}
   alias MishkaInstaller.QueueAssistant
   alias MishkaPay.Test.Keys
 
@@ -121,23 +122,34 @@ defmodule MishkaPay.Test do
     drain()
   end
 
+  # The plugin runs once its event's compiled module lists it. Its `:started` row is not enough:
+  # `Event.start/3` writes it before it queues the rebuild, so a reader can see the row while the
+  # module is still the old one. The installer broadcasts `:purge_create` after each rebuild of an
+  # event, and the caller subscribed before the plugin started, so no rebuild is missed.
   defp wait(plugin) do
-    case Event.get(:name, plugin) do
-      %{status: :started} ->
-        :ok
+    event = plugin.config(:__event__)
 
-      _not_yet ->
-        receive do
-          %{channel: "event", status: :start, data: %{name: ^plugin}} -> :ok
-        after
-          :timer.seconds(30) -> raise "#{inspect(plugin)} never started"
-        end
+    if runs?(event, plugin) do
+      :ok
+    else
+      receive do
+        %{channel: "event", status: :purge_create, data: ^event} -> wait(plugin)
+      after
+        :timer.seconds(30) -> raise "#{inspect(plugin)} never started"
+      end
     end
   end
 
-  # `Event.start/3` queues the event's rebuild before it broadcasts, so once nothing is queued or
-  # running the rebuilt event includes the plugin. Each round is a sync call to the installer's
-  # event handler, which answers between rebuilds: the barrier mishka_cms_core's tests use too.
+  defp runs?(event, plugin) do
+    case ModuleStateCompiler.event_module(event) do
+      nil -> false
+      module -> Enum.any?(module.initialize().plugins, &(&1.name == plugin))
+    end
+  end
+
+  # Starting a plugin also queues the rebuild of every event whose plugins depend on it; once nothing
+  # is queued or running those are rebuilt too. Each round is a sync call to the installer's event
+  # handler, which answers between rebuilds: the barrier mishka_cms_core's tests use too.
   defp drain do
     state = EventHandler.get()
 
