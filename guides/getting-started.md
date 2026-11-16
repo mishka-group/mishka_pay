@@ -6,8 +6,17 @@
 mix igniter.install mishka_pay              # add --ash for the Ash layer, --pubsub for broadcasts
 ```
 
-or by hand: add `{:mishka_pay, "~> 0.0.1-alpha.1"}` (a pre-release is matched only when named), supervise `MishkaPay.Providers.Stripe` and your keys
-plugin, and mount `plug MishkaPay.Webhook, at: "/pay/webhooks"` before `Plug.Parsers`.
+or by hand: add `{:mishka_pay, "~> 0.0.1-alpha.1"}` (a pre-release is matched only when named),
+supervise `MishkaPay.Registry` (mishka_installer's plugin registry, started only where nothing
+else starts it), then `MishkaPay.Providers.Stripe` and your keys plugin, mount `plug MishkaPay.Webhook, at:
+"/pay/webhooks"` before `Plug.Parsers`, and give mishka_installer's plugin registry a folder per
+environment:
+
+```elixir
+config :mishka_installer, MishkaInstaller.MnesiaRepo,
+  mnesia_dir: Path.expand("../.mnesia/#{config_env()}", __DIR__),
+  essential: [MishkaInstaller.Event.Event, MishkaInstaller.Installer.Installer]
+```
 
 ## Keys, per site
 

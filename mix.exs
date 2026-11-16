@@ -158,12 +158,18 @@ defmodule MishkaPay.MixProject do
       # The Ash layer's tests run on a database made from the test resources (mix ash.codegen).
       test: ["ash.setup --quiet", "test"],
       # The DSL page of `MishkaPay.Ash.Resource` is made from its schema, never by hand.
-      docs: ["spark.cheat_sheets --extensions MishkaPay.Ash.Resource", "docs"],
+      docs: [
+        "spark.formatter --extensions MishkaPay.Ash.Resource",
+        "spark.cheat_sheets --extensions MishkaPay.Ash.Resource",
+        "docs"
+      ],
       ci: [
         # First: after `compile` Mix has pruned the code path and the Hex archive's task is gone.
         "hex.audit",
         "compile --warnings-as-errors",
         "format --check-formatted",
+        # Spark makes the DSL's formatter list and its docs page; both must be current.
+        "spark.formatter --check --extensions MishkaPay.Ash.Resource",
         "spark.cheat_sheets --check --extensions MishkaPay.Ash.Resource",
         "credo --strict",
         "mishka_pay.credence",

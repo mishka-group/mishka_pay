@@ -6,6 +6,7 @@ process and needs no sleeps.
 ```elixir
 # test/test_helper.exs
 MishkaPay.Test.setup!()
+MishkaPay.Test.await_plugin!(MishkaPay.Providers.Stripe)  # the provider the app starts
 ExUnit.start()
 
 # config/test.exs

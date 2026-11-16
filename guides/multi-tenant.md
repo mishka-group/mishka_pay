@@ -1,6 +1,8 @@
 # Many sites
 
-Mishka Pay is built for one install that serves many sites, as Mishka CMS does.
+Mishka Pay is built for one install that serves many sites, as Mishka CMS does. Inside Mishka CMS
+the core starts mishka_installer's registry before any extension, so `MishkaPay.Registry` starts
+nothing there; list it anyway, it is safe in both.
 
 1. **Keys per site.** The keys plugin answers each site's own keys and settings (refunds once or
    many, merchant of record, Stripe Tax) from its database, at runtime. Changing a site's keys

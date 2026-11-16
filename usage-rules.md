@@ -42,10 +42,12 @@ By hand:
 {:ash, "~> 3.37"}, {:ash_postgres, "~> 2.15"}, {:ash_oban, "~> 0.10.3"}
 ```
 
-Supervise the provider and the host's keys plugin (both are plugins):
+Supervise mishka_installer's registry first (it starts only what nothing else started), then the
+provider and the host's keys plugin (both are plugins):
 
 ```elixir
 # lib/my_app/application.ex, children
+MishkaPay.Registry,
 MishkaPay.Providers.Stripe,
 MyApp.Pay.Keys
 ```

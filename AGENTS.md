@@ -32,6 +32,9 @@ changing this repository. An agent *using* Mishka Pay in another project reads t
   `docker run -d --name mp-postgres -p 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD=postgres -v mp-postgres-data:/var/lib/postgresql/data postgres:17`
   and `docker run -d --name mp-stripe-mock -p 127.0.0.1:12111:12111 stripe/stripe-mock:latest`,
   then `POSTGRES_PORT=5433 mix test`.
+- After changing the `mishka_pay` DSL (`ash/resource.ex`): `mix spark.formatter --extensions
+  MishkaPay.Ash.Resource` and `mix spark.cheat_sheets --extensions MishkaPay.Ash.Resource`
+  (`mix ci` checks both are current).
 - After changing what a kind adds (`ash/__resource/kinds.ex`): `MIX_ENV=test POSTGRES_PORT=5433 mix ash.codegen <name>` (the
   generated migrations are gitignored here; the demo keeps its own).
 - Live sandbox tests: `STRIPE_SECRET_KEY=sk_test_... mix test --only stripe_live` (test keys only).
