@@ -85,6 +85,10 @@ defmodule MishkaPay.Providers.PayPalTest do
       for {attrs, operation} <- [
             {%{mode: :subscription, items: [monthly]}, :subscription},
             {%{merchant_of_record: true}, "checkout as merchant of record"},
+            {%{allow_promotion_codes: true}, "checkout with promotion codes"},
+            {%{discounts: [%{coupon_id: "SPRING"}]}, "checkout with discounts"},
+            {%{locale: "de"}, "checkout with a page language"},
+            {%{automatic_tax: true}, "checkout with automatic tax"},
             {%{items: [%{id: "price_1"}]}, "checkout by a provider price id"},
             {%{items: [%{name: "Ebook", amount: %{amount: "100", currency: "INR"}}]},
              "checkout in INR"},

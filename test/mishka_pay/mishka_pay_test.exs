@@ -153,6 +153,147 @@ defmodule MishkaPayTest do
     end
   end
 
+  describe "coupons, promotion codes and checkout options" do
+    test "a coupon and its promotion code are made, read, listed, turned off and the coupon removed" do
+      assert {:ok, %MishkaPay.Coupon{id: "SPRING", percent_off: percent, duration: :once}} =
+               MishkaPay.create_coupon(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 id: "SPRING",
+                 name: "Spring",
+                 percent_off: "12.5"
+               })
+
+      assert Decimal.equal?(percent, Decimal.new("12.5"))
+
+      assert {:ok, %MishkaPay.Coupon{id: "SPRING"}} =
+               MishkaPay.fetch_coupon("acme", "SPRING", "site-a")
+
+      assert {:ok, [_one]} = MishkaPay.list_coupons("acme", "site-a", limit: 1)
+
+      assert {:ok, %MishkaPay.PromotionCode{id: "acme_promo_1", code: "SPRING10"}} =
+               MishkaPay.create_promotion_code(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 coupon_id: "SPRING",
+                 code: "SPRING10",
+                 minimum_amount: %{amount: "20", currency: "USD"}
+               })
+
+      assert {:ok, [%{code: "ACME10"}]} =
+               MishkaPay.list_promotion_codes("acme", "site-a", code: "ACME10")
+
+      assert {:ok, %MishkaPay.PromotionCode{active: false}} =
+               MishkaPay.update_promotion_code(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 id: "acme_promo_1",
+                 active: false
+               })
+
+      assert {:ok, %MishkaPay.PromotionCode{coupon_id: "acme_coupon_1"}} =
+               MishkaPay.fetch_promotion_code("acme", "acme_promo_1", "site-a")
+
+      assert :ok = MishkaPay.delete_coupon("acme", "SPRING", "site-a")
+    end
+
+    test "a coupon takes a percent or an amount, and months only when it repeats" do
+      for {attrs, field} <- [
+            {%{percent_off: 10, amount_off: %{amount: "5", currency: "USD"}}, :percent_off},
+            {%{}, :percent_off},
+            {%{percent_off: 0}, :percent_off},
+            {%{percent_off: "101"}, :percent_off},
+            {%{percent_off: 10, duration: :repeating}, :duration_in_months},
+            {%{percent_off: 10, duration: "once", duration_in_months: 3}, :duration_in_months}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} =
+                 MishkaPay.create_coupon(Map.put(attrs, :provider, "acme"))
+      end
+
+      assert {:ok, %{duration: :repeating, duration_in_months: 3}} =
+               MishkaPay.create_coupon(%{
+                 provider: "acme",
+                 amount_off: %{amount: "5", currency: "USD"},
+                 duration: "repeating",
+                 duration_in_months: 3
+               })
+    end
+
+    test "a promotion code needs its coupon, and an update needs its id" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :coupon_id}]}} =
+               MishkaPay.create_promotion_code(%{provider: "acme", code: "X"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_promotion_code(%{provider: "acme", active: false})
+    end
+
+    test "a checkout applies a discount or lets the buyer type a code, never both" do
+      assert {:ok, %Checkout{discounts: [%MishkaPay.Discount{promotion_code_id: "acme_promo_1"}]}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :discounts, [%{promotion_code_id: "acme_promo_1"}])
+               )
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :discounts}]}} =
+               MishkaPay.checkout(
+                 @checkout
+                 |> Map.put(:discounts, [%{coupon_id: "SPRING"}])
+                 |> Map.put(:allow_promotion_codes, true)
+               )
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :discounts, [%{coupon_id: "A", promotion_code_id: "promo_B"}])
+               )
+    end
+
+    test "checkout options are checked: choices, a future expiry, customer creation only when paying once" do
+      soon = DateTime.add(DateTime.utc_now(), 3600)
+
+      assert {:ok,
+              %Checkout{customer_creation: :always, billing_address: :required, locale: "de"}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{
+                   customer_creation: "always",
+                   billing_address: "required",
+                   locale: "de",
+                   automatic_tax: true,
+                   tax_id_collection: true,
+                   expires_at: soon
+                 })
+               )
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :expires_at}]}} =
+               MishkaPay.checkout(Map.put(@checkout, :expires_at, DateTime.add(soon, -7200)))
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :billing_address}]}} =
+               MishkaPay.checkout(Map.put(@checkout, :billing_address, "sometimes"))
+
+      plan = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_creation}]}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{
+                   mode: :subscription,
+                   items: [plan],
+                   customer_creation: :always
+                 })
+               )
+    end
+
+    test "an open checkout is ended, and a provider without the capability refuses" do
+      assert {:ok, %Checkout{status: :expired}} =
+               MishkaPay.expire_checkout("acme", "acme_cs_order-1", "site-a")
+
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      assert {:error, %Errors.Unsupported{operation: :expire}} =
+               MishkaPay.expire_checkout("checkout_only", "co_cs_1")
+
+      assert {:error, %Errors.Unsupported{operation: :discount}} =
+               MishkaPay.create_coupon(%{provider: "checkout_only", percent_off: 10})
+    end
+  end
+
   describe "subscriptions" do
     test "are read, cancelled at the period's end or now, taken back, and their invoices listed" do
       assert {:ok, %MishkaPay.Subscription{id: "acme_sub_active", status: :active, items: [plan]}} =

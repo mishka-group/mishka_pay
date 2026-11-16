@@ -61,22 +61,42 @@ defmodule MishkaPay.Provider do
   alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Errors, Events}
 
-  @capabilities [:checkout, :refund, :subscription, :customer, :portal, :webhook, :return_verify]
+  @capabilities [
+    :checkout,
+    :expire,
+    :refund,
+    :subscription,
+    :customer,
+    :portal,
+    :discount,
+    :webhook,
+    :return_verify
+  ]
 
   @typedoc """
   What a provider can do:
 
     * `:checkout`: sends the buyer to pay, or embeds a payment form.
+    * `:expire`: ends an open checkout before the buyer pays, so its stock is free again.
     * `:refund`: gives money back on a payment.
     * `:subscription`: charges again on a schedule.
     * `:customer`: keeps buyers (create, read, update, list).
     * `:portal`: has a hosted page where a customer manages their own billing.
+    * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:webhook`: sends signed messages when something changes.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
   """
   @type capability ::
-          :checkout | :refund | :subscription | :customer | :portal | :webhook | :return_verify
+          :checkout
+          | :expire
+          | :refund
+          | :subscription
+          | :customer
+          | :portal
+          | :discount
+          | :webhook
+          | :return_verify
 
   @doc "The provider's id, such as `\"stripe\"`. Set by `use`."
   @callback id() :: String.t()
@@ -108,6 +128,10 @@ defmodule MishkaPay.Provider do
   @doc "With `:checkout`. Reads one payment again from the provider, its source of truth."
   @callback fetch_payment(payment_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:expire`. Ends an open checkout so it can no longer be paid, and answers it after."
+  @callback expire_checkout(checkout_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Checkout.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:refund`. Gives money back on a payment and answers the refund as the provider made it."
   @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
@@ -161,6 +185,41 @@ defmodule MishkaPay.Provider do
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PortalSession.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:discount`. Makes a coupon and answers it with its `:id`."
+  @callback create_coupon(MishkaPay.Coupon.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Coupon.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:discount`. Reads one coupon again."
+  @callback fetch_coupon(coupon_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Coupon.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:discount`. The newest coupons, at most `:limit` (100)."
+  @callback list_coupons(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, [MishkaPay.Coupon.t()]} | {:error, Splode.Error.t()}
+
+  @doc "With `:discount`. Removes a coupon so it can no longer be applied."
+  @callback delete_coupon(coupon_id :: String.t(), MishkaPay.Credentials.t()) ::
+              :ok | {:error, Splode.Error.t()}
+
+  @doc "With `:discount`. Makes a promotion code for a coupon and answers it with its `:id`."
+  @callback create_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:discount`. Reads one promotion code again."
+  @callback fetch_promotion_code(promotion_code_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:discount`. The newest promotion codes, at most `:limit` (100); only those with `:code`,
+  of `:coupon_id`, or `:active` when given.
+  """
+  @callback list_promotion_codes(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, [MishkaPay.PromotionCode.t()]} | {:error, Splode.Error.t()}
+
+  @doc "With `:discount`. Turns a promotion code off or on again (`:active`), and its metadata."
+  @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
+
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
   the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
@@ -177,6 +236,7 @@ defmodule MishkaPay.Provider do
                       checkout: 2,
                       fetch_checkout: 2,
                       fetch_payment: 2,
+                      expire_checkout: 2,
                       refund: 2,
                       fetch_subscription: 2,
                       cancel_subscription: 3,
@@ -187,10 +247,19 @@ defmodule MishkaPay.Provider do
                       update_customer: 2,
                       list_customers: 2,
                       portal_session: 2,
+                      create_coupon: 2,
+                      fetch_coupon: 2,
+                      list_coupons: 2,
+                      delete_coupon: 2,
+                      create_promotion_code: 2,
+                      fetch_promotion_code: 2,
+                      list_promotion_codes: 2,
+                      update_promotion_code: 2,
                       verify_webhook: 3
 
   @operations %{
     checkout: [checkout: 2, fetch_checkout: 2, fetch_payment: 2],
+    expire: [expire_checkout: 2],
     refund: [refund: 2],
     subscription: [
       fetch_subscription: 2,
@@ -200,6 +269,16 @@ defmodule MishkaPay.Provider do
     ],
     customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
     portal: [portal_session: 2],
+    discount: [
+      create_coupon: 2,
+      fetch_coupon: 2,
+      list_coupons: 2,
+      delete_coupon: 2,
+      create_promotion_code: 2,
+      fetch_promotion_code: 2,
+      list_promotion_codes: 2,
+      update_promotion_code: 2
+    ],
     webhook: [verify_webhook: 3]
   }
 

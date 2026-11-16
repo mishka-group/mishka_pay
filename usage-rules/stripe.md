@@ -35,6 +35,17 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 `:customer_email`, `:customer_name`, `:card_brand`, `:card_last4`, `:receipt_url`,
 `:failure_code`, `:failure_message`, `:description`, `:metadata` and `:refunds`.
 
+## Checkout options and discounts
+
+- `expires_at` must be 30 minutes to 24 hours from now; anything else is `Errors.Invalid` before
+  any request.
+- Which payment methods a checkout offers is set in the Stripe Dashboard: this API version refuses
+  `payment_method_types`, so Mishka Pay has no such option.
+- `automatic_tax` works with Managed Payments on or off.
+- A promotion code points to its coupon through Stripe's `promotion` (type `coupon`); Mishka Pay
+  reads it as `:coupon_id`.
+- A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
+
 ## Customers and the portal
 
 - The customer's `reference` is kept in its metadata as `mishka_pay_reference` and comes back as

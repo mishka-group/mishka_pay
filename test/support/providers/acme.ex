@@ -17,16 +17,18 @@ defmodule MishkaPay.Support.Acme do
   use MishkaPay.Provider,
     id: "acme",
     label: "Acme Pay",
-    capabilities: [:checkout, :refund, :subscription, :customer, :portal],
+    capabilities: [:checkout, :expire, :refund, :subscription, :customer, :portal, :discount],
     priority: 10
 
   alias MishkaPay.{
     Checkout,
+    Coupon,
     Customer,
     Errors,
     Invoice,
     Payment,
     PortalSession,
+    PromotionCode,
     Refund,
     Subscription
   }
@@ -143,4 +145,57 @@ defmodule MishkaPay.Support.Acme do
          | id: "acme_portal_1",
            url: "https://pay.acme.test/portal/#{session.customer_id}"
        }}
+
+  @impl MishkaPay.Provider
+  def expire_checkout("acme_cs_" <> reference = id, %{secret_key: "sk_acme"}),
+    do:
+      {:ok,
+       struct(Checkout,
+         provider: "acme",
+         items: [],
+         id: id,
+         reference: reference,
+         status: :expired
+       )}
+
+  @impl MishkaPay.Provider
+  def create_coupon(%Coupon{} = coupon, %{secret_key: "sk_acme"}),
+    do: {:ok, %{coupon | id: coupon.id || "acme_coupon_1", valid: true, times_redeemed: 0}}
+
+  @impl MishkaPay.Provider
+  def fetch_coupon(id, %{secret_key: "sk_acme"}),
+    do: Coupon.builder(%{provider: "acme", id: id, percent_off: 10, valid: true})
+
+  @impl MishkaPay.Provider
+  def list_coupons(opts, %{secret_key: "sk_acme"}) do
+    {:ok, coupon} = fetch_coupon("acme_coupon_1", %{secret_key: "sk_acme"})
+    {:ok, List.duplicate(coupon, min(opts[:limit], 2))}
+  end
+
+  @impl MishkaPay.Provider
+  def delete_coupon(_id, %{secret_key: "sk_acme"}), do: :ok
+
+  @impl MishkaPay.Provider
+  def create_promotion_code(%PromotionCode{} = code, %{secret_key: "sk_acme"}),
+    do: {:ok, %{code | id: "acme_promo_1", code: code.code || "ACME10", active: true}}
+
+  @impl MishkaPay.Provider
+  def fetch_promotion_code(id, %{secret_key: "sk_acme"}),
+    do:
+      PromotionCode.builder(%{
+        provider: "acme",
+        id: id,
+        code: "ACME10",
+        coupon_id: "acme_coupon_1",
+        active: true
+      })
+
+  @impl MishkaPay.Provider
+  def list_promotion_codes(opts, %{secret_key: "sk_acme"}) do
+    {:ok, code} = fetch_promotion_code("acme_promo_1", %{secret_key: "sk_acme"})
+    {:ok, Enum.filter([code], &(opts[:code] in [nil, &1.code]))}
+  end
+
+  @impl MishkaPay.Provider
+  def update_promotion_code(%PromotionCode{} = code, %{secret_key: "sk_acme"}), do: {:ok, code}
 end

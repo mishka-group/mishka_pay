@@ -7,7 +7,7 @@ defmodule MishkaPay do
   The calls a project makes to take money: open a checkout, read a payment, refund one; for a
   subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
   back and list its invoices; keep customers (create, read, update, list) and open their billing
-  portal.
+  portal; keep coupons and promotion codes; end an open checkout.
 
       {:ok, checkout} =
         MishkaPay.checkout(%{
@@ -42,19 +42,23 @@ defmodule MishkaPay do
   Each call is a span, `[:mishka_pay, operation, :start | :stop]`, the operation being
   `:checkout`, `:checkout_read`, `:payment`, `:refund`, `:subscription`, `:subscription_cancel`,
   `:subscription_resume`, `:invoices`, `:customer_create`, `:customer_update`, `:customer`,
-  `:customer_list` or `:portal`, with
+  `:customer_list`, `:portal`, `:checkout_expire`, `:coupon_create`, `:coupon`, `:coupon_list`,
+  `:coupon_delete`, `:promotion_code_create`, `:promotion_code`, `:promotion_code_list` or
+  `:promotion_code_update`, with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
   """
 
   alias MishkaPay.{
     Checkout,
+    Coupon,
     Credentials,
     Customer,
     Errors,
     Events,
     Messages,
     PortalSession,
+    PromotionCode,
     Provider,
     Refund
   }
@@ -150,7 +154,7 @@ defmodule MishkaPay do
           {:ok, Customer.t()} | {:error, Splode.Error.t()}
   def fetch_customer(provider, customer_id, tenant \\ nil)
       when is_binary(provider) and is_binary(customer_id) do
-    customers(:customer, provider, tenant, & &1.fetch_customer(customer_id, &2))
+    capable(:customer, :customer, provider, tenant, & &1.fetch_customer(customer_id, &2))
   end
 
   @doc """
@@ -160,9 +164,7 @@ defmodule MishkaPay do
   @spec list_customers(String.t(), term(), keyword()) ::
           {:ok, [Customer.t()]} | {:error, Splode.Error.t()}
   def list_customers(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
-    limit = opts |> Keyword.get(:limit, 10) |> min(100) |> max(1)
-    opts = Keyword.put(opts, :limit, limit)
-    customers(:customer_list, provider, tenant, & &1.list_customers(opts, &2))
+    capable(:customer, :customer_list, provider, tenant, & &1.list_customers(limited(opts), &2))
   end
 
   @doc """
@@ -180,21 +182,131 @@ defmodule MishkaPay do
     end)
   end
 
-  defp customers(operation, provider, tenant, call) do
+  @doc """
+  Ends open checkout `checkout_id` at `provider` so it can no longer be paid, and answers it
+  (`status: :expired`). Call it when a buyer walks away and the stock held for them should be
+  free again; a checkout already paid or expired is refused.
+  """
+  @spec expire_checkout(String.t(), String.t(), term()) ::
+          {:ok, Checkout.t()} | {:error, Splode.Error.t()}
+  def expire_checkout(provider, checkout_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(checkout_id) do
+    capable(:expire, :checkout_expire, provider, tenant, & &1.expire_checkout(checkout_id, &2))
+  end
+
+  @doc "Makes a coupon from `attrs` (see `MishkaPay.Coupon`) at `attrs.provider`."
+  @spec create_coupon(map()) :: {:ok, Coupon.t()} | {:error, Splode.Error.t()}
+  def create_coupon(attrs) when is_map(attrs) do
+    made(:coupon_create, attrs, Coupon, [:provider], :create_coupon)
+  end
+
+  @doc "Reads coupon `coupon_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_coupon(String.t(), String.t(), term()) ::
+          {:ok, Coupon.t()} | {:error, Splode.Error.t()}
+  def fetch_coupon(provider, coupon_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(coupon_id) do
+    capable(:discount, :coupon, provider, tenant, & &1.fetch_coupon(coupon_id, &2))
+  end
+
+  @doc "The newest coupons at `provider`: `limit:` how many (at most 100, 10 by default)."
+  @spec list_coupons(String.t(), term(), keyword()) ::
+          {:ok, [Coupon.t()]} | {:error, Splode.Error.t()}
+  def list_coupons(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:discount, :coupon_list, provider, tenant, & &1.list_coupons(limited(opts), &2))
+  end
+
+  @doc """
+  Removes coupon `coupon_id` at `provider`, so no checkout or code applies it again. What it
+  already took off stays taken off.
+  """
+  @spec delete_coupon(String.t(), String.t(), term()) :: :ok | {:error, Splode.Error.t()}
+  def delete_coupon(provider, coupon_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(coupon_id) do
+    capable(:discount, :coupon_delete, provider, tenant, & &1.delete_coupon(coupon_id, &2))
+  end
+
+  @doc "Makes a promotion code from `attrs` (see `MishkaPay.PromotionCode`) at `attrs.provider`."
+  @spec create_promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  def create_promotion_code(attrs) when is_map(attrs) do
+    made(
+      :promotion_code_create,
+      attrs,
+      PromotionCode,
+      [:provider, :coupon_id],
+      :create_promotion_code
+    )
+  end
+
+  @doc "Reads promotion code `promotion_code_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_promotion_code(String.t(), String.t(), term()) ::
+          {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  def fetch_promotion_code(provider, promotion_code_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(promotion_code_id) do
+    capable(
+      :discount,
+      :promotion_code,
+      provider,
+      tenant,
+      & &1.fetch_promotion_code(promotion_code_id, &2)
+    )
+  end
+
+  @doc """
+  The newest promotion codes at `provider`: `limit:` how many (at most 100, 10 by default),
+  `code:` the code a buyer typed, `coupon_id:` only those of one coupon, `active:` only those
+  that can (or cannot) be used now.
+  """
+  @spec list_promotion_codes(String.t(), term(), keyword()) ::
+          {:ok, [PromotionCode.t()]} | {:error, Splode.Error.t()}
+  def list_promotion_codes(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :discount,
+      :promotion_code_list,
+      provider,
+      tenant,
+      & &1.list_promotion_codes(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Changes promotion code `attrs.id` at `attrs.provider`: `active: false` turns it off, `true` on
+  again; `:metadata` too. Its code, coupon and limits stay as made.
+  """
+  @spec update_promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  def update_promotion_code(attrs) when is_map(attrs) do
+    made(:promotion_code_update, attrs, PromotionCode, [:provider, :id], :update_promotion_code)
+  end
+
+  # One call to a provider with `capability`, inside its telemetry span.
+  defp capable(capability, operation, provider, tenant, call) do
     span(operation, %{provider: provider, tenant: tenant}, fn ->
-      with {:ok, module} <- Provider.capable(provider, :customer),
+      with {:ok, module} <- Provider.capable(provider, capability),
            {:ok, keys} <- Credentials.fetch(provider, tenant) do
         call.(module, keys)
       end
     end)
   end
 
-  # A customer built from a caller's map, with the fields this call cannot go without.
+  # A coupon or code built from the caller's map and handed to the provider's `callback`.
+  defp made(operation, attrs, struct_module, needed, callback) do
+    span(operation, attrs, fn ->
+      with {:ok, struct} <- built(struct_module.builder(attrs), needed),
+           {:ok, module} <- Provider.capable(struct.provider, :discount),
+           {:ok, keys} <- Credentials.fetch(struct.provider, struct.tenant) do
+        apply(module, callback, [struct, keys])
+      end
+    end)
+  end
+
+  defp limited(opts),
+    do: Keyword.put(opts, :limit, opts |> Keyword.get(:limit, 10) |> min(100) |> max(1))
+
+  # A struct built from a caller's map, with the fields this call cannot go without.
   defp built(result, needed) do
-    with {:ok, customer} <- Errors.from_builder(result) do
-      case Enum.find(needed, &is_nil(Map.get(customer, &1))) do
+    with {:ok, struct} <- Errors.from_builder(result) do
+      case Enum.find(needed, &is_nil(Map.get(struct, &1))) do
         nil ->
-          {:ok, customer}
+          {:ok, struct}
 
         field ->
           MishkaPay.ProviderKit.invalid(field, Messages.text(:customer_needs, field: field))
@@ -301,5 +413,6 @@ defmodule MishkaPay do
   end
 
   defp outcome({:ok, _answer}), do: :ok
+  defp outcome(:ok), do: :ok
   defp outcome({:error, error}), do: error |> Errors.to_class() |> Map.fetch!(:class)
 end

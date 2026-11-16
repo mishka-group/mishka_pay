@@ -316,6 +316,52 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.portal_session(session)
   end
 
+  test "a promotion code lowers a real checkout, and an expired checkout cannot be paid" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Coupon{id: coupon_id, valid: true}} =
+      MishkaPay.create_coupon(%{provider: "stripe", name: "Live 20", percent_off: 20})
+
+    on_exit(fn -> MishkaPay.delete_coupon("stripe", coupon_id) end)
+
+    assert {:ok, %MishkaPay.PromotionCode{id: "promo_" <> _ = code_id, coupon_id: ^coupon_id}} =
+             MishkaPay.create_promotion_code(%{
+               provider: "stripe",
+               coupon_id: coupon_id,
+               code: "LIVE#{run}"
+             })
+
+    assert {:ok, [%MishkaPay.PromotionCode{id: ^code_id}]} =
+             MishkaPay.list_promotion_codes("stripe", nil, code: "LIVE#{run}")
+
+    assert {:ok, %Checkout{id: id, status: :open, amount_total: total, amount_discount: discount}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [
+                 %{
+                   name: "Ebook",
+                   amount: %{amount: "20.00", currency: "USD"},
+                   tax_code: "txcd_10302000"
+                 }
+               ],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-promo-#{run}",
+               discounts: [%{promotion_code_id: code_id}],
+               expires_at: DateTime.add(DateTime.utc_now(), 3600)
+             })
+
+    assert Money.equal?(discount, Money.new(:USD, "4.00"))
+    assert Money.compare(total, Money.new(:USD, "20.00")) == :lt
+
+    assert {:ok, %Checkout{status: :expired}} = MishkaPay.expire_checkout("stripe", id)
+    assert {:ok, %Checkout{status: :expired, url: nil}} = MishkaPay.fetch_checkout("stripe", id)
+    assert {:error, %Errors.Rejected{status: 400}} = MishkaPay.expire_checkout("stripe", id)
+
+    assert {:ok, %MishkaPay.PromotionCode{active: false}} =
+             MishkaPay.update_promotion_code(%{provider: "stripe", id: code_id, active: false})
+  end
+
   test "a payment that does not exist is a rejection" do
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_payment("stripe", "pi_doesnotexist")

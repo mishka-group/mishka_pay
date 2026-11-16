@@ -28,6 +28,21 @@ defmodule MishkaPay.Checkout do
       needs `:subscription`. A one-time checkout refuses a recurring price.
     * `:trial_days`: with `:subscription`, how many days the buyer uses it before the first
       charge.
+    * `:discounts`: coupons or promotion codes the checkout applies by itself
+      (`MishkaPay.Discount`), or `:allow_promotion_codes`: `true` lets the buyer type a code. One
+      or the other.
+    * `:automatic_tax`: `true` has the provider count the tax from the buyer's address (Stripe
+      Tax); each price then needs its `:tax_code`.
+    * `:customer_creation`: in a one-time checkout, `:always` makes a provider customer for the
+      buyer, `:if_required` only when the provider needs one.
+    * `:locale`: the language of the provider's page (`"de"`, `"auto"`).
+    * `:expires_at`: when the checkout stops taking payment; the provider has its own limits
+      (Stripe: 30 minutes to 24 hours from now). `MishkaPay.expire_checkout/3` ends it at once.
+    * `:billing_address`: `:auto` (only when needed) or `:required`.
+    * `:tax_id_collection`: `true` lets a business buyer give its tax id.
+
+  A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
+  leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
 
   What the provider fills in:
 
@@ -36,8 +51,9 @@ defmodule MishkaPay.Checkout do
     * `:status`: `:open`, `:complete` or `:expired`.
     * `:payment_id`: the payment it made, once there is one (a one-time checkout).
     * `:subscription_id`: the subscription it started, once there is one.
-    * `:amount_total`, `:amount_tax`: what the buyer pays in all and the tax in it, as `Money`,
-      once the provider has counted them (the tax may change as the buyer fills in an address).
+    * `:amount_total`, `:amount_tax`, `:amount_discount`: what the buyer pays in all, the tax in
+      it and the discount taken off, as `Money`, once the provider has counted them (the tax may
+      change as the buyer fills in an address).
   """
 
   use GuardedStruct
@@ -88,11 +104,52 @@ defmodule MishkaPay.Checkout do
 
     field :trial_days, pos_integer(), derives: "validate(integer, min_len=1)"
 
+    field :discounts, list(),
+      structs: MishkaPay.Discount,
+      derives: "validate(list)"
+
+    field :allow_promotion_codes, boolean(), derives: "validate(boolean)"
+    field :automatic_tax, boolean(), derives: "validate(boolean)"
+
+    field :customer_creation, :always | :if_required,
+      derives: "validate(enum=Atom[always::if_required])",
+      validator: {__MODULE__, :customer_creation}
+
+    field :locale, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=10)"
+    field :expires_at, DateTime.t(), derives: "validate(struct)", validator: {__MODULE__, :later}
+
+    field :billing_address, :auto | :required,
+      derives: "validate(enum=Atom[auto::required])",
+      validator: {__MODULE__, :billing_address}
+
+    field :tax_id_collection, boolean(), derives: "validate(boolean)"
+
     field :payment_id, String.t(), derives: "validate(string)"
     field :subscription_id, String.t(), derives: "validate(string)"
     field :amount_total, Money.t(), validator: {MishkaPay.Money, :field}
     field :amount_tax, Money.t(), validator: {MishkaPay.Money, :field}
+    field :amount_discount, Money.t(), validator: {MishkaPay.Money, :field}
   end
+
+  # Choices from JSON or a form come as strings.
+  @doc false
+  def customer_creation(field, value),
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(always if_required))
+
+  @doc false
+  def billing_address(field, value),
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(auto required))
+
+  # A checkout that expires is one that has not expired yet.
+  @doc false
+  def later(field, %DateTime{} = at) do
+    case DateTime.compare(at, DateTime.utc_now()) do
+      :gt -> {:ok, field, at}
+      _past -> {:error, field, Messages.text(:expires_past)}
+    end
+  end
+
+  def later(field, at), do: {:ok, field, at}
 
   @doc false
   def return_url(field, url) when is_binary(url) do
@@ -133,7 +190,37 @@ defmodule MishkaPay.Checkout do
   def consistent(attrs) do
     with {:ok, attrs} <- one_currency(attrs),
          {:ok, attrs} <- one_buyer(attrs),
+         {:ok, attrs} <- one_discount_way(attrs),
+         {:ok, attrs} <- customer_creation_mode(attrs),
          do: fits_mode(attrs)
+  end
+
+  # Discounts the checkout applies, or codes the buyer types: providers take one or the other.
+  defp one_discount_way(attrs) do
+    case {key(attrs, :discounts), key(attrs, :allow_promotion_codes)} do
+      {[_ | _], true} ->
+        {:error,
+         %{field: :discounts, action: :discounts, message: Messages.text(:discounts_or_codes)}}
+
+      _one_way ->
+        {:ok, attrs}
+    end
+  end
+
+  # A subscription always has a customer; making one is a choice of a one-time checkout only.
+  defp customer_creation_mode(attrs) do
+    case {key(attrs, :customer_creation), key(attrs, :mode)} do
+      {creation, mode} when not is_nil(creation) and mode in [:subscription, "subscription"] ->
+        {:error,
+         %{
+           field: :customer_creation,
+           action: :mode,
+           message: Messages.text(:customer_creation_mode)
+         }}
+
+      _fits ->
+        {:ok, attrs}
+    end
   end
 
   # A checkout names its buyer by the provider's id or by an email, not both.

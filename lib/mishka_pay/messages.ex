@@ -41,6 +41,15 @@ defmodule MishkaPay.Messages do
           | :customer_one_of
           | :customer_needs
           | :reference_reused
+          | :percent_off
+          | :coupon_one_of
+          | :coupon_months
+          | :discount_one_of
+          | :discounts_or_codes
+          | :customer_creation_mode
+          | :expires_past
+          | :expires_range
+          | :plain_id
           | :keys_answer
           | :stripe_id
           | :paypal_id
@@ -166,6 +175,53 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:customer_needs),
     do: dgettext_noop("mishka_pay", "The %{field} field is required for this call")
+
+  defp msgid(:percent_off),
+    do: dgettext_noop("mishka_pay", "The percent_off field must be more than 0 and at most 100")
+
+  defp msgid(:coupon_one_of),
+    do: dgettext_noop("mishka_pay", "A coupon takes off a percent or an amount, one of them")
+
+  defp msgid(:coupon_months),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The duration_in_months field goes with a repeating coupon, and only with it"
+      )
+
+  defp msgid(:discount_one_of),
+    do: dgettext_noop("mishka_pay", "A discount names a coupon or a promotion code, one of them")
+
+  defp msgid(:discounts_or_codes),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A checkout applies discounts or lets the buyer type a promotion code, not both"
+      )
+
+  defp msgid(:customer_creation_mode),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The customer_creation field works only in a one-time checkout"
+      )
+
+  defp msgid(:expires_past),
+    do: dgettext_noop("mishka_pay", "The expires_at field must be a time still to come")
+
+  defp msgid(:expires_range),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The expires_at field must be between %{min} minutes and %{max} hours from now"
+      )
+
+  defp msgid(:plain_id),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The %{field} field may hold only letters, digits, underscores and dashes"
+      )
 
   defp msgid(:reference_reused),
     do:

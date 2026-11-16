@@ -90,6 +90,9 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
 | `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | `[%MishkaPay.Customer{}]` |
 | `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
+| `MishkaPay.expire_checkout(provider, checkout_id, tenant)` | the checkout, `status: :expired`: it can no longer be paid |
+| `MishkaPay.create_coupon(attrs)`, `fetch_coupon/3`, `list_coupons/3`, `delete_coupon/3` | `%MishkaPay.Coupon{}` |
+| `MishkaPay.create_promotion_code(attrs)`, `fetch_promotion_code/3`, `list_promotion_codes/3`, `update_promotion_code/1` | `%MishkaPay.PromotionCode{}` |
 
 A one-time checkout:
 
@@ -120,6 +123,33 @@ redirect(conn, external: checkout.url)
 - A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
 - A checkout's `customer:` names the buyer by `id` (a customer made with `create_customer/1`) or by
   `email`, never both.
+
+## Checkout options and discounts
+
+```elixir
+{:ok, coupon} =
+  MishkaPay.create_coupon(%{provider: "stripe", tenant: site.id, name: "Spring",
+                            percent_off: 20, duration: :once})
+
+{:ok, code} =
+  MishkaPay.create_promotion_code(%{provider: "stripe", tenant: site.id,
+                                    coupon_id: coupon.id, code: "SPRING20"})
+
+MishkaPay.checkout(%{
+  # ...items, URLs, reference as above
+  allow_promotion_codes: true,            # the buyer types SPRING20 on the provider's page
+  # or: discounts: [%{promotion_code_id: code.id}]   # applied for them; one way, not both
+  automatic_tax: true, locale: "de", billing_address: :required, tax_id_collection: true,
+  customer_creation: :always,             # one-time checkouts only
+  expires_at: DateTime.add(DateTime.utc_now(), 3600)
+})
+```
+
+- A coupon takes `percent_off` (more than 0, at most 100) or `amount_off` (money), one of them;
+  `duration: :repeating` needs `duration_in_months`.
+- A checkout read back has `amount_discount` beside `amount_total` and `amount_tax`.
+- `expire_checkout/3` ends an open checkout when the buyer walks away, so held stock is free again.
+- A provider refuses an option it cannot send (`Errors.Unsupported`); it never drops one.
 
 ## Customers and the portal
 
