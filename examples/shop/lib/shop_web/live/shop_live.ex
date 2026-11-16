@@ -315,6 +315,8 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.SubscriptionsComponent} id="subscriptions" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
