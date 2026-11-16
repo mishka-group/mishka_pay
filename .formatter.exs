@@ -8,6 +8,7 @@ spark_locals_without_parens = [
   actions: 1,
   announce?: 1,
   belongs_to_user: 1,
+  tenant_from: 1,
   code_interface?: 1,
   kind: 1,
   listen?: 1

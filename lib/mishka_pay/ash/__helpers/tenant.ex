@@ -41,6 +41,29 @@ if Code.ensure_loaded?(Ash) do
       end
     end
 
+    defmodule Into do
+      @moduledoc """
+      Writes a create action's tenant (`MishkaPay.Ash.Tenant.of/1`) into the host's own attribute,
+      the `tenant_from` of `MishkaPay.Ash.Resource`, unless the action sets it itself.
+      """
+
+      use Ash.Resource.Change
+
+      @impl true
+      def change(changeset, opts, _context) do
+        attribute = Keyword.fetch!(opts, :attribute)
+
+        case {Ash.Changeset.changing_attribute?(changeset, attribute),
+              MishkaPay.Ash.Tenant.of(changeset)} do
+          {false, tenant} when is_binary(tenant) ->
+            Ash.Changeset.force_change_attribute(changeset, attribute, tenant)
+
+          _set_or_none ->
+            changeset
+        end
+      end
+    end
+
     defp text(nil), do: nil
     defp text(tenant) when is_binary(tenant), do: tenant
     defp text(tenant), do: to_string(Ash.ToTenant.to_tenant(tenant, nil))

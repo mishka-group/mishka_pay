@@ -61,6 +61,16 @@ if Code.ensure_loaded?(Ash) do
           `receive_event`.
           """
         ],
+        tenant_from: [
+          type: :atom,
+          doc: """
+          The host's own attribute that holds the tenant, such as `:site_id` (an attribute, or the
+          source attribute of a `belongs_to :site`), for a host that keeps sites apart without Ash
+          multitenancy. Each create action writes its tenant there too; the row's `:tenant` still
+          picks the provider keys. With Ash multitenancy on that attribute, Ash fills it and this is
+          not needed. Not for an `:inbox`, which stays global.
+          """
+        ],
         belongs_to_user: [
           type: {:or, [:atom, {:tuple, [:atom, :keyword_list]}]},
           doc: """

@@ -11,7 +11,7 @@ defmodule MishkaPay.Ash.ResourceTest do
   alias MishkaPay.Ash.Resource.{ApplyKind, Info, Kinds}
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.Support.{Domain, PaymentWatcher, StripeMock, WebhookEvent}
-  alias MishkaPay.Support.Options.{Kept, Owned, Quiet, User}
+  alias MishkaPay.Support.Options.{Kept, Located, Owned, Quiet, User}
 
   defp action_names(resource), do: resource |> AshInfo.actions() |> Enum.map(& &1.name)
 
@@ -84,6 +84,18 @@ defmodule MishkaPay.Ash.ResourceTest do
       assert message =~ "ash_oban"
     end
 
+    test "tenant_from needs the host's own attribute, and is not for an inbox" do
+      assert_raise Spark.Error.DslError,
+                   ~r/tenant_from :site_id: .* has no such attribute/s,
+                   fn ->
+                     compile(quote(do: [kind: :payment, tenant_from: :site_id]))
+                   end
+
+      assert_raise Spark.Error.DslError, ~r/An :inbox stays global/, fn ->
+        compile(quote(do: [kind: :inbox, tenant_from: :site_id]))
+      end
+    end
+
     test "a resource without a kind is a compile error" do
       assert_raise Spark.Error.DslError, ~r/without a kind/, fn -> compile([]) end
     end
@@ -148,7 +160,18 @@ defmodule MishkaPay.Ash.ResourceTest do
       refute_received {:payment_changed, _payment, _record}
     end
 
+    test "tenant_from writes each create's tenant into the host's own attribute too" do
+      site = Ash.UUID.generate()
+
+      assert {:ok, %{site_id: ^site, tenant: ^site}} =
+               Ash.create(Located, %{provider: "stripe", payment_id: "pi_123", tenant: site},
+                 action: :sync,
+                 authorize?: false
+               )
+    end
+
     test "code_interface? false defines no functions; the default defines one per action" do
+      Enum.each([Quiet, Owned, Kept, WebhookEvent], &Code.ensure_loaded!/1)
       refute Info.mishka_pay_code_interface?(Quiet)
       assert Info.mishka_pay_code_interface?(Owned)
       refute function_exported?(Quiet, :sync, 1)

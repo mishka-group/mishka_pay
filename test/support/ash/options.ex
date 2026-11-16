@@ -15,6 +15,8 @@ defmodule MishkaPay.Support.Options do
     resource MishkaPay.Support.Options.Quiet
     resource MishkaPay.Support.Options.Owned
     resource MishkaPay.Support.Options.Kept
+    resource MishkaPay.Support.Options.Site
+    resource MishkaPay.Support.Options.Located
   end
 end
 
@@ -109,6 +111,53 @@ defmodule MishkaPay.Support.Options.Kept do
   # ETS checks no identity itself: the host's own identity, which the kind keeps, says how.
   identities do
     identity :provider_dispute, [:provider, :provider_id],
+      pre_check_with: MishkaPay.Support.Options
+  end
+end
+
+defmodule MishkaPay.Support.Options.Site do
+  @moduledoc "A host's site, for `tenant_from` on a `belongs_to :site`."
+
+  use Ash.Resource, domain: MishkaPay.Support.Options, data_layer: Ash.DataLayer.Ets
+
+  actions do
+    defaults [:read]
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+end
+
+defmodule MishkaPay.Support.Options.Located do
+  @moduledoc """
+  Payments of a host that keeps sites apart on its own `belongs_to :site`, without Ash
+  multitenancy: `tenant_from :site_id` writes each row's tenant there.
+  """
+
+  use Ash.Resource,
+    domain: MishkaPay.Support.Options,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [MishkaPay.Ash.Resource]
+
+  ets do
+    private? true
+  end
+
+  mishka_pay do
+    kind :payment
+    actions [:sync]
+    listen? false
+    announce? false
+    tenant_from :site_id
+  end
+
+  relationships do
+    belongs_to :site, MishkaPay.Support.Options.Site, public?: true
+  end
+
+  identities do
+    identity :provider_payment, [:provider, :provider_id],
       pre_check_with: MishkaPay.Support.Options
   end
 end

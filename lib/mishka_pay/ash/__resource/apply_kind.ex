@@ -32,7 +32,8 @@ if Code.ensure_loaded?(Ash) do
 
       with {:ok, kind} <- kind(dsl, module),
            {:ok, actions} <- actions(dsl, kind, module),
-           :ok <- oban(dsl, kind, module) do
+           :ok <- oban(dsl, kind, module),
+           {:ok, tenant_from} <- tenant_from(dsl, kind, module) do
         announce? = Info.mishka_pay_announce?(dsl)
 
         chosen =
@@ -57,6 +58,7 @@ if Code.ensure_loaded?(Ash) do
           Builder.add_new_action(dsl, type, name, opts)
         end)
         |> interfaces(Info.mishka_pay_code_interface?(dsl), actions)
+        |> tenant_change(tenant_from)
         |> trigger(kind, module)
         |> listener(Info.mishka_pay_listen?(dsl), kind, module)
       end
@@ -121,6 +123,42 @@ if Code.ensure_loaded?(Ash) do
 
     defp oban(_dsl, _kind, _module), do: :ok
 
+    defp tenant_from(dsl, kind, module) do
+      case {Info.mishka_pay_tenant_from(dsl), kind} do
+        {:error, _kind} ->
+          {:ok, nil}
+
+        {{:ok, _attribute}, :inbox} ->
+          error(module, [:mishka_pay, :tenant_from], """
+          An :inbox stays global: a webhook arrives before any tenant is chosen. Leave
+          `tenant_from` out.
+          """)
+
+        {{:ok, attribute}, _kind} ->
+          case holds?(dsl, attribute) do
+            true ->
+              {:ok, attribute}
+
+            false ->
+              error(module, [:mishka_pay, :tenant_from], """
+              tenant_from #{inspect(attribute)}: #{inspect(module)} has no such attribute, nor a
+              belongs_to whose attribute it is. Define it, such as `belongs_to :site, MyApp.Site`.
+              """)
+          end
+      end
+    end
+
+    # A belongs_to's attribute is added by Ash after this transformer, so it is found through the
+    # relationship.
+    defp holds?(dsl, attribute) do
+      not is_nil(Ash.Resource.Info.attribute(dsl, attribute)) or
+        Enum.any?(Ash.Resource.Info.relationships(dsl), fn relationship ->
+          relationship.type == :belongs_to and
+            (relationship.source_attribute || "#{relationship.name}_id") |> to_string() ==
+              to_string(attribute)
+        end)
+    end
+
     defp primary_key(dsl) do
       case Enum.any?(Ash.Resource.Info.attributes(dsl), & &1.primary_key?) do
         true ->
@@ -139,6 +177,12 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp identity(dsl, {name, fields}), do: Builder.add_new_identity(dsl, name, fields)
+
+    defp tenant_change(dsl, nil), do: dsl
+
+    defp tenant_change(dsl, attribute),
+      do:
+        Builder.add_change(dsl, {MishkaPay.Ash.Tenant.Into, attribute: attribute}, on: [:create])
 
     defp user(dsl, :error), do: dsl
 
