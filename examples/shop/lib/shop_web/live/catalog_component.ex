@@ -189,7 +189,7 @@ defmodule ShopWeb.CatalogComponent do
           <tbody data-testid="catalog-rows">
             <tr :if={@stripe == []}>
               <td colspan="4" class="text-center opacity-70" data-testid="catalog-empty">
-                Nothing here yet. Publish the shop's products.
+                {empty_text(@active)}
               </td>
             </tr>
             <tr
@@ -323,6 +323,10 @@ defmodule ShopWeb.CatalogComponent do
         say(socket, :error, MishkaPay.Ash.message(error))
     end
   end
+
+  defp empty_text("false"), do: "No archived products."
+  defp empty_text("true"), do: "No product on sale yet. Publish the shop's products."
+  defp empty_text(_all), do: "Stripe's catalog is empty. Publish the shop's products."
 
   defp active("true"), do: [active: true]
   defp active("false"), do: [active: false]
