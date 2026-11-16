@@ -33,7 +33,9 @@ defmodule MishkaPay.Providers.Stripe do
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription.
     * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` keep
-      Customers (`cus_...`), with the reference in their metadata; `portal_session/2` opens a
+      Customers (`cus_...`), with the reference in their metadata; `create_tax_id/2`,
+      `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids (`txi_...`);
+      `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
@@ -78,6 +80,7 @@ defmodule MishkaPay.Providers.Stripe do
       :subscription_change,
       :invoice,
       :customer,
+      :tax_id,
       :portal,
       :discount,
       :webhook,
@@ -145,7 +148,10 @@ defmodule MishkaPay.Providers.Stripe do
     "customer.subscription.trial_will_end" => [:subscription],
     "customer.created" => [:customer],
     "customer.updated" => [:customer],
-    "customer.deleted" => [:customer]
+    "customer.deleted" => [:customer],
+    "customer.tax_id.created" => [:customer],
+    "customer.tax_id.updated" => [:customer],
+    "customer.tax_id.deleted" => [:customer]
   }
 
   @doc """
@@ -567,6 +573,38 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def list_customers(opts, keys),
     do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
+
+  # A tax id has no reference of its own, so it goes without a fixed idempotency key: the same
+  # number added again after a delete must make a new one.
+  @impl MishkaPay.Provider
+  def create_tax_id(%MishkaPay.TaxId{customer_id: customer_id} = tax_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/customers/#{customer_id}/tax_ids",
+             Mapper.tax_id_params(tax_id),
+             keys
+           ) do
+      Mapper.tax_id(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_tax_ids(opts, keys) do
+    with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
+      page("/v1/customers/#{opts[:customer_id]}/tax_ids", [], opts, keys, &Mapper.tax_id/1)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def delete_tax_id(customer_id, tax_id_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         :ok <- stripe_id(tax_id_id, "txi_", :tax_id_id),
+         {:ok, _deleted} <-
+           request(:delete, "/v1/customers/#{customer_id}/tax_ids/#{tax_id_id}", [], keys),
+         do: :ok
+  end
 
   # Stripe's search language: each filter quoted, a quote inside escaped; the reference is kept
   # in the customer's metadata. Search pages on its own `next_page` cursor.

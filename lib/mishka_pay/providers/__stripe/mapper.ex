@@ -21,7 +21,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Product,
     PromotionCode,
     Refund,
-    Subscription
+    Subscription,
+    TaxId
   }
 
   @reference "mishka_pay_reference"
@@ -504,6 +505,38 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  @tax_id_checks %{
+    "pending" => :pending,
+    "verified" => :verified,
+    "unverified" => :unverified,
+    "unavailable" => :unavailable
+  }
+
+  @doc "Params of `POST /v1/customers/:id/tax_ids`: its kind and its number."
+  @spec tax_id_params(TaxId.t()) :: map()
+  def tax_id_params(%TaxId{} = tax_id), do: %{"type" => tax_id.type, "value" => tax_id.value}
+
+  @doc "A Stripe tax id (`object: \"tax_id\"`) as a `MishkaPay.TaxId`, with its register check."
+  @spec tax_id(map()) :: {:ok, TaxId.t()} | {:error, Splode.Error.t()}
+  def tax_id(tax_id) do
+    check = tax_id["verification"] || %{}
+
+    %{
+      provider: "stripe",
+      id: tax_id["id"],
+      customer_id: id_of(tax_id["customer"]),
+      type: tax_id["type"],
+      value: tax_id["value"],
+      country: tax_id["country"],
+      verification: Map.get(@tax_id_checks, check["status"]),
+      verified_name: blank(check["verified_name"]),
+      verified_address: blank(check["verified_address"]),
+      created_at: time(tax_id["created"])
+    }
+    |> TaxId.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   @doc "An Invoice as a `MishkaPay.Invoice`."
   @spec invoice(map()) :: {:ok, Invoice.t()} | {:error, Splode.Error.t()}
   def invoice(invoice) do
@@ -773,6 +806,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       payment_id: payment_of(object),
       subscription_id: subscription_of(object),
       dispute_id: dispute_of(object),
+      customer_id: customer_of(object),
       livemode: event["livemode"],
       account: event["account"],
       created_at: time(event["created"])
@@ -803,6 +837,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp dispute_of(%{"object" => "dispute", "id" => id}) when is_binary(id), do: id
   defp dispute_of(_other), do: nil
+
+  # The customer itself, or the one a tax id belongs to. A payment or a subscription names its
+  # customer too, but the event is about them, not about the customer.
+  defp customer_of(%{"object" => "customer", "id" => id}) when is_binary(id), do: id
+  defp customer_of(%{"object" => "tax_id", "customer" => customer}), do: id_of(customer)
+  defp customer_of(_other), do: nil
 
   @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)
 

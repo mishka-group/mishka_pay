@@ -24,7 +24,7 @@
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, test clocks `clock_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -89,8 +89,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   `:reference`; `:default_payment_method` is the customer's invoice default.
 - The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
   pass `configuration: "bpc_..."` to use another.
-- Stripe sends `customer.created`, `customer.updated` and `customer.deleted`; the Ash customer
-  listener syncs the row on each.
+- Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and
+  `customer.tax_id.created`, `.updated` and `.deleted` for a customer's tax ids; the event's
+  `:customer_id` names the customer, and the Ash customer listener syncs the row on each.
+- Tax ids start with `txi_`. Stripe checks EU VAT, GB VAT and AU ABN numbers against the
+  government register after they are added: `:verification` is `:pending` first, and
+  `customer.tax_id.updated` comes when the check ends. Other kinds get their format checked only.
+  In a sandbox, a number of `000000000` (`DE000000000`) verifies, `111111111` does not, and
+  `222222222` stays pending.
 - `list_customers/3` leaves out customers made on a test clock (Stripe's list does); read those by
   id with `fetch_customer/3`.
 - A `reference` reused within 24 hours with other details is `Errors.Rejected` with code

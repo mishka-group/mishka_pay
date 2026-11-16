@@ -88,6 +88,7 @@ if Code.ensure_loaded?(Ash) do
         {:payment_id, :string, public()},
         {:subscription_id, :string, public()},
         {:dispute_id, :string, public()},
+        {:customer_id, :string, public()},
         {:livemode, :boolean, required(default: false)},
         {:account, :string, public()},
         {:provider_created_at, :utc_datetime_usec, public()},

@@ -31,6 +31,8 @@ end
     `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
   - `:event_list`: `list_events/2`; optional `check_keys/1` (one read that changes nothing);
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
+  - `:tax_id`: `create_tax_id/2`, `list_tax_ids/2` (`:customer_id` in its options),
+    `delete_tax_id/3`;
   - `:portal`: `portal_session/2`;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
     `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,

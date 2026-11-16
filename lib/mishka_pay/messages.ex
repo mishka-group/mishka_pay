@@ -56,6 +56,7 @@ defmodule MishkaPay.Messages do
           | :proration_date
           | :managed_payments_invoice
           | :tax_code_missing
+          | :tax_id_invalid
           | :one_time_only
           | :recurring_only
           | :rejected_param
@@ -263,6 +264,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "A merchant of record sells only products with a tax category: give the product one, or turn merchant of record off"
+      )
+
+  defp msgid(:tax_id_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The tax id number does not have the form its kind needs: check the number and its country"
       )
 
   defp msgid(:one_time_only),

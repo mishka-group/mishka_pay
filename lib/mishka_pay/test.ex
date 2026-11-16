@@ -243,12 +243,19 @@ defmodule MishkaPay.Test do
       "parent" => %{"subscription_details" => %{"subscription" => "sub_test"}}
     },
     subscription: %{"object" => "subscription", "id" => "sub_test", "status" => "active"},
-    customer: %{"object" => "customer", "id" => "cus_test", "email" => "buyer@example.com"}
+    customer: %{"object" => "customer", "id" => "cus_test", "email" => "buyer@example.com"},
+    tax_id: %{
+      "object" => "tax_id",
+      "id" => "txi_test",
+      "customer" => "cus_test",
+      "type" => "eu_vat",
+      "value" => "DE123456789"
+    }
   }
 
   @doc """
   One Stripe object of `kind` (`:payment_intent`, `:checkout_session`, `:charge`, `:refund`,
-  `:dispute`, `:invoice`, `:subscription` or `:customer`), with the ids Mishka Pay reads from it,
+  `:dispute`, `:invoice`, `:subscription`, `:customer` or `:tax_id`), with the ids Mishka Pay reads from it,
   and `overrides` merged on top.
   """
   @spec stripe_object(atom(), map()) :: map()

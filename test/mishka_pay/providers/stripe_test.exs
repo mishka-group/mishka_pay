@@ -394,6 +394,40 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_customer("stripe", "pi_123", "site-a")
     end
 
+    test "a customer's tax ids are added, listed and removed as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.TaxId{provider: "stripe", id: "txi_" <> _, type: type}} =
+               MishkaPay.create_tax_id(
+                 "stripe",
+                 "cus_123",
+                 %{"type" => " EU_VAT ", "value" => "DE123456789"},
+                 "site-a"
+               )
+
+      assert type == "eu_vat"
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxId{id: "txi_" <> _} | _]}} =
+               MishkaPay.list_tax_ids("stripe", "cus_123", "site-a", limit: 3)
+
+      assert :ok = MishkaPay.delete_tax_id("stripe", "cus_123", "txi_123", "site-a")
+    end
+
+    test "a tax id that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      vat = %{type: "eu_vat", value: "DE123456789"}
+
+      for {call, field} <- [
+            {fn -> MishkaPay.create_tax_id("stripe", "cus_1", %{vat | type: "eu vat"}) end,
+             :type},
+            {fn -> MishkaPay.create_tax_id("stripe", "cus_1", %{type: "eu_vat"}) end, :value},
+            {fn -> MishkaPay.create_tax_id("stripe", "pi_1", vat) end, :customer_id},
+            {fn -> MishkaPay.list_tax_ids("stripe", "cus_1/../x") end, :customer_id},
+            {fn -> MishkaPay.delete_tax_id("stripe", "cus_1", "cus_2") end, :tax_id_id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = call.()
+        assert Enum.any?(errors, &(&1.field == field)), inspect({field, errors})
+      end
+    end
+
     test "a subscription checkout sends recurring prices and its trial as Stripe's spec accepts" do
       monthly = %{name: "Pro plan", amount: %{amount: "9", currency: "USD"}, interval: :month}
 
@@ -1416,6 +1450,47 @@ defmodule MishkaPay.Providers.StripeTest do
              Stripe.Mapper.customer(%{"id" => "cus_2", "deleted" => true})
   end
 
+  test "a tax id maps with its country and its register check, and an unchecked kind has none" do
+    assert {:ok,
+            %MishkaPay.TaxId{
+              id: "txi_1",
+              customer_id: "cus_1",
+              type: "eu_vat",
+              value: "DE123456789",
+              country: "DE",
+              verification: :verified,
+              verified_name: "Muster GmbH",
+              verified_address: nil,
+              created_at: %DateTime{}
+            }} =
+             Stripe.Mapper.tax_id(%{
+               "id" => "txi_1",
+               "object" => "tax_id",
+               "country" => "DE",
+               "created" => 1_679_431_857,
+               "customer" => "cus_1",
+               "livemode" => false,
+               "type" => "eu_vat",
+               "value" => "DE123456789",
+               "verification" => %{
+                 "status" => "verified",
+                 "verified_address" => "",
+                 "verified_name" => "Muster GmbH"
+               }
+             })
+
+    assert {:ok, %MishkaPay.TaxId{type: "us_ein", verification: nil}} =
+             Stripe.Mapper.tax_id(%{
+               "id" => "txi_2",
+               "object" => "tax_id",
+               "country" => "US",
+               "customer" => %{"id" => "cus_1", "object" => "customer"},
+               "type" => "us_ein",
+               "value" => "12-3456789",
+               "verification" => nil
+             })
+  end
+
   test "a checkout read back brings its totals and the buyer's email" do
     checkout =
       Stripe.Mapper.checkout(%{
@@ -1533,7 +1608,8 @@ defmodule MishkaPay.Providers.StripeTest do
       "payment" => %{"type" => "payment_intent", "payment_intent" => "pi_1"}
     },
     "customer.subscription" => %{"object" => "subscription", "id" => "sub_1"},
-    "customer" => %{"object" => "customer", "id" => "cus_1"}
+    "customer" => %{"object" => "customer", "id" => "cus_1"},
+    "customer.tax_id" => %{"object" => "tax_id", "id" => "txi_1", "customer" => "cus_1"}
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do
@@ -1573,7 +1649,7 @@ defmodule MishkaPay.Providers.StripeTest do
   defp named?(event, :payment), do: event.payment_id == "pi_1"
   defp named?(event, :subscription), do: event.subscription_id == "sub_1"
   defp named?(event, :dispute), do: event.dispute_id == "dp_1"
-  defp named?(event, :customer), do: {event.object_type, event.object_id} == {"customer", "cus_1"}
+  defp named?(event, :customer), do: event.customer_id == "cus_1"
 
   test "a dispute maps with its status, due date and evidence count" do
     assert {:ok,

@@ -57,6 +57,7 @@ defmodule MishkaPay.Provider do
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
       `search_customers/2`;
+    * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
     * `:portal`: `portal_session/2`;
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
     * `:catalog`: products and prices (`create_product/2` and the rest);
@@ -89,6 +90,7 @@ defmodule MishkaPay.Provider do
     :subscription_change,
     :invoice,
     :customer,
+    :tax_id,
     :portal,
     :discount,
     :catalog,
@@ -112,6 +114,7 @@ defmodule MishkaPay.Provider do
       previews what that bills, and pauses or resumes its collection.
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:customer`: keeps buyers (create, read, update, list).
+    * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
@@ -131,6 +134,7 @@ defmodule MishkaPay.Provider do
           | :subscription_change
           | :invoice
           | :customer
+          | :tax_id
           | :portal
           | :discount
           | :catalog
@@ -316,6 +320,21 @@ defmodule MishkaPay.Provider do
   @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:tax_id`. Adds a tax id to the customer it names (`:customer_id`), and answers it."
+  @callback create_tax_id(MishkaPay.TaxId.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxId.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. One page of the tax ids of customer `:customer_id`."
+  @callback list_tax_ids(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_id`. Removes one tax id from a customer."
+  @callback delete_tax_id(
+              customer_id :: String.t(),
+              tax_id_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: :ok | {:error, Splode.Error.t()}
+
   @doc "With `:portal`. Opens the provider's billing page for a customer and answers its `:url`."
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PortalSession.t()} | {:error, Splode.Error.t()}
@@ -472,6 +491,9 @@ defmodule MishkaPay.Provider do
                       fetch_customer: 2,
                       update_customer: 2,
                       list_customers: 2,
+                      create_tax_id: 2,
+                      list_tax_ids: 2,
+                      delete_tax_id: 3,
                       portal_session: 2,
                       create_coupon: 2,
                       fetch_coupon: 2,
@@ -536,6 +558,7 @@ defmodule MishkaPay.Provider do
       list_customers: 2,
       search_customers: 2
     ],
+    tax_id: [create_tax_id: 2, list_tax_ids: 2, delete_tax_id: 3],
     portal: [portal_session: 2],
     discount: [
       create_coupon: 2,

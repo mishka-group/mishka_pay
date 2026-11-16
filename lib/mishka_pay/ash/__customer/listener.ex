@@ -6,8 +6,9 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Customer.Listener do
     @moduledoc """
     Makes a module the `mishka_pay:event:process` listener that syncs the customer an event is
-    about (`customer.created`, `customer.updated`, `customer.deleted` on Stripe) into a customer
-    resource (the `:customer` kind of `MishkaPay.Ash.Resource`):
+    about (`customer.created`, `customer.updated`, `customer.deleted`, and `customer.tax_id.*` for
+    one of its tax ids, on Stripe) into a customer resource (the `:customer` kind of
+    `MishkaPay.Ash.Resource`):
 
         defmodule MyApp.Pay.CustomerSync do
           use MishkaPay.Ash.Customer.Listener, resource: MyApp.Pay.Customer
@@ -33,7 +34,7 @@ if Code.ensure_loaded?(Ash) do
         @impl true
         def call(
               %{
-                event: %MishkaPay.Event{object_type: "customer", object_id: id} = event,
+                event: %MishkaPay.Event{customer_id: id} = event,
                 failed: nil
               } =
                 state
@@ -47,6 +48,6 @@ if Code.ensure_loaded?(Ash) do
 
     @doc false
     def sync(resource, event, state),
-      do: MishkaPay.Ash.sync_event(resource, :customer_id, event.object_id, event, state)
+      do: MishkaPay.Ash.sync_event(resource, :customer_id, event.customer_id, event, state)
   end
 end

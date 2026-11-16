@@ -463,6 +463,45 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.portal_session(session)
   end
 
+  test "a business buyer's VAT number is added to a new customer, listed and removed" do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        email: "vat-#{run}@example.com",
+        reference: "vat-#{run}"
+      })
+
+    # Stripe's sandbox verifies an EU VAT number of 000000000.
+    assert {:ok,
+            %MishkaPay.TaxId{
+              id: "txi_" <> _ = id,
+              customer_id: ^customer_id,
+              type: "eu_vat",
+              value: "DE000000000",
+              country: "DE",
+              verification: check
+            }} =
+             MishkaPay.create_tax_id("stripe", customer_id, %{
+               type: "eu_vat",
+               value: "DE000000000"
+             })
+
+    assert check in [:pending, :verified]
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxId{id: ^id}]}} =
+             MishkaPay.list_tax_ids("stripe", customer_id)
+
+    assert {:error, %Errors.Rejected{code: "tax_id_invalid"} = error} =
+             MishkaPay.create_tax_id("stripe", customer_id, %{type: "eu_vat", value: "DE12"})
+
+    assert Exception.message(error) =~ "tax id"
+
+    assert :ok = MishkaPay.delete_tax_id("stripe", customer_id, id)
+    assert {:ok, %MishkaPay.Page{items: []}} = MishkaPay.list_tax_ids("stripe", customer_id)
+  end
+
   test "a promotion code lowers a real checkout, and an expired checkout cannot be paid" do
     run = System.unique_integer([:positive])
 
