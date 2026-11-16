@@ -7,6 +7,8 @@ defmodule Shop.Application do
 
   @impl true
   def start(_type, _args) do
+    Shop.Pay.TelemetryFeed.attach()
+
     children = [
       ShopWeb.Telemetry,
       Shop.Repo,
@@ -17,6 +19,7 @@ defmodule Shop.Application do
       # that stores each webhook, the sync that keeps the payments table, and the live feed.
       MishkaPay.Providers.Stripe,
       Shop.Pay.Keys,
+      Shop.Pay.Gate,
       Shop.Pay.Inbox,
       Shop.Pay.PaymentSync,
       Shop.Pay.LiveFeed,

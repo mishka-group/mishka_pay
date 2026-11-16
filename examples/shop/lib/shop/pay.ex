@@ -7,8 +7,8 @@ defmodule Shop.Pay do
   use Ash.Domain, otp_app: :shop
 
   resources do
-    resource(Shop.Pay.Payment)
-    resource(Shop.Pay.WebhookEvent)
-    resource(Shop.Pay.Setting)
+    resource Shop.Pay.Payment
+    resource Shop.Pay.WebhookEvent
+    resource Shop.Pay.Setting
   end
 end

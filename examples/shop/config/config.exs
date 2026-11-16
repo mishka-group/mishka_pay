@@ -47,7 +47,7 @@ config :ash,
   bulk_actions_default_to_errors?: true,
   transaction_rollback_on_error?: true
 
-config :spark, formatter: [remove_parens?: true]
+config :spark, formatter: [remove_parens?: true, "Ash.Resource": [], "Ash.Domain": []]
 
 # The shop converts no currencies.
 config :ex_money, auto_start_exchange_rate_service: false

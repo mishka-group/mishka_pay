@@ -74,6 +74,7 @@ defmodule Shop.MixProject do
       {:ash, "~> 3.37"},
       {:ash_postgres, "~> 2.15"},
       {:ash_oban, "~> 0.10.3"},
+      {:sourceror, "~> 1.13", only: [:dev, :test]},
       # Mishka Pay takes guarded_struct's fix branch until its next release.
       {:guarded_struct,
        github: "mishka-group/guarded_struct", branch: "fix/not-nil-value-on-nil", override: true}

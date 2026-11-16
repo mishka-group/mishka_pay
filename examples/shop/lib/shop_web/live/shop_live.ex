@@ -1,15 +1,24 @@
 defmodule ShopWeb.ShopLive do
   @moduledoc """
-  The demo shop's one page, on the Stripe sandbox: buy a product, see every payment the shop knows
-  (newest first, live), refund one, pull an older sandbox payment in by its id, and change the
-  site's payment settings, which Mishka Pay reads on its next call.
+  The demo shop's one page, on the Stripe sandbox. It shows every part of Mishka Pay by hand:
+
+    * the installed providers and the site's keys and settings, as Mishka Pay reads them;
+    * a checkout with its options (quantity, buyer email, merchant of record, metadata), through
+      the site's checkout gate;
+    * every payment, live, with its details from the database and from Stripe, its webhook events,
+      sync and refund;
+    * reading a checkout or a payment back by its id;
+    * the webhook inbox and every telemetry event, live;
+    * the site settings, read again on the next call.
   """
 
   use ShopWeb, :live_view
 
   require Ash.Query
 
-  alias Shop.Pay.{LiveFeed, Payment, Setting}
+  import ShopWeb.PayComponents
+
+  alias Shop.Pay.{LiveFeed, Payment, Setting, TelemetryFeed, WebhookEvent}
 
   @tenant "demo"
 
@@ -25,29 +34,29 @@ defmodule ShopWeb.ShopLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Phoenix.PubSub.subscribe(Shop.PubSub, LiveFeed.topic())
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Shop.PubSub, LiveFeed.topic())
+      Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
+      ShopWeb.Endpoint.subscribe("pay:inbox")
+    end
 
-    payments = list_payments()
+    payments = newest_rows(Payment)
 
     {:ok,
      socket
-     |> assign(
-       page_title: "Mishka Pay demo shop",
-       products: @products,
-       tenant: @tenant,
-       keys?: keys?(),
-       setting: setting()
-     )
-     |> assign(last: List.first(payments))
-     |> stream(:payments, payments)}
+     |> assign(page_title: "Mishka Pay demo shop", products: @products, tenant: @tenant)
+     |> assign(last: List.first(payments), selected: nil, checkout_read: nil)
+     |> assign_status()
+     |> stream(:payments, payments)
+     |> stream(:inbox, newest_rows(WebhookEvent))
+     |> stream(:telemetry, [], limit: 30)}
   end
 
   @impl true
   def handle_params(%{"session_id" => session_id}, _uri, socket) do
-    case connected?(socket) and back_from_checkout(session_id) do
+    case connected?(socket) do
+      true -> {:noreply, socket |> back_from_checkout(session_id) |> push_patch(to: ~p"/")}
       false -> {:noreply, socket}
-      {:ok, message} -> {:noreply, socket |> flash(:info, message) |> push_patch(to: ~p"/")}
-      {:error, message} -> {:noreply, socket |> flash(:error, message) |> push_patch(to: ~p"/")}
     end
   end
 
@@ -67,32 +76,21 @@ defmodule ShopWeb.ShopLive do
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_event("buy", %{"id" => id}, socket) do
+  def handle_event("buy", %{"product" => id} = params, socket) do
     product = Enum.find(@products, &(&1.id == id))
 
-    checkout = %{
-      provider: "stripe",
-      tenant: @tenant,
-      items: [
-        %{
-          name: product.name,
-          amount: %{amount: product.price, currency: "USD"},
-          tax_code: @tax_code
-        }
-      ],
-      success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: url(~p"/?canceled=1"),
-      reference: "#{product.id}-#{Ecto.UUID.generate()}"
-    }
-
     Payment
-    |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout})
+    |> Ash.ActionInput.for_action(:start_checkout, %{checkout: checkout(product, params)})
     |> Ash.run_action(authorize?: false)
     |> case do
       {:ok, %{url: url}} -> {:noreply, redirect(socket, external: url)}
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
+
+  def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
+
+  def handle_event("close", _params, socket), do: {:noreply, assign(socket, selected: nil)}
 
   def handle_event("refund", %{"payment" => id} = params, socket) do
     with {:ok, payment} <- Ash.get(Payment, id, authorize?: false),
@@ -103,6 +101,7 @@ defmodule ShopWeb.ShopLive do
       {:noreply,
        socket
        |> stream_insert(:payments, refunded)
+       |> select(refunded.id, refunded.__metadata__.refund)
        |> flash(:info, "Refunded. Stripe gives the money back to the card.")}
     else
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
@@ -115,10 +114,18 @@ defmodule ShopWeb.ShopLive do
         {:noreply,
          socket
          |> stream_insert(:payments, payment, at: 0)
-         |> flash(:info, "Payment read from Stripe.")}
+         |> select(payment.id)
+         |> flash(:info, "Payment read from Stripe and saved.")}
 
       {:error, error} ->
         {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  def handle_event("read_checkout", %{"checkout_id" => checkout_id}, socket) do
+    case MishkaPay.fetch_checkout("stripe", String.trim(checkout_id), @tenant) do
+      {:ok, checkout} -> {:noreply, socket |> clear_flash() |> assign(checkout_read: checkout)}
+      {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
 
@@ -126,14 +133,15 @@ defmodule ShopWeb.ShopLive do
     attrs = %{
       tenant: @tenant,
       refunds: params["refunds"],
-      merchant_of_record: merchant_of_record(params["merchant_of_record"])
+      merchant_of_record: on_off(params["merchant_of_record"]),
+      open: params["open"] == "true"
     }
 
     case Ash.create(Setting, attrs, action: :save, authorize?: false) do
-      {:ok, setting} ->
+      {:ok, _setting} ->
         {:noreply,
          socket
-         |> assign(setting: setting)
+         |> assign_status()
          |> flash(:info, "Saved. The next checkout or refund uses it, no restart.")}
 
       {:error, error} ->
@@ -149,58 +157,38 @@ defmodule ShopWeb.ShopLive do
      |> assign(last: newest(socket.assigns.last, record))}
   end
 
+  def handle_info({:telemetry, entry}, socket),
+    do: {:noreply, stream_insert(socket, :telemetry, entry, at: 0)}
+
+  def handle_info(%Phoenix.Socket.Broadcast{topic: "pay:inbox", payload: notification}, socket),
+    do: {:noreply, stream_insert(socket, :inbox, notification.data, at: 0)}
+
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash}>
-      <div :if={!@keys?} role="alert" class="alert alert-warning">
-        <.icon name="hero-key" class="size-5" />
-        <span>
-          Set <code>STRIPE_SECRET_KEY</code> to your sandbox key (<code>sk_test_...</code>) and
-          start the server again.
-        </span>
-      </div>
+      <.status providers={@providers} keys={@keys} setting={@setting} tenant={@tenant} />
 
       <section>
-        <h2 class="text-lg font-semibold mb-3">Buy something</h2>
-        <div class="grid gap-4 sm:grid-cols-3">
-          <div :for={product <- @products} class="card bg-base-200">
-            <div class="card-body">
-              <.icon name={product.icon} class="size-8 text-primary" />
-              <h3 class="card-title">{product.name}</h3>
-              <p class="text-2xl font-semibold">${product.price}</p>
-              <button
-                class="btn btn-primary"
-                phx-click="buy"
-                phx-value-id={product.id}
-                phx-disable-with="Opening Stripe..."
-              >
-                Buy with Stripe
-              </button>
-            </div>
+        <.section_title icon="hero-shopping-cart" title="Buy something" />
+        <form id="buy" phx-submit="buy" class="space-y-4">
+          <div class="grid gap-4 sm:grid-cols-3">
+            <.product :for={product <- @products} product={product} open?={@setting.open} />
           </div>
-        </div>
+          <.checkout_options />
+        </form>
         <p class="text-sm opacity-70 mt-2">
-          Pay with the test card <code>4242 4242 4242 4242</code>, any future date and any CVC.
+          Test card <code>4242 4242 4242 4242</code>, any future date, any CVC.
+          <code>4000 0000 0000 0002</code>
+          is declined.
         </p>
       </section>
 
-      <section :if={@last} class="card bg-base-200 border border-success/40">
-        <div class="card-body flex-row items-center gap-4">
-          <.icon name="hero-shopping-bag" class="size-8 text-success" />
-          <div class="flex-1">
-            <p class="text-sm opacity-70">Last bought</p>
-            <p class="text-lg font-semibold">
-              {product_name(@last.reference)} · {money(@last.amount, @last.currency)}
-            </p>
-          </div>
-          <span class={["badge", status_class(@last.status)]}>{@last.status}</span>
-        </div>
-      </section>
+      <.last_bought :if={@last} payment={@last} />
 
       <section>
         <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
-          <h2 class="text-lg font-semibold">Payments</h2>
+          <.section_title icon="hero-banknotes" title="Payments" />
           <form phx-submit="sync" class="join">
             <input
               name="payment_id"
@@ -208,128 +196,111 @@ defmodule ShopWeb.ShopLive do
               class="input input-sm join-item"
               required
             />
-            <button class="btn btn-sm join-item">Read from Stripe</button>
+            <button class="btn btn-sm join-item">Read payment</button>
           </form>
         </div>
-
-        <div class="overflow-x-auto rounded-box border border-base-300">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Amount</th>
-                <th>Refunded</th>
-                <th>Status</th>
-                <th>Refund</th>
-              </tr>
-            </thead>
-            <tbody id="payments" phx-update="stream">
-              <tr id="payments-empty" class="only:table-row hidden">
-                <td colspan="5" class="text-center opacity-70">
-                  No payments yet. Buy something above.
-                </td>
-              </tr>
-              <tr :for={{dom_id, payment} <- @streams.payments} id={dom_id}>
-                <td>
-                  <div class="font-medium">{product_name(payment.reference)}</div>
-                  <div class="text-xs opacity-60 font-mono">{payment.provider_id}</div>
-                </td>
-                <td>{money(payment.amount, payment.currency)}</td>
-                <td>{money(payment.amount_refunded, payment.currency)}</td>
-                <td><span class={["badge", status_class(payment.status)]}>{payment.status}</span></td>
-                <td>
-                  <form
-                    :if={payment.status in [:paid, :partially_refunded]}
-                    phx-submit="refund"
-                    class="join"
-                  >
-                    <input type="hidden" name="payment" value={payment.id} />
-                    <input
-                      name="amount"
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      placeholder="all"
-                      class="input input-sm join-item w-24"
-                    />
-                    <button class="btn btn-sm btn-warning join-item" phx-disable-with="...">
-                      Refund
-                    </button>
-                  </form>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <.payments_table payments={@streams.payments} />
       </section>
 
-      <section class="card bg-base-200">
-        <form phx-submit="save_settings" class="card-body gap-4">
-          <div>
-            <h2 class="card-title">Site settings</h2>
-            <p class="text-sm opacity-70">
-              Kept in the database for the site <code>{@tenant}</code> and read by Mishka Pay on
-              every call. In a multi-site project each site has its own.
-            </p>
-          </div>
+      <.payment_details :if={@selected} selected={@selected} live={@live} />
 
-          <fieldset class="fieldset">
-            <legend class="fieldset-legend">Refunds</legend>
-            <label class="label">
-              <input
-                type="radio"
-                name="refunds"
-                value="once"
-                class="radio radio-sm"
-                checked={@setting.refunds == :once}
-              /> Once per payment: buying again is a new payment
-            </label>
-            <label class="label">
-              <input
-                type="radio"
-                name="refunds"
-                value="many"
-                class="radio radio-sm"
-                checked={@setting.refunds == :many}
-              /> Many part refunds, until the payment is used up
-            </label>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend class="fieldset-legend">Stripe sells as merchant of record</legend>
-            <select name="merchant_of_record" class="select select-sm w-60">
-              <option value="" selected={is_nil(@setting.merchant_of_record)}>
-                The Stripe account's default
-              </option>
-              <option value="on" selected={@setting.merchant_of_record == true}>On</option>
-              <option value="off" selected={@setting.merchant_of_record == false}>Off</option>
-            </select>
-          </fieldset>
-
-          <div><button class="btn btn-sm">Save settings</button></div>
+      <section>
+        <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
+        <form phx-submit="read_checkout" class="join">
+          <input
+            name="checkout_id"
+            placeholder="cs_test_... (shown after each purchase)"
+            class="input input-sm join-item w-96"
+            required
+          />
+          <button class="btn btn-sm join-item">MishkaPay.fetch_checkout/3</button>
         </form>
+        <.checkout_card :if={@checkout_read} checkout={@checkout_read} />
       </section>
+
+      <div class="grid gap-8 lg:grid-cols-2">
+        <section>
+          <.section_title icon="hero-inbox-arrow-down" title="Webhook inbox" />
+          <.inbox_table events={@streams.inbox} tenant={@tenant} />
+        </section>
+        <section>
+          <.section_title icon="hero-signal" title="Telemetry, live" />
+          <.telemetry_log entries={@streams.telemetry} />
+        </section>
+      </div>
+
+      <.settings_form setting={@setting} tenant={@tenant} />
     </Layouts.app>
     """
   end
 
-  # One message at a time: a new answer replaces the last one, whatever its kind.
-  defp flash(socket, kind, message), do: socket |> clear_flash() |> put_flash(kind, message)
+  defp checkout(product, params) do
+    %{
+      provider: "stripe",
+      tenant: @tenant,
+      items: [
+        %{
+          name: product.name,
+          amount: %{amount: product.price, currency: "USD"},
+          tax_code: @tax_code,
+          quantity: quantity(params["quantity"])
+        }
+      ],
+      success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: url(~p"/?canceled=1"),
+      reference: "#{product.id}-#{Ecto.UUID.generate()}",
+      customer: blank_nil(params["email"]) && %{email: params["email"]},
+      merchant_of_record: on_off(params["merchant_of_record"]),
+      metadata: metadata(params["meta_key"], params["meta_value"])
+    }
+  end
 
   # The buyer comes back from Stripe with the session id: read it, and when it made a payment, keep
   # the payment at once rather than waiting for the webhook.
-  defp back_from_checkout(session_id) do
-    with {:ok, %{payment_id: payment_id}} when is_binary(payment_id) <-
-           MishkaPay.fetch_checkout("stripe", session_id, @tenant),
-         {:ok, _payment} <- sync(payment_id) do
-      {:ok, "Thank you! Your payment is in the list below."}
-    else
-      {:ok, _no_payment_yet} ->
-        {:ok, "Thank you! Your payment shows here once Stripe confirms it."}
+  defp back_from_checkout(socket, session_id) do
+    case MishkaPay.fetch_checkout("stripe", session_id, @tenant) do
+      {:ok, %{payment_id: payment_id} = checkout} when is_binary(payment_id) ->
+        socket = assign(socket, checkout_read: checkout)
+
+        case sync(payment_id) do
+          {:ok, payment} ->
+            socket
+            |> select(payment.id)
+            |> flash(:info, "Thank you! Your payment is below, with its details.")
+
+          {:error, error} ->
+            flash(socket, :error, MishkaPay.Ash.message(error))
+        end
+
+      {:ok, checkout} ->
+        socket
+        |> assign(checkout_read: checkout)
+        |> flash(:info, "Thank you! The payment shows once Stripe confirms it.")
 
       {:error, error} ->
-        {:error, MishkaPay.Ash.message(error)}
+        flash(socket, :error, MishkaPay.Ash.message(error))
     end
+  end
+
+  # One payment in the details panel: its row and webhook events from the database now, and the
+  # payment as Stripe has it, read in the background.
+  defp select(socket, id, refund \\ nil) do
+    payment = Ash.get!(Payment, id, load: [:money, :money_refunded], authorize?: false)
+
+    events =
+      WebhookEvent
+      |> Ash.Query.filter(payment_id == ^payment.provider_id)
+      |> Ash.Query.sort(inserted_at: :desc)
+      |> Ash.read!(authorize?: false)
+
+    socket
+    |> assign(selected: %{payment: payment, events: events, refund: refund})
+    |> assign_async(:live, fn ->
+      case MishkaPay.fetch_payment(payment.provider, payment.provider_id, payment.tenant) do
+        {:ok, live} -> {:ok, %{live: live}}
+        {:error, error} -> {:error, MishkaPay.Ash.message(error)}
+      end
+    end)
   end
 
   defp sync(payment_id) do
@@ -342,18 +313,28 @@ defmodule ShopWeb.ShopLive do
   # A site that refunds many times names each refund; the demo names it on the click. A real shop
   # would use the id of its own refund record.
   defp refund_args(payment, params) do
-    reference = %{reference: "refund-" <> Ecto.UUID.generate()}
+    args = %{reference: "refund-" <> Ecto.UUID.generate(), reason: blank_nil(params["reason"])}
 
-    case String.trim(params["amount"] || "") do
-      "" -> reference
-      amount -> Map.put(reference, :amount, %{amount: amount, currency: payment.currency})
+    case blank_nil(params["amount"]) do
+      nil -> args
+      amount -> Map.put(args, :amount, %{amount: amount, currency: payment.currency})
     end
   end
 
-  defp list_payments do
-    Payment
+  defp assign_status(socket) do
+    keys =
+      case MishkaPay.Credentials.fetch("stripe", @tenant) do
+        {:ok, keys} -> keys
+        {:error, _missing} -> nil
+      end
+
+    assign(socket, providers: MishkaPay.Provider.all(), keys: keys, setting: setting())
+  end
+
+  defp newest_rows(resource) do
+    resource
     |> Ash.Query.sort(inserted_at: :desc)
-    |> Ash.Query.limit(50)
+    |> Ash.Query.limit(30)
     |> Ash.read!(authorize?: false)
   end
 
@@ -361,10 +342,11 @@ defmodule ShopWeb.ShopLive do
     Setting
     |> Ash.Query.filter(tenant == ^@tenant)
     |> Ash.read_one!(authorize?: false)
-    |> Kernel.||(%Setting{tenant: @tenant, refunds: :once})
+    |> Kernel.||(%Setting{tenant: @tenant, refunds: :once, open: true})
   end
 
-  defp keys?, do: is_binary(System.get_env("STRIPE_SECRET_KEY"))
+  # One message at a time: a new answer replaces the last one, whatever its kind.
+  defp flash(socket, kind, message), do: socket |> clear_flash() |> put_flash(kind, message)
 
   defp newest(nil, record), do: record
 
@@ -375,26 +357,30 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  defp merchant_of_record("on"), do: true
-  defp merchant_of_record("off"), do: false
-  defp merchant_of_record(_account_default), do: nil
-
-  defp product_name(reference) when is_binary(reference) do
-    [id | _] = String.split(reference, "-", parts: 2)
-
-    case Enum.find(@products, &(&1.id == id)) do
-      %{name: name} -> name
-      nil -> "Sandbox payment"
+  defp quantity(value) do
+    case Integer.parse(value || "") do
+      {count, ""} when count > 0 -> count
+      _one -> 1
     end
   end
 
-  defp product_name(_reference), do: "Sandbox payment"
+  defp metadata(key, value) do
+    case blank_nil(key) do
+      nil -> nil
+      key -> %{key => blank_nil(value) || ""}
+    end
+  end
 
-  defp money(amount, currency), do: currency |> Money.new(amount) |> Money.to_string!()
+  defp on_off("on"), do: true
+  defp on_off("off"), do: false
+  defp on_off(_default), do: nil
 
-  defp status_class(:paid), do: "badge-success"
-  defp status_class(:refunded), do: "badge-neutral"
-  defp status_class(:partially_refunded), do: "badge-info"
-  defp status_class(status) when status in [:failed, :canceled], do: "badge-error"
-  defp status_class(_waiting), do: "badge-warning"
+  defp blank_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp blank_nil(_none), do: nil
 end

@@ -7,7 +7,7 @@ defmodule Shop.Pay.Payment do
     fragments: [MishkaPay.Ash.Payment]
 
   postgres do
-    table("payments")
-    repo(Shop.Repo)
+    table "payments"
+    repo Shop.Repo
   end
 end
