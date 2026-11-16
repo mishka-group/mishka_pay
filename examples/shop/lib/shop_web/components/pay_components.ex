@@ -392,7 +392,8 @@ defmodule ShopWeb.PayComponents do
       {"4000 0000 0000 0002", "declined"},
       {"4000 0000 0000 9995", "declined, insufficient funds"},
       {"4000 0000 0000 0069", "declined, expired card"},
-      {"4000 0000 0000 0127", "declined, wrong CVC"}
+      {"4000 0000 0000 0127", "declined, wrong CVC"},
+      {"4000 0000 0000 0259", "pays, then the bank disputes it (see Disputes)"}
     ]
   end
 
@@ -526,6 +527,13 @@ defmodule ShopWeb.PayComponents do
             <td>{money(payment.amount_refunded, payment.currency)}</td>
             <td>
               <.status_badge status={payment.status} />
+              <span
+                :if={payment.disputed}
+                class="badge badge-sm badge-error ml-1"
+                data-testid="payment-disputed"
+              >
+                disputed
+              </span>
               <div :if={payment.failure_message} class="text-xs text-error max-w-48">
                 {payment.failure_message}
               </div>

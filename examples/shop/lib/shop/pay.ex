@@ -10,6 +10,7 @@ defmodule Shop.Pay do
     resource Shop.Pay.Payment
     resource Shop.Pay.Subscription
     resource Shop.Pay.Customer
+    resource Shop.Pay.Dispute
     resource Shop.Pay.ClockRun
     resource Shop.Pay.WebhookEvent
     resource Shop.Pay.Setting

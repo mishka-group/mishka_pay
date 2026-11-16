@@ -24,11 +24,11 @@ defmodule Shop.Application do
       Shop.Pay.Inbox,
       Shop.Pay.FailingListener,
       Shop.Pay.PaymentSync,
-      Shop.Pay.LiveFeed,
       Shop.Pay.SubscriptionSync,
-      Shop.Pay.SubscriptionFeed,
       Shop.Pay.CustomerSync,
-      Shop.Pay.CustomerFeed,
+      Shop.Pay.DisputeSync,
+      # Every payment, subscription, customer and dispute change on Shop.PubSub, per site.
+      Shop.Pay.Broadcast,
       ShopWeb.Endpoint
     ]
 

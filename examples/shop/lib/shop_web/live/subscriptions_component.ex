@@ -34,9 +34,11 @@ defmodule ShopWeb.SubscriptionsComponent do
   end
 
   @impl true
-  def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
+  def handle_event("select", %{"id" => id}, socket),
+    do: {:noreply, socket |> assign(preview: nil, change: nil) |> select(id)}
 
-  def handle_event("close", _params, socket), do: {:noreply, assign(socket, selected: nil)}
+  def handle_event("close", _params, socket),
+    do: {:noreply, assign(socket, selected: nil, preview: nil, change: nil)}
 
   # The change the form describes, previewed first: the preview keeps its proration date, so
   # applying it bills exactly what it showed.
@@ -46,11 +48,7 @@ defmodule ShopWeb.SubscriptionsComponent do
 
     case MishkaPay.preview_subscription_change(change) do
       {:ok, invoice} ->
-        {:noreply,
-         assign(socket,
-           preview: invoice,
-           change: Map.put_new(change, :proration_date, invoice_date(invoice))
-         )}
+        {:noreply, assign(socket, preview: invoice, change: change)}
 
       {:error, error} ->
         {:noreply,
@@ -58,8 +56,13 @@ defmodule ShopWeb.SubscriptionsComponent do
     end
   end
 
-  def handle_event("apply_change", _params, %{assigns: %{change: change}} = socket)
-      when is_map(change) do
+  # Only the previewed subscription's own change applies, with the preview's proration date.
+  def handle_event(
+        "apply_change",
+        _params,
+        %{assigns: %{change: %{subscription_id: id} = change, selected: %{provider_id: id}}} =
+          socket
+      ) do
     args = Map.drop(change, [:provider, :tenant, :subscription_id])
     row = Ash.get!(Subscription, socket.assigns.selected.id, authorize?: false)
 
@@ -75,6 +78,11 @@ defmodule ShopWeb.SubscriptionsComponent do
       {:error, error} ->
         {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
     end
+  end
+
+  def handle_event("apply_change", _params, socket) do
+    {:noreply,
+     socket |> assign(preview: nil, change: nil) |> say(:error, "Preview the change again first.")}
   end
 
   def handle_event("cancel_change", _params, socket),
@@ -511,6 +519,10 @@ defmodule ShopWeb.SubscriptionsComponent do
               </span>
             </li>
           </ul>
+          <p :if={@preview.amount_tax} class="text-sm flex gap-2" data-testid="change-tax">
+            <span class="flex-1 opacity-70">Tax</span>
+            <span class="font-mono">{money(@preview.amount_tax)}</span>
+          </p>
           <p class="font-medium mt-2" data-testid="change-due">Due: {money(@preview.amount_due)}</p>
           <div class="flex gap-2 mt-2">
             <button
@@ -522,7 +534,12 @@ defmodule ShopWeb.SubscriptionsComponent do
             >
               Apply this change
             </button>
-            <button class="btn btn-sm btn-ghost" phx-click="cancel_change" phx-target={@myself}>
+            <button
+              class="btn btn-sm btn-ghost"
+              phx-click="cancel_change"
+              phx-target={@myself}
+              data-testid="change-cancel"
+            >
               Not now
             </button>
           </div>
@@ -639,11 +656,17 @@ defmodule ShopWeb.SubscriptionsComponent do
       payment_behavior: blank_nil(params["payment_behavior"])
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
+    |> dated()
   end
 
-  # Stripe dates a preview's lines from the proration date; the first line's start is that moment.
-  defp invoice_date(%{lines: [%{period_start: %DateTime{} = at} | _]}), do: at
-  defp invoice_date(_invoice), do: DateTime.utc_now()
+  # A change that prorates is dated once, here: the preview and the change count from the same
+  # second, so the change bills what the preview showed.
+  defp dated(change) do
+    case MishkaPay.SubscriptionChange.prorates?(change) do
+      true -> Map.put(change, :proration_date, DateTime.truncate(DateTime.utc_now(), :second))
+      false -> change
+    end
+  end
 
   defp date(value) do
     with text when is_binary(text) and text != "" <- value,
