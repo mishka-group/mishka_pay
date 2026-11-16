@@ -67,6 +67,7 @@ if Code.ensure_loaded?(Ash) do
         object_type: record.object_type,
         payment_id: record.payment_id,
         subscription_id: record.subscription_id,
+        dispute_id: record.dispute_id,
         livemode: record.livemode,
         account: record.account,
         created_at: record.provider_created_at

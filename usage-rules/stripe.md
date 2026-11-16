@@ -46,6 +46,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
 
+## Disputes
+
+- Dispute ids start with `du_` (older ones `dp_`); both are taken.
+- `pm_card_createDispute` (card 4000 0000 0000 0259) pays and opens a dispute a moment later;
+  evidence text `"winning_evidence"` wins it and `"losing_evidence"` loses it in test mode.
+- `update_dispute/1`'s `evidence` uses Stripe's own field names (`"product_description"`,
+  `"customer_email_address"`, `"uncategorized_text"`...); files need their upload id.
+
 ## Subscription changes
 
 - A preview is `POST /v1/invoices/create_preview`; its id starts with `upcoming_in_` and it is

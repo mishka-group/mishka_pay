@@ -64,6 +64,7 @@ if Code.ensure_loaded?(AshOban) do
       attribute :object_type, :string, public?: true
       attribute :payment_id, :string, public?: true
       attribute :subscription_id, :string, public?: true
+      attribute :dispute_id, :string, public?: true
       attribute :livemode, :boolean, allow_nil?: false, default: false, public?: true
       attribute :account, :string, public?: true
       attribute :provider_created_at, :utc_datetime_usec, public?: true
@@ -97,6 +98,7 @@ if Code.ensure_loaded?(AshOban) do
           :object_type,
           :payment_id,
           :subscription_id,
+          :dispute_id,
           :livemode,
           :account,
           :provider_created_at

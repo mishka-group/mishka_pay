@@ -58,6 +58,7 @@ defmodule MishkaPay.Provider do
     * `:catalog`: products and prices (`create_product/2` and the rest);
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
       `update_payment_link/2`;
+    * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
     * `:webhook`: `verify_webhook/3`.
 
   Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
@@ -85,6 +86,7 @@ defmodule MishkaPay.Provider do
     :discount,
     :catalog,
     :payment_link,
+    :dispute,
     :webhook,
     :return_verify
   ]
@@ -104,6 +106,7 @@ defmodule MishkaPay.Provider do
     * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
+    * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
     * `:webhook`: sends signed messages when something changes.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
@@ -119,6 +122,7 @@ defmodule MishkaPay.Provider do
           | :discount
           | :catalog
           | :payment_link
+          | :dispute
           | :payment_list
           | :webhook
           | :return_verify
@@ -314,6 +318,22 @@ defmodule MishkaPay.Provider do
   @callback list_prices(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:dispute`. Reads one dispute."
+  @callback fetch_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:dispute`. One page of disputes, newest first; only `:payment_id`'s when given."
+  @callback list_disputes(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:dispute`. Adds evidence to a dispute, and sends it with `:submit`."
+  @callback update_dispute(MishkaPay.DisputeEvidence.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:dispute`. Accepts the loss: the dispute closes as lost."
+  @callback accept_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:payment_link`. Makes a payment link and answers it with its `:id` and `:url`."
   @callback create_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
@@ -383,6 +403,10 @@ defmodule MishkaPay.Provider do
                       fetch_price: 2,
                       update_price: 2,
                       list_prices: 2,
+                      fetch_dispute: 2,
+                      list_disputes: 2,
+                      update_dispute: 2,
+                      accept_dispute: 2,
                       create_payment_link: 2,
                       fetch_payment_link: 2,
                       list_payment_links: 2,
@@ -429,6 +453,7 @@ defmodule MishkaPay.Provider do
       update_price: 2,
       list_prices: 2
     ],
+    dispute: [fetch_dispute: 2, list_disputes: 2, update_dispute: 2, accept_dispute: 2],
     payment_link: [
       create_payment_link: 2,
       fetch_payment_link: 2,

@@ -404,6 +404,28 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_subscription("stripe", "pi_123", "site-a")
     end
 
+    test "disputes are read, listed, answered with evidence and accepted as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.Dispute{id: "dp_" <> _}} =
+               MishkaPay.fetch_dispute("stripe", "dp_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Dispute{} | _]}} =
+               MishkaPay.list_disputes("stripe", "site-a", payment_id: "pi_123")
+
+      assert {:ok, %MishkaPay.Dispute{}} =
+               MishkaPay.update_dispute(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 dispute_id: "dp_123",
+                 evidence: %{"uncategorized_text" => "The buyer downloaded the ebook twice."},
+                 submit: false
+               })
+
+      assert {:ok, %MishkaPay.Dispute{}} = MishkaPay.accept_dispute("stripe", "dp_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :dispute_id}]}} =
+               MishkaPay.fetch_dispute("stripe", "pi_123")
+    end
+
     test "a subscription change, its preview, a pause and an invoice read go as Stripe's spec accepts" do
       change = %{
         provider: "stripe",
@@ -1153,6 +1175,90 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert %{"promotion" => %{"type" => "coupon", "coupon" => "Or6TT44r"}} =
              Stripe.Mapper.promotion_code_params(%MishkaPay.PromotionCode{coupon_id: "Or6TT44r"})
+  end
+
+  # One object of each kind Stripe sends in a handled event, as its API version names them.
+  @objects %{
+    "checkout.session" => %{
+      "object" => "checkout.session",
+      "id" => "cs_1",
+      "payment_intent" => "pi_1",
+      "subscription" => "sub_1"
+    },
+    "payment_intent" => %{"object" => "payment_intent", "id" => "pi_1"},
+    "charge" => %{"object" => "charge", "id" => "ch_1", "payment_intent" => "pi_1"},
+    "refund" => %{"object" => "refund", "id" => "re_1", "payment_intent" => "pi_1"},
+    "charge.dispute" => %{"object" => "dispute", "id" => "dp_1", "payment_intent" => "pi_1"},
+    "invoice" => %{
+      "object" => "invoice",
+      "id" => "in_1",
+      "parent" => %{"subscription_details" => %{"subscription" => "sub_1"}}
+    },
+    "invoice_payment" => %{
+      "object" => "invoice_payment",
+      "id" => "inpay_1",
+      "payment" => %{"type" => "payment_intent", "payment_intent" => "pi_1"}
+    },
+    "customer.subscription" => %{"object" => "subscription", "id" => "sub_1"},
+    "customer" => %{"object" => "customer", "id" => "cus_1"}
+  }
+
+  test "every Stripe event Mishka Pay claims to handle names what it updates" do
+    for {type, updates} <- Stripe.handled_events() do
+      kind = type |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
+      object = Map.fetch!(@objects, kind)
+
+      assert {:ok, event} =
+               Stripe.Mapper.event(%{
+                 "id" => "evt_1",
+                 "type" => type,
+                 "created" => 1_794_825_000,
+                 "data" => %{"object" => object}
+               }),
+             type
+
+      for update <- updates do
+        assert named?(event, update), "#{type} does not name its #{update}"
+      end
+    end
+  end
+
+  defp named?(event, :payment), do: event.payment_id == "pi_1"
+  defp named?(event, :subscription), do: event.subscription_id == "sub_1"
+  defp named?(event, :dispute), do: event.dispute_id == "dp_1"
+  defp named?(event, :customer), do: {event.object_type, event.object_id} == {"customer", "cus_1"}
+
+  test "a dispute maps with its status, due date and evidence count" do
+    assert {:ok,
+            %MishkaPay.Dispute{
+              id: "dp_1",
+              payment_id: "pi_1",
+              status: :needs_response,
+              reason: "fraudulent",
+              has_evidence: false,
+              submission_count: 0,
+              refundable: false,
+              amount: amount
+            }} =
+             Stripe.Mapper.dispute(%{
+               "id" => "dp_1",
+               "object" => "dispute",
+               "amount" => 1999,
+               "currency" => "usd",
+               "payment_intent" => "pi_1",
+               "charge" => "ch_1",
+               "status" => "needs_response",
+               "reason" => "fraudulent",
+               "is_charge_refundable" => false,
+               "evidence_details" => %{
+                 "due_by" => 1_795_000_000,
+                 "has_evidence" => false,
+                 "submission_count" => 0
+               },
+               "created" => 1_794_825_000
+             })
+
+    assert Money.equal?(amount, Money.new(:USD, "19.99"))
   end
 
   test "Stripe's form encoding nests maps and lists and leaves out nil" do

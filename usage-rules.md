@@ -88,6 +88,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |
 | `MishkaPay.pause_collection(provider, id, tenant, behavior: ...)`, `resume_collection/3` | stops or starts charging without cancelling |
 | `MishkaPay.fetch_invoice(provider, invoice_id, tenant)` | `%MishkaPay.Invoice{}` with its `:lines` |
+| `MishkaPay.fetch_dispute/3`, `list_disputes/3`, `update_dispute(attrs)`, `accept_dispute/3` | `%MishkaPay.Dispute{}`: a chargeback, answered with evidence or accepted |
 | `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` (or `customer_id:`) | a `MishkaPay.Page` of `%MishkaPay.Invoice{}` |
 | `MishkaPay.list_payments(provider, tenant, customer_id: id)` | a `MishkaPay.Page` of `%MishkaPay.Payment{}` |
 | `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |
@@ -270,15 +271,29 @@ MishkaPay.refund(%{provider: "stripe", tenant: site.id, payment_id: "pi_...",
 
 ## Real time
 
-Listen to Mishka Pay's events with a mishka_installer plugin and broadcast on your own PubSub:
+One line broadcasts every payment, subscription, customer and dispute change on your own PubSub:
 
 ```elixir
-defmodule MyApp.Pay.PaymentFeed do
-  use MishkaInstaller.Event.Hook, event: "mishka_pay:payment:changed"
+defmodule MyApp.Pay.Broadcast do
+  use MishkaPay.PubSub, pubsub: MyApp.PubSub    # kinds:, prefix:, priority: are options
+end
+# application children, after the PubSub: MyApp.Pay.Broadcast
+
+Phoenix.PubSub.subscribe(MyApp.PubSub, MishkaPay.PubSub.topic(:payment, site.id))
+def handle_info({:mishka_pay, :payment, %{payment: payment, record: row}}, socket), do: ...
+```
+
+Each change goes to the kind's topic (`"mishka_pay:payments"`) and its tenant's
+(`"mishka_pay:site-42:payments"`): in a multi-site project subscribe each site to its own. For
+other work (email, access rights) listen with your own mishka_installer plugin:
+
+```elixir
+defmodule MyApp.Pay.Access do
+  use MishkaInstaller.Event.Hook, event: "mishka_pay:dispute:changed"
 
   @impl true
-  def call(%{record: record} = state) do
-    Phoenix.PubSub.broadcast(MyApp.PubSub, "payments", {:payment_changed, record})
+  def call(%{dispute: dispute} = state) do
+    MyApp.Downloads.hold(dispute.payment_id, dispute.status)
     {:reply, state}
   end
 end
@@ -286,7 +301,7 @@ end
 
 The event names live in `MishkaPay.Events` (`checkout_before/0`, `credentials/0`,
 `webhook_received/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
-`customer_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
+`customer_changed/0`, `dispute_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
 nothing. Supervise every listener like any child.
 
 ## Rules for an agent writing payment code
@@ -297,7 +312,8 @@ nothing. Supervise every listener like any child.
   a webhook body alone is not proof of payment.
 - Keep amounts as strings or `Money`; let Mishka Pay check currencies and decimals.
 - Give access from the payment's or subscription's **status** (`:paid`, `:active`, `:trialing`),
-  and take it away on `:refunded`, `:canceled`, `:past_due`/`:unpaid` as the product decides.
+  and take it away on `:refunded`, `:canceled`, `:past_due`/`:unpaid`, or a payment `disputed`,
+  as the product decides.
 - Answer every listener with `{:reply, state}`; mark a failed webhook listener with
   `%{state | failed: "reason"}` so the provider sends the event again.
 - Test with `MishkaPay.Test` (`usage-rules/testing.md`); never call a live provider from tests.

@@ -57,6 +57,7 @@ if Code.ensure_loaded?(Ash) do
         card_last4: payment.card_last4,
         failure_code: payment.failure_code,
         failure_message: payment.failure_message,
+        disputed: payment.disputed,
         provider_created_at: payment.created_at,
         synced_at: DateTime.utc_now()
       }

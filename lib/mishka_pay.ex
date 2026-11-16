@@ -50,7 +50,8 @@ defmodule MishkaPay do
   `:promotion_code_update`, `:payment_list`, `:invoices`, `:product_create`, `:product`,
   `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update`, `:price_list`, `:payment_link_create`, `:payment_link`, `:payment_link_update`,
   `:payment_link_list`, `:invoice`, `:subscription_change`, `:subscription_preview`,
-  `:subscription_pause` or `:subscription_unpause`,
+  `:subscription_pause`, `:subscription_unpause`, `:dispute`, `:dispute_list`, `:dispute_update`
+  or `:dispute_accept`,
   with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
@@ -459,6 +460,47 @@ defmodule MishkaPay do
       tenant,
       & &1.list_payment_links(limited(opts), &2)
     )
+  end
+
+  @doc "Reads dispute `dispute_id` from `provider`, with `tenant`'s keys."
+  @spec fetch_dispute(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def fetch_dispute(provider, dispute_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(dispute_id) do
+    capable(:dispute, :dispute, provider, tenant, & &1.fetch_dispute(dispute_id, &2))
+  end
+
+  @doc """
+  One page of disputes at `provider`, newest first (`MishkaPay.Page`): `payment_id:` only one
+  payment's, plus `limit:` and `after:`.
+  """
+  @spec list_disputes(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_disputes(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:dispute, :dispute_list, provider, tenant, & &1.list_disputes(limited(opts), &2))
+  end
+
+  @doc """
+  Answers a dispute with evidence (see `MishkaPay.DisputeEvidence`): kept to add more, or sent to
+  the bank with `submit: true`. Answers the dispute after.
+  """
+  @spec update_dispute(map()) :: {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def update_dispute(attrs) when is_map(attrs) do
+    span(:dispute_update, attrs, fn ->
+      with {:ok, evidence} <- Errors.from_builder(MishkaPay.DisputeEvidence.builder(attrs)),
+           {:ok, module} <- Provider.capable(evidence.provider, :dispute),
+           {:ok, keys} <- Credentials.fetch(evidence.provider, evidence.tenant) do
+        module.update_dispute(evidence, keys)
+      end
+    end)
+  end
+
+  @doc "Accepts dispute `dispute_id`: the seller does not contest it, and it closes as lost."
+  @spec accept_dispute(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def accept_dispute(provider, dispute_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(dispute_id) do
+    capable(:dispute, :dispute_accept, provider, tenant, & &1.accept_dispute(dispute_id, &2))
   end
 
   # A struct built from the caller's map and handed to the provider's `callback`.

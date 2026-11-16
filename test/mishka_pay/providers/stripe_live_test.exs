@@ -346,6 +346,44 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
   end
 
+  test "a payment with Stripe's dispute card gets a dispute, which is read, answered and listed",
+       %{
+         key: key
+       } do
+    {200, %{"id" => payment_id, "status" => "succeeded"}} = pay(key, "pm_card_createDispute")
+
+    assert {:ok, %MishkaPay.Dispute{id: id, payment_id: ^payment_id, status: status}} =
+             first_dispute(payment_id, 30)
+
+    assert status in [:needs_response, :warning_needs_response]
+
+    assert {:ok, %Payment{disputed: true}} = MishkaPay.fetch_payment("stripe", payment_id)
+
+    assert {:ok, %MishkaPay.Dispute{has_evidence: true}} =
+             MishkaPay.update_dispute(%{
+               provider: "stripe",
+               dispute_id: id,
+               evidence: %{"uncategorized_text" => "winning_evidence"},
+               submit: false
+             })
+
+    assert {:ok, %MishkaPay.Dispute{id: ^id}} = MishkaPay.fetch_dispute("stripe", id)
+  end
+
+  # Stripe opens the test card's dispute a moment after the payment; ask until it is there.
+  defp first_dispute(_payment_id, 0), do: :timeout
+
+  defp first_dispute(payment_id, tries) do
+    case MishkaPay.list_disputes("stripe", nil, payment_id: payment_id) do
+      {:ok, %MishkaPay.Page{items: [dispute | _]}} ->
+        {:ok, dispute}
+
+      {:ok, %MishkaPay.Page{items: []}} ->
+        Process.sleep(1_000)
+        first_dispute(payment_id, tries - 1)
+    end
+  end
+
   defp clock_ready(_clock, 0), do: :timeout
 
   defp clock_ready(clock, tries) do

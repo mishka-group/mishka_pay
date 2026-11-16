@@ -80,6 +80,9 @@ migration once).
 | Subscription | `:change` (update) | `price_id`, `quantity`, `item_id`, `proration`, `proration_date`, `billing_cycle_anchor`, `payment_behavior` |
 | Subscription | `:pause` (update) | `behavior` (`:void` default), `resumes_at` |
 | Subscription | `:resume_collection` (update) | none |
+| Dispute | `:sync` | `provider`, `dispute_id`, `tenant` |
+| Dispute | `:submit_evidence` (update) | `evidence` (the provider's field names), `submit` |
+| Dispute | `:accept` (update) | none |
 | Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata` |
 | Customer | `:sync` | `provider`, `customer_id`, `tenant`; a deleted customer gets `deleted_at` |
 | Customer | `:edit` (update) | `email`, `name`, `phone`, `metadata` |

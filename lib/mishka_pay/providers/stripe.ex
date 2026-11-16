@@ -69,6 +69,7 @@ defmodule MishkaPay.Providers.Stripe do
       :payment_list,
       :catalog,
       :payment_link,
+      :dispute,
       :expire,
       :refund,
       :subscription,
@@ -101,6 +102,51 @@ defmodule MishkaPay.Providers.Stripe do
   @base_url "https://api.stripe.com"
   @odd_currencies ~w(HUF TWD ISK UGX MGA)a
   @three_decimal ~w(BHD JOD KWD OMR TND)a
+
+  @handled %{
+    "checkout.session.completed" => [:payment, :subscription],
+    "checkout.session.expired" => [:payment],
+    "checkout.session.async_payment_succeeded" => [:payment],
+    "checkout.session.async_payment_failed" => [:payment],
+    "payment_intent.succeeded" => [:payment],
+    "payment_intent.payment_failed" => [:payment],
+    "payment_intent.canceled" => [:payment],
+    "payment_intent.processing" => [:payment],
+    "payment_intent.requires_action" => [:payment],
+    "charge.succeeded" => [:payment],
+    "charge.failed" => [:payment],
+    "charge.refunded" => [:payment],
+    "refund.created" => [:payment],
+    "refund.updated" => [:payment],
+    "refund.failed" => [:payment],
+    "charge.dispute.created" => [:payment, :dispute],
+    "charge.dispute.updated" => [:payment, :dispute],
+    "charge.dispute.closed" => [:payment, :dispute],
+    "charge.dispute.funds_withdrawn" => [:payment, :dispute],
+    "charge.dispute.funds_reinstated" => [:payment, :dispute],
+    "invoice.paid" => [:subscription],
+    "invoice.payment_failed" => [:subscription],
+    "invoice.finalized" => [:subscription],
+    "invoice_payment.paid" => [:payment],
+    "customer.subscription.created" => [:subscription],
+    "customer.subscription.updated" => [:subscription],
+    "customer.subscription.deleted" => [:subscription],
+    "customer.subscription.paused" => [:subscription],
+    "customer.subscription.resumed" => [:subscription],
+    "customer.subscription.trial_will_end" => [:subscription],
+    "customer.created" => [:customer],
+    "customer.updated" => [:customer],
+    "customer.deleted" => [:customer]
+  }
+
+  @doc """
+  The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
+  (`MishkaPay.Ash.Payment`), `:subscription`, `:customer` or `:dispute`. Each is mapped to its
+  ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
+  nothing. Send these to the webhook endpoint in the Stripe Dashboard.
+  """
+  @spec handled_events() :: %{String.t() => [atom()]}
+  def handled_events, do: @handled
 
   @doc "The Stripe API version every request is pinned to."
   @spec version() :: String.t()
@@ -527,6 +573,48 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
+  def fetch_dispute(dispute_id, keys) do
+    with :ok <- dispute_id(dispute_id),
+         {:ok, answer} <- request(:get, "/v1/disputes/#{dispute_id}", [], keys) do
+      Mapper.dispute(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_disputes(opts, keys) do
+    with :ok <- maybe_id(opts[:payment_id], "pi_", :payment_id) do
+      page("/v1/disputes", [payment_intent: opts[:payment_id]], opts, keys, &Mapper.dispute/1)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_dispute(evidence, keys) do
+    with :ok <- dispute_id(evidence.dispute_id),
+         :ok <- metadata(evidence.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/disputes/#{evidence.dispute_id}",
+             %{
+               "evidence" => evidence.evidence,
+               "submit" => evidence.submit,
+               "metadata" => evidence.metadata
+             },
+             keys
+           ) do
+      Mapper.dispute(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def accept_dispute(dispute_id, keys) do
+    with :ok <- dispute_id(dispute_id),
+         {:ok, answer} <- request(:post, "/v1/disputes/#{dispute_id}/close", %{}, keys) do
+      Mapper.dispute(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
   def create_payment_link(%PaymentLink{} = link, keys) do
     with :ok <- metadata(link.metadata),
          :ok <- link_prices(link.items),
@@ -595,6 +683,10 @@ defmodule MishkaPay.Providers.Stripe do
        struct(Page, items: items, has_more: more, next: (more && List.last(data)["id"]) || nil)}
     end
   end
+
+  # Stripe's dispute ids start with `du_` now and `dp_` on older disputes.
+  defp dispute_id("du_" <> _ = id), do: stripe_id(id, "du_", :dispute_id)
+  defp dispute_id(id), do: stripe_id(id, "dp_", :dispute_id)
 
   # A filter id is checked only when it is given: by its prefix, or as a plain id with no prefix.
   defp maybe_id(nil, _prefix, _field), do: :ok

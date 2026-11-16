@@ -170,17 +170,17 @@ defmodule MishkaPay.Checkout do
   def return_url(field, url), do: {:ok, field, url}
 
   @doc false
-  def metadata(:metadata, nil), do: {:ok, :metadata, nil}
+  def metadata(field, nil), do: {:ok, field, nil}
 
-  def metadata(:metadata, %{} = metadata) do
+  def metadata(field, %{} = metadata) do
     case Enum.all?(metadata, fn {key, value} -> is_binary(key) and is_binary(value) end) do
-      true -> {:ok, :metadata, metadata}
-      false -> {:error, :metadata, Messages.text(:metadata_strings)}
+      true -> {:ok, field, metadata}
+      false -> {:error, field, Messages.text(:metadata_strings)}
     end
   end
 
-  def metadata(:metadata, _other),
-    do: {:error, :metadata, Messages.text(:metadata_strings)}
+  def metadata(field, _other),
+    do: {:error, field, Messages.text(:metadata_strings)}
 
   # A mode from JSON or a form comes as a string.
   @doc false

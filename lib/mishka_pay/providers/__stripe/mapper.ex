@@ -223,6 +223,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         description: intent["description"],
         metadata: Map.delete(intent["metadata"] || %{}, @reference),
         refunds: refunds(charge, intent["id"]),
+        disputed: charge["disputed"] == true,
         created_at: time(intent["created"])
       }
       |> Map.merge(buyer_of(intent, charge))
@@ -551,6 +552,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       object_type: object["object"],
       payment_id: payment_of(object),
       subscription_id: subscription_of(object),
+      dispute_id: dispute_of(object),
       livemode: event["livemode"],
       account: event["account"],
       created_at: time(event["created"])
@@ -562,6 +564,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   # A PaymentIntent is the payment; a session, charge, refund or dispute points at its own.
   defp payment_of(%{"object" => "payment_intent", "id" => id}) when is_binary(id), do: id
   defp payment_of(%{"payment_intent" => payment}), do: id_of(payment)
+
+  # An invoice payment names its PaymentIntent under `payment`.
+  defp payment_of(%{"object" => "invoice_payment", "payment" => %{"payment_intent" => payment}}),
+    do: id_of(payment)
+
   defp payment_of(_other), do: nil
 
   # The subscription itself, the one an invoice bills (on its own field, or under its parent since
@@ -573,6 +580,35 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp subscription_of(%{"subscription" => sub}), do: id_of(sub)
   defp subscription_of(_other), do: nil
+
+  defp dispute_of(%{"object" => "dispute", "id" => id}) when is_binary(id), do: id
+  defp dispute_of(_other), do: nil
+
+  @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)
+
+  @doc "A Stripe dispute as a `MishkaPay.Dispute`."
+  @spec dispute(map()) :: {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
+  def dispute(dispute) do
+    details = dispute["evidence_details"] || %{}
+
+    %{
+      provider: "stripe",
+      id: dispute["id"],
+      payment_id: id_of(dispute["payment_intent"]),
+      charge_id: id_of(dispute["charge"]),
+      amount: money(dispute["amount"], dispute["currency"]),
+      status: known(dispute["status"], @dispute_statuses),
+      reason: dispute["reason"],
+      evidence_due_by: time(details["due_by"]),
+      has_evidence: details["has_evidence"] == true,
+      submission_count: details["submission_count"] || 0,
+      refundable: dispute["is_charge_refundable"],
+      metadata: dispute["metadata"],
+      created_at: time(dispute["created"])
+    }
+    |> MishkaPay.Dispute.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
 
   defp object_of(%{"data" => %{"object" => %{} = object}}), do: object
   defp object_of(_no_object), do: %{}

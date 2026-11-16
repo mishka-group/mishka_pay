@@ -17,6 +17,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
   | `mishka_pay:subscription:changed` | the host | a subscription's state after it was synced, cancelled or resumed |
   | `mishka_pay:customer:changed` | the host | a customer after it was registered, synced or edited |
+  | `mishka_pay:dispute:changed` | the host | a dispute after it was synced, answered or accepted |
 
   """
 
@@ -75,4 +76,12 @@ defmodule MishkaPay.Events do
   """
   @spec customer_changed() :: String.t()
   def customer_changed, do: "mishka_pay:customer:changed"
+
+  @doc """
+  Fired after a dispute resource (`MishkaPay.Ash.Dispute`) synced, answered or accepted a
+  dispute, with `%{dispute: %MishkaPay.Dispute{}, record: record}`. A host listens here to take
+  back what the payment gave while it is open, and give it again when it is won.
+  """
+  @spec dispute_changed() :: String.t()
+  def dispute_changed, do: "mishka_pay:dispute:changed"
 end
