@@ -39,6 +39,43 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(@checkout)
     end
 
+    test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
+      assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id}} =
+               MishkaPay.create_customer(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 email: "ava@example.com",
+                 name: "Ava Martin",
+                 reference: "user-1",
+                 metadata: %{"plan" => "pro"}
+               })
+
+      assert {:ok, %MishkaPay.Customer{}} =
+               MishkaPay.update_customer(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: id,
+                 name: "Ava M."
+               })
+
+      assert {:ok, %MishkaPay.Customer{id: "cus_" <> _}} =
+               MishkaPay.fetch_customer("stripe", id, "site-a")
+
+      assert {:ok, [%MishkaPay.Customer{} | _]} =
+               MishkaPay.list_customers("stripe", "site-a", email: "ava@example.com", limit: 3)
+
+      assert {:ok, %MishkaPay.PortalSession{url: "https://" <> _}} =
+               MishkaPay.portal_session(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: id,
+                 return_url: "https://shop.test/account"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.fetch_customer("stripe", "pi_123", "site-a")
+    end
+
     test "a subscription checkout sends recurring prices and its trial as Stripe's spec accepts" do
       monthly = %{name: "Pro plan", amount: %{amount: "9", currency: "USD"}, interval: :month}
 
@@ -577,6 +614,26 @@ defmodule MishkaPay.Providers.StripeTest do
                "type" => "customer.subscription.updated",
                "data" => %{"object" => %{"id" => "sub_9", "object" => "subscription"}}
              })
+  end
+
+  test "a customer maps with its reference and card on file, and a deleted one is a rejection" do
+    assert {:ok, %MishkaPay.Customer{} = customer} =
+             Stripe.Mapper.customer(%{
+               "id" => "cus_1",
+               "email" => "ava@example.com",
+               "name" => "Ava",
+               "phone" => "",
+               "metadata" => %{"mishka_pay_reference" => "user-1", "plan" => "pro"},
+               "invoice_settings" => %{"default_payment_method" => "pm_1"},
+               "created" => 1_794_000_000
+             })
+
+    assert {customer.reference, customer.metadata, customer.default_payment_method,
+            customer.phone} ==
+             {"user-1", %{"plan" => "pro"}, "pm_1", nil}
+
+    assert {:error, %Errors.Rejected{status: 404, code: "customer_deleted"}} =
+             Stripe.Mapper.customer(%{"id" => "cus_2", "deleted" => true})
   end
 
   test "a checkout read back brings its totals and the buyer's email" do

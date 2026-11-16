@@ -78,11 +78,7 @@ defmodule MishkaPay.ProviderCase do
     assert is_binary(provider.label()) and provider.label() != "",
            "#{inspect(provider)}.label() must be a non-empty string, got: #{inspect(provider.label())}"
 
-    unknown =
-      Enum.reject(
-        provider.capabilities(),
-        &(&1 in [:checkout, :refund, :subscription, :webhook, :return_verify])
-      )
+    unknown = provider.capabilities() -- Provider.capabilities()
 
     assert unknown == [],
            "#{inspect(provider)} declares unknown capabilities: #{inspect(unknown)}"

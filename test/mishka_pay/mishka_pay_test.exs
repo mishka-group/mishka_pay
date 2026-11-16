@@ -93,6 +93,66 @@ defmodule MishkaPayTest do
              MishkaPay.checkout(%{@checkout | reference: "gate-hang"})
   end
 
+  describe "customers and the portal" do
+    test "a customer is made, changed, read and listed, and its portal opened" do
+      assert {:ok,
+              %MishkaPay.Customer{id: "acme_cus_1", email: "ava@example.com", reference: "user-1"}} =
+               MishkaPay.create_customer(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 email: " Ava@Example.com ",
+                 name: "Ava",
+                 reference: "user-1"
+               })
+
+      assert {:ok, %{name: "Ava M."}} =
+               MishkaPay.update_customer(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 id: "acme_cus_1",
+                 name: "Ava M."
+               })
+
+      assert {:ok, %MishkaPay.Customer{id: "acme_cus_1"}} =
+               MishkaPay.fetch_customer("acme", "acme_cus_1", "site-a")
+
+      assert {:ok, [_one]} = MishkaPay.list_customers("acme", "site-a", limit: 1)
+
+      assert {:ok, %MishkaPay.PortalSession{url: "https://pay.acme.test/portal/acme_cus_1"}} =
+               MishkaPay.portal_session(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 customer_id: "acme_cus_1",
+                 return_url: "https://shop.test/account"
+               })
+    end
+
+    test "a call without its provider or id, and a portal with an unsafe return URL, are refused" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :provider}]}} =
+               MishkaPay.create_customer(%{email: "ava@example.com"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_customer(%{provider: "acme", name: "Ava"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :email}]}} =
+               MishkaPay.create_customer(%{provider: "acme", email: "not an email"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :return_url}]}} =
+               MishkaPay.portal_session(%{
+                 provider: "acme",
+                 customer_id: "acme_cus_1",
+                 return_url: "http://evil.test/back"
+               })
+    end
+
+    test "a checkout names its buyer by id or by email, not both" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer}]}} =
+               MishkaPay.checkout(
+                 Map.put(@checkout, :customer, %{id: "acme_cus_1", email: "ava@example.com"})
+               )
+    end
+  end
+
   describe "subscriptions" do
     test "are read, cancelled at the period's end or now, taken back, and their invoices listed" do
       assert {:ok, %MishkaPay.Subscription{id: "acme_sub_active", status: :active, items: [plan]}} =

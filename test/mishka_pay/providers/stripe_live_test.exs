@@ -288,6 +288,34 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {status, answer}
   end
 
+  test "a customer is made, changed, found by email and read on Stripe, and its portal opens" do
+    run = System.unique_integer([:positive])
+    email = "live-#{run}@example.com"
+    reference = "user-live-#{run}"
+
+    assert {:ok, %MishkaPay.Customer{id: id, reference: ^reference}} =
+             MishkaPay.create_customer(%{
+               provider: "stripe",
+               email: email,
+               name: "Live Buyer",
+               reference: reference
+             })
+
+    assert {:ok, %{name: "Live Buyer 2"}} =
+             MishkaPay.update_customer(%{provider: "stripe", id: id, name: "Live Buyer 2"})
+
+    assert {:ok, [%MishkaPay.Customer{id: ^id}]} =
+             MishkaPay.list_customers("stripe", nil, email: email)
+
+    assert {:ok, %MishkaPay.Customer{email: ^email}} = MishkaPay.fetch_customer("stripe", id)
+
+    session = %{provider: "stripe", customer_id: id, return_url: "https://shop.test/account"}
+
+    assert {:ok,
+            %MishkaPay.PortalSession{id: "bps_" <> _, url: "https://billing.stripe.com/" <> _}} =
+             MishkaPay.portal_session(session)
+  end
+
   test "a payment that does not exist is a rejection" do
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_payment("stripe", "pi_doesnotexist")

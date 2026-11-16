@@ -17,10 +17,19 @@ defmodule MishkaPay.Support.Acme do
   use MishkaPay.Provider,
     id: "acme",
     label: "Acme Pay",
-    capabilities: [:checkout, :refund, :subscription],
+    capabilities: [:checkout, :refund, :subscription, :customer, :portal],
     priority: 10
 
-  alias MishkaPay.{Checkout, Errors, Invoice, Payment, Refund, Subscription}
+  alias MishkaPay.{
+    Checkout,
+    Customer,
+    Errors,
+    Invoice,
+    Payment,
+    PortalSession,
+    Refund,
+    Subscription
+  }
 
   @impl MishkaPay.Provider
   def checkout(%Checkout{reference: "decline"}, _keys),
@@ -103,4 +112,31 @@ defmodule MishkaPay.Support.Acme do
       items: [%{name: "Pro plan", amount: Elixir.Money.new(:USD, "9.00"), interval: :month}]
     })
   end
+
+  @impl MishkaPay.Provider
+  def create_customer(%Customer{} = customer, %{secret_key: "sk_acme"}),
+    do: {:ok, %{customer | id: "acme_cus_1"}}
+
+  @impl MishkaPay.Provider
+  def fetch_customer("acme_cus_" <> _ = id, %{secret_key: "sk_acme"}),
+    do: Customer.builder(%{provider: "acme", id: id, email: "ava@example.com", name: "Ava"})
+
+  @impl MishkaPay.Provider
+  def update_customer(%Customer{} = customer, %{secret_key: "sk_acme"}), do: {:ok, customer}
+
+  @impl MishkaPay.Provider
+  def list_customers(opts, %{secret_key: "sk_acme"}) do
+    {:ok, customer} = fetch_customer("acme_cus_1", %{secret_key: "sk_acme"})
+    {:ok, List.duplicate(customer, min(opts[:limit], 2))}
+  end
+
+  @impl MishkaPay.Provider
+  def portal_session(%PortalSession{} = session, %{secret_key: "sk_acme"}),
+    do:
+      {:ok,
+       %{
+         session
+         | id: "acme_portal_1",
+           url: "https://pay.acme.test/portal/#{session.customer_id}"
+       }}
 end
