@@ -140,7 +140,7 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
-    test "a payment is refunded once: one Stripe shows refunded is refused before a refund is sent" do
+    test "a site that refunds once is refused a second refund; one that refunds many is not" do
       test = self()
 
       MishkaPay.Test.stub_http(fn
@@ -161,9 +161,50 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
 
       refute_received :refund_sent
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", refunds: :many})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :reference}]}} =
+               MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      refute_received :refund_sent
+
+      assert {:ok, %Refund{status: :succeeded}} =
+               MishkaPay.refund(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 payment_id: "pi_123",
+                 amount: %{amount: "1", currency: "USD"},
+                 reference: "refund-2"
+               })
+
+      assert_received :refund_sent
     end
 
-    test "two refunds of one payment sent at once carry one idempotency key, so Stripe makes one" do
+    test "many refunds: the same reference sends the same key, another reference another one" do
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", refunds: "many"})
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
+
+      for reference <- ["r-1", "r-1", "r-2"],
+          do:
+            MishkaPay.refund(%{
+              provider: "stripe",
+              tenant: "site-a",
+              payment_id: "pi_123",
+              reference: reference
+            })
+
+      keys =
+        for _call <- 1..3 do
+          assert_received {_, ^ref, _, %{path: "/v1/refunds", idempotency_key: key}}
+          key
+        end
+
+      assert [same, same, other] = keys
+      refute same == other
+    end
+
+    test "refunding once: two refunds of one payment sent at once carry one key, so Stripe makes one" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
 
       for _twice <- 1..2,
@@ -178,7 +219,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert ["mishka_pay-refund-" <> _digest = same, same] = keys
     end
 
-    test "a part refund in another currency or over the payment is refused before Stripe" do
+    test "a part refund in another currency or over what is left is refused before Stripe" do
       for amount <- [%{amount: "5", currency: "EUR"}, %{amount: "11", currency: "USD"}] do
         assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
                  MishkaPay.refund(%{

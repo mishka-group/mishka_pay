@@ -31,6 +31,13 @@ defmodule MishkaPay.Credentials do
     * `:merchant_of_record`: `true` or `false` turns selling as the merchant of record on or off
       for every checkout of this tenant (Stripe Managed Payments); left out, the provider
       account's own default applies. A checkout's own `:merchant_of_record` still wins.
+    * `:refunds`: how this tenant refunds a payment. `:once` (the default): one refund, whole or
+      in part, and a buyer who wants it again makes a new purchase. `:many`: part refunds until
+      the payment is used up, as the provider itself allows; each refund then needs its own
+      `:reference` (`MishkaPay.Refund`).
+
+  These are read at runtime on every call, never from `config.exs`, so each tenant of a
+  multi-site project carries its own and a change in its settings applies to the next call.
 
   The answer may use atom or string keys, and the mode may be `"test"` or `"live"`. Its own
   `:provider` and `:tenant` are ignored: they always come from the call.
@@ -63,6 +70,12 @@ defmodule MishkaPay.Credentials do
 
     field :publishable_key, String.t(), derives: "sanitize(trim) validate(string)"
     field :merchant_of_record, boolean(), derives: "validate(boolean)"
+
+    field :refunds, :once | :many,
+      default: :once,
+      derives: "validate(not_nil_value, enum=Atom[once::many])",
+      validator: {__MODULE__, :refunds}
+
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
     dynamic_field :extra
   end
@@ -178,6 +191,12 @@ defmodule MishkaPay.Credentials do
     do: {:ok, :mode, String.to_existing_atom(mode)}
 
   def mode(:mode, mode), do: {:ok, :mode, mode}
+
+  @doc false
+  def refunds(:refunds, refunds) when refunds in ["once", "many"],
+    do: {:ok, :refunds, String.to_existing_atom(refunds)}
+
+  def refunds(:refunds, refunds), do: {:ok, :refunds, refunds}
 
   defp missing(provider, tenant, reason),
     do:

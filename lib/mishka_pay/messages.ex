@@ -41,6 +41,7 @@ defmodule MishkaPay.Messages do
           | :refund_currency
           | :refund_left
           | :refund_once
+          | :refund_reference
           | :stripe_metadata
           | :stripe_three_decimal
           | :declined
@@ -159,14 +160,21 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The amount field is more than the payment"
+        "The amount field is more than is left to refund on the payment"
       )
 
   defp msgid(:refund_once),
     do:
       dgettext_noop(
         "mishka_pay",
-        "The payment was refunded already: a payment is refunded once, and a new purchase is a new payment"
+        "The payment was refunded already: this site refunds a payment once, and a new purchase is a new payment"
+      )
+
+  defp msgid(:refund_reference),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The reference field is required: this site refunds a payment many times, and each refund needs its own"
       )
 
   defp msgid(:stripe_metadata),

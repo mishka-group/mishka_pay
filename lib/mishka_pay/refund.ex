@@ -7,10 +7,14 @@ defmodule MishkaPay.Refund do
   Money given back on a payment, in full or in part, made with `MishkaPay.refund/1`. A
   guarded_struct.
 
-  A payment is refunded once. After its refund, another one on it is refused
-  (`:already_refunded`); a buyer who wants it again makes a new purchase, a new payment. The
-  refund's idempotency key comes from the payment, so a refund sent again after a lost answer is
-  the same refund, never a second one.
+  How often a payment may be refunded is the tenant's choice, read at runtime from its
+  `MishkaPay.Credentials` (`:refunds`):
+
+    * `:once` (the default): one refund, whole or in part. Another one on that payment is refused,
+      and a buyer who wants it again makes a new purchase. The idempotency key comes from the
+      payment, so a refund sent again after a lost answer is the same refund.
+    * `:many`: part refunds until the payment is used up. Each refund needs its own `:reference`,
+      which makes its idempotency key, so the same reference never refunds twice.
 
   What the caller gives:
 
@@ -18,6 +22,7 @@ defmodule MishkaPay.Refund do
     * `:payment_id`: the payment to refund.
     * `:amount`: how much, a `Money`; left out, the whole payment.
     * `:reason`: `:requested_by_customer`, `:duplicate` or `:fraudulent`.
+    * `:reference`: the caller's own id for this refund; needed when the tenant allows many.
 
   What the provider fills in: `:id`, `:status` (`:pending`, `:succeeded`, `:failed`, `:canceled`,
   `:requires_action`) and `:created_at`, and `:amount` when it was left out.
@@ -40,6 +45,9 @@ defmodule MishkaPay.Refund do
 
     field :reason, atom(),
       derives: "validate(enum=Atom[requested_by_customer::duplicate::fraudulent])"
+
+    field :reference, String.t(),
+      derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
 
     field :id, String.t(), derives: "validate(string)"
 

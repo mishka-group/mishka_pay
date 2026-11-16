@@ -160,21 +160,20 @@ defmodule MishkaPay.Ash.PaymentTest do
   end
 
   describe "safety" do
-    test "a payment is refunded once: a row that shows a refund is refused without asking Stripe" do
+    test "a site that refunds many times needs a reference on each refund, as an Ash error" do
       {:ok, payment} = sync()
-      payment = Ash.Seed.update!(payment, %{amount_refunded: Decimal.new(5)})
-      test = self()
-
-      MishkaPay.Test.stub_http(fn conn ->
-        send(test, :stripe_asked)
-        StripeMock.forward(conn)
-      end)
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a", refunds: "many"})
 
       assert {:error,
-              %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidChanges{fields: [:amount]}]}} =
+              %Ash.Error.Invalid{
+                errors: [%Ash.Error.Changes.InvalidArgument{field: :reference}]
+              }} =
                payment |> Ash.Changeset.for_update(:refund, %{}) |> Ash.update(authorize?: false)
 
-      refute_received :stripe_asked
+      assert {:ok, %{__metadata__: %{refund: %MishkaPay.Refund{reference: "refund-4"}}}} =
+               payment
+               |> Ash.Changeset.for_update(:refund, %{reference: "refund-4"})
+               |> Ash.update(authorize?: false)
     end
 
     test "a refund that went through still succeeds when the payment cannot be read again" do

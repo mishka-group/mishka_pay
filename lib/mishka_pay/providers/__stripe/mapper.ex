@@ -130,7 +130,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     %{
       "payment_intent" => refund.payment_id,
       "amount" => refund.amount && Money.to_minor(refund.amount),
-      "reason" => refund.reason && Atom.to_string(refund.reason)
+      "reason" => refund.reason && Atom.to_string(refund.reason),
+      "metadata" => refund.reference && %{@reference => refund.reference}
     }
   end
 

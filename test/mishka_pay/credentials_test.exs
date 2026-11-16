@@ -75,6 +75,19 @@ defmodule MishkaPay.CredentialsTest do
     assert keys.extra == %{}
   end
 
+  test "a tenant's refund rule is read at runtime: once by default, many when its settings say so" do
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a"})
+    assert {:ok, %{refunds: :once}} = Credentials.fetch("acme", "site-a")
+
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a", refunds: "many"})
+    assert {:ok, %{refunds: :many}} = Credentials.fetch("acme", "site-a")
+
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a", refunds: "sometimes"})
+
+    assert {:error, %Errors.Invalid{errors: [%Validation{field: :refunds}]}} =
+             Credentials.fetch("acme", "site-a")
+  end
+
   defp watch_fetches,
     do: :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :credentials, :stop]])
 

@@ -54,9 +54,9 @@ if Code.ensure_loaded?(Ash) do
 
     `:refund` refunds a stored payment through its provider (`MishkaPay.refund/1`), in full or by
     `:amount`, with an optional `:reason`, then syncs the row from the provider and keeps the
-    `MishkaPay.Refund` in the record's `:refund` metadata. A payment is refunded once: a row that
-    shows a refund is refused before the provider is asked, and the provider refuses one the row
-    has not seen yet. A buyer who wants it again makes a new purchase. When the refund went through
+    `MishkaPay.Refund` in the record's `:refund` metadata. How often a payment may be refunded is
+    the tenant's runtime setting (`MishkaPay.Credentials`, `:refunds`): once by default, or many
+    times, each with its own `:reference`. When the refund went through
     but the payment cannot be read again, the action still succeeds: the row counts the refund
     itself, and the next sync or webhook brings the provider's word.
 
@@ -141,6 +141,8 @@ if Code.ensure_loaded?(Ash) do
 
         argument :reason, :atom,
           constraints: [one_of: [:requested_by_customer, :duplicate, :fraudulent]]
+
+        argument :reference, :string
 
         change MishkaPay.Ash.Payment.Refund
       end
