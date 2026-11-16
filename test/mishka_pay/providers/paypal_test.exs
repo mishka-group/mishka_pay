@@ -1,0 +1,277 @@
+# SPDX-FileCopyrightText: 2026 Mishka Group contributors <https://github.com/mishka-group/mishka_pay/graphs/contributors>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+defmodule MishkaPay.Providers.PayPalTest do
+  # Starts the PayPal plugin, which changes the providers event every test sees.
+  use ExUnit.Case, async: false
+
+  alias MishkaPay.{Checkout, Errors, Event, Payment, Refund}
+  alias MishkaPay.Helpers.TokenCache
+  alias MishkaPay.Providers.PayPal
+  alias MishkaPay.Support.PayPalStub
+
+  @keys %{
+    publishable_key: "client_a",
+    secret_key: "secret_a",
+    webhook_secret: "WH-1",
+    mode: :test
+  }
+
+  @checkout %{
+    provider: "paypal",
+    tenant: "site-a",
+    items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}, quantity: 2}],
+    success_url: "https://shop.test/thanks",
+    cancel_url: "https://shop.test/cart",
+    reference: "order-1",
+    customer: %{email: "buyer@shop.test"}
+  }
+
+  setup do
+    MishkaPay.Test.start_plugin!(PayPal)
+    MishkaPay.Test.put_keys("paypal", @keys)
+    MishkaPay.Test.stub_http(&PayPalStub.forward/1)
+    TokenCache.drop({:paypal, "client_a", :test})
+    :ok
+  end
+
+  defp paypal_request(method, path) do
+    assert_received {:paypal, ^method, ^path, headers, body}
+    {headers, body}
+  end
+
+  describe "checkout" do
+    test "creates an Order with the items, totals, return URLs and the reference, and answers its page" do
+      assert {:ok, %Checkout{id: "ORDER" <> _ = id, status: :open, url: url}} =
+               MishkaPay.checkout(@checkout)
+
+      assert url =~ "checkoutnow?token=#{id}"
+
+      {headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      assert headers["paypal-request-id"] =~ "mishka_pay-checkout-"
+      assert body["intent"] == "CAPTURE"
+
+      assert %{
+               "custom_id" => "order-1",
+               "amount" => %{"currency_code" => "USD", "value" => "39.98"},
+               "items" => [
+                 %{"name" => "Ebook", "quantity" => "2", "unit_amount" => %{"value" => "19.99"}}
+               ]
+             } = hd(body["purchase_units"])
+
+      assert %{
+               "return_url" => "https://shop.test/thanks",
+               "cancel_url" => "https://shop.test/cart"
+             } =
+               body["payment_source"]["paypal"]["experience_context"]
+
+      assert body["payment_source"]["paypal"]["email_address"] == "buyer@shop.test"
+    end
+
+    test "gets the OAuth token once and keeps it for the next calls" do
+      {:ok, _first} = MishkaPay.checkout(@checkout)
+      {:ok, _second} = MishkaPay.checkout(%{@checkout | reference: "order-2"})
+
+      assert_received {:paypal, "POST", "/v1/oauth2/token", _headers,
+                       %{"grant_type" => "client_credentials"}}
+
+      refute_received {:paypal, "POST", "/v1/oauth2/token", _headers, _body}
+    end
+
+    test "what PayPal cannot sell is refused before any request" do
+      monthly = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      for {attrs, operation} <- [
+            {%{mode: :subscription, items: [monthly]}, :subscription},
+            {%{merchant_of_record: true}, "checkout as merchant of record"},
+            {%{items: [%{id: "price_1"}]}, "checkout by a provider price id"},
+            {%{items: [%{name: "Ebook", amount: %{amount: "100", currency: "INR"}}]},
+             "checkout in INR"},
+            {%{items: [%{name: "Ebook", amount: %{amount: "100.50", currency: "TWD"}}]},
+             "checkout in TWD"}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: ^operation}} =
+                 MishkaPay.checkout(Map.merge(@checkout, attrs))
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "a site whose keys PayPal does not take is a rejection, and no token is kept" do
+      MishkaPay.Test.put_keys("paypal", %{@keys | publishable_key: "client_bad"})
+
+      assert {:error, %Errors.Rejected{provider: "paypal", status: 401, code: "invalid_client"}} =
+               MishkaPay.checkout(@checkout)
+    end
+  end
+
+  describe "capture and read" do
+    test "an approved Order is captured once on return, then reads as a paid payment" do
+      PayPalStub.order("ORDER1", "APPROVED")
+
+      assert {:ok, %Checkout{status: :complete, payment_id: "ORDER1", reference: "order-1"}} =
+               MishkaPay.fetch_checkout("paypal", "ORDER1", "site-a")
+
+      {headers, _body} = paypal_request("POST", "/v2/checkout/orders/ORDER1/capture")
+      assert headers["paypal-request-id"] =~ "mishka_pay-capture-"
+
+      assert {:ok, %Payment{id: "ORDER1", status: :paid} = payment} =
+               MishkaPay.fetch_payment("paypal", "ORDER1", "site-a")
+
+      refute_received {:paypal, "POST", "/v2/checkout/orders/ORDER1/capture", _h, _b}
+      assert payment.amount == Money.new(:USD, "39.98")
+
+      assert {payment.customer_email, payment.customer_name} ==
+               {"buyer@example.com", "Ava Martin"}
+
+      assert payment.payment_method == "paypal"
+    end
+
+    test "a capture PayPal declines is a decline" do
+      PayPalStub.order("ORDER2", "APPROVED", declined: true)
+
+      assert {:error, %Errors.Declined{provider: "paypal", reason: "INSTRUMENT_DECLINED"}} =
+               MishkaPay.fetch_payment("paypal", "ORDER2", "site-a")
+    end
+
+    test "an Order's states read as payment statuses" do
+      for {status, opts, expected} <- [
+            {"PAYER_ACTION_REQUIRED", [], :pending},
+            {"VOIDED", [], :canceled},
+            {"COMPLETED", [captures: [%{"id" => "C1", "status" => "COMPLETED"}]], :paid},
+            {"COMPLETED", [captures: [%{"id" => "C1", "status" => "DECLINED"}]], :failed},
+            {"COMPLETED", [captures: [%{"id" => "C1", "status" => "PENDING"}]], :pending},
+            {"COMPLETED",
+             [
+               captures: [%{"id" => "C1", "status" => "PARTIALLY_REFUNDED"}],
+               refunds: [
+                 %{
+                   "id" => "R1",
+                   "status" => "COMPLETED",
+                   "amount" => %{"currency_code" => "USD", "value" => "10.00"}
+                 }
+               ]
+             ], :partially_refunded}
+          ] do
+        PayPalStub.order("ORDERS", status, opts)
+
+        assert {:ok, %Payment{status: ^expected}} =
+                 MishkaPay.fetch_payment("paypal", "ORDERS", "site-a")
+      end
+    end
+
+    test "an id that is not a PayPal Order id never reaches a path" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.fetch_payment("paypal", "ORDER1/../../v1/x", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :checkout_id}]}} =
+               MishkaPay.fetch_checkout("paypal", "cs_test_1", "site-a")
+    end
+  end
+
+  describe "refund" do
+    setup do
+      PayPalStub.order("ORDER3", "COMPLETED",
+        captures: [%{"id" => "CAPTUREORDER3", "status" => "COMPLETED"}]
+      )
+    end
+
+    test "refunds the Order's capture in part, then a site that refunds once refuses another" do
+      assert {:ok, %Refund{status: :succeeded, amount: amount}} =
+               MishkaPay.refund(%{
+                 provider: "paypal",
+                 tenant: "site-a",
+                 payment_id: "ORDER3",
+                 amount: %{amount: "5", currency: "USD"}
+               })
+
+      assert amount == Money.new(:USD, "5.00")
+      {_headers, body} = paypal_request("POST", "/v2/payments/captures/CAPTUREORDER3/refund")
+      assert body == %{"amount" => %{"currency_code" => "USD", "value" => "5.00"}}
+
+      assert {:ok, %Payment{status: :partially_refunded, refunds: [%Refund{}]}} =
+               MishkaPay.fetch_payment("paypal", "ORDER3", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.refund(%{provider: "paypal", tenant: "site-a", payment_id: "ORDER3"})
+    end
+
+    test "a site that refunds many times needs a reference, and refunds again with it" do
+      MishkaPay.Test.put_keys("paypal", Map.put(@keys, :refunds, :many))
+
+      refund = %{
+        provider: "paypal",
+        tenant: "site-a",
+        payment_id: "ORDER3",
+        amount: %{amount: "5", currency: "USD"}
+      }
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :reference}]}} = MishkaPay.refund(refund)
+      assert {:ok, _first} = MishkaPay.refund(Map.put(refund, :reference, "r-1"))
+      assert {:ok, _second} = MishkaPay.refund(Map.put(refund, :reference, "r-2"))
+
+      assert {:ok, %Payment{amount_refunded: refunded}} =
+               MishkaPay.fetch_payment("paypal", "ORDER3", "site-a")
+
+      assert refunded == Money.new(:USD, "10.00")
+    end
+  end
+
+  describe "webhooks" do
+    @event %{
+      "id" => "WH-EVT-1",
+      "event_type" => "PAYMENT.CAPTURE.COMPLETED",
+      "resource_type" => "capture",
+      "create_time" => "2026-11-16T10:00:00Z",
+      "resource" => %{
+        "id" => "CAPTURE1",
+        "supplementary_data" => %{"related_ids" => %{"order_id" => "ORDER9"}}
+      }
+    }
+
+    defp headers(signature) do
+      [
+        {"paypal-auth-algo", "SHA256withRSA"},
+        {"paypal-cert-url", "https://api.sandbox.paypal.com/v1/notifications/certs/CERT"},
+        {"paypal-transmission-id", "T1"},
+        {"paypal-transmission-sig", signature},
+        {"paypal-transmission-time", "2026-11-16T10:00:00Z"}
+      ]
+    end
+
+    test "PayPal checks the message, and the event names its Order" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+
+      assert {:ok,
+              %Event{
+                id: "WH-EVT-1",
+                type: "PAYMENT.CAPTURE.COMPLETED",
+                payment_id: "ORDER9",
+                livemode: false
+              }} =
+               PayPal.verify_webhook(JSON.encode!(@event), headers("good"), keys)
+
+      {_headers, body} = paypal_request("POST", "/v1/notifications/verify-webhook-signature")
+      assert body["webhook_id"] == "WH-1"
+      assert body["webhook_event"]["id"] == "WH-EVT-1"
+    end
+
+    test "a message PayPal does not confirm, one without its headers, and a site without a webhook id are refused" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+      payload = JSON.encode!(@event)
+
+      assert {:error, %Errors.BadSignature{reason: :mismatch}} =
+               PayPal.verify_webhook(payload, headers("forged"), keys)
+
+      assert {:error, %Errors.BadSignature{reason: :missing_header}} =
+               PayPal.verify_webhook(payload, [], keys)
+
+      assert {:error, %Errors.BadSignature{reason: :no_secret}} =
+               PayPal.verify_webhook(payload, headers("good"), %{keys | webhook_secret: nil})
+
+      assert {:error, %Errors.BadSignature{reason: :malformed}} =
+               PayPal.verify_webhook("not json", headers("good"), keys)
+    end
+  end
+end

@@ -41,6 +41,7 @@ defmodule MishkaPay.Messages do
           | :customer_one_of
           | :keys_answer
           | :stripe_id
+          | :paypal_id
           | :refund_currency
           | :refund_left
           | :refund_once
@@ -173,6 +174,9 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The %{field} field is not a Stripe id that starts with %{prefix}"
       )
+
+  defp msgid(:paypal_id),
+    do: dgettext_noop("mishka_pay", "The %{field} field is not a PayPal id: letters and digits")
 
   defp msgid(:refund_currency),
     do:
