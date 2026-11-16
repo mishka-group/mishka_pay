@@ -453,6 +453,10 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.UsageComponent} id="usage" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.EntitlementsComponent} id="entitlements" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.BalanceComponent} id="balance" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
