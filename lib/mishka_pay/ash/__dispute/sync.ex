@@ -5,7 +5,8 @@
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Dispute.Sync do
     @moduledoc """
-    The `:sync`, `:submit_evidence` and `:accept` actions of `MishkaPay.Ash.Dispute`: asks the
+    The `:sync`, `:submit_evidence` and `:accept` actions of the `:dispute` kind
+    (`MishkaPay.Ash.Resource`): asks the
     provider before the action's transaction starts, writes the dispute as the provider answered
     it, and fires `mishka_pay:dispute:changed` after. A dispute the provider cannot give is an
     error on the action, and nothing is written.
@@ -20,7 +21,7 @@ if Code.ensure_loaded?(Ash) do
     def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&ask(&1, opts[:operation]))
-      |> Ash.Changeset.after_transaction(&announce/2)
+      |> MishkaPay.Ash.announce(opts, &announce/2)
     end
 
     defp ask(changeset, :sync) do

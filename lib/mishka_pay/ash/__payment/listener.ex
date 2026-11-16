@@ -6,14 +6,16 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.Listener do
     @moduledoc """
     Makes a module the `mishka_pay:event:process` listener that syncs the payment an event concerns
-    into a payment resource (`MishkaPay.Ash.Payment`):
+    into a payment resource (the `:payment` kind of `MishkaPay.Ash.Resource`):
 
         defmodule MyApp.Pay.PaymentSync do
           use MishkaPay.Ash.Payment.Listener, resource: MyApp.Pay.Payment
         end
 
-    Supervise it like any plugin. An event about no payment is left alone; a payment the provider
-    cannot give fails the event, so the inbox tries it again later.
+    `MishkaPay.Ash.Resource` makes one for each resource that listens (`listen? true`), as
+    `<Resource>.MishkaPayListener`; write one by hand with `listen? false`, such as to give it
+    another `:priority`. Supervise it like any plugin. An event about no payment is left alone;
+    a payment the provider cannot give fails the event, so the inbox tries it again later.
     """
 
     @doc false

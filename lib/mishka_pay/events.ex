@@ -46,41 +46,45 @@ defmodule MishkaPay.Events do
   def webhook_received, do: "mishka_pay:webhook:received"
 
   @doc """
-  The inbox (`MishkaPay.Ash.Inbox`) fires this to work one stored event, once per try. Listeners
-  get `%{event: %MishkaPay.Event{}, failed: nil}` and answer it with `:failed` set to a reason when
-  the work did not finish, so the inbox tries again later.
+  The inbox (the `:inbox` kind of `MishkaPay.Ash.Resource`) fires this to work one stored event,
+  once per try. Listeners get `%{event: %MishkaPay.Event{}, failed: nil}` and answer it with
+  `:failed` set to a reason when the work did not finish, so the inbox tries again later.
   """
   @spec event_process() :: String.t()
   def event_process, do: "mishka_pay:event:process"
 
   @doc """
-  Fired after a payment resource (`MishkaPay.Ash.Payment`) synced a payment from its provider,
-  with `%{payment: %MishkaPay.Payment{}, record: record}`. A host listens here to act on a paid or
-  refunded payment, or to push the change to the screens that show it.
+  Fired after a payment resource (the `:payment` kind of `MishkaPay.Ash.Resource`) synced a
+  payment from its provider, with `%{payment: %MishkaPay.Payment{}, record: record}`. A host
+  listens here to act on a paid or refunded payment, or to push the change to the screens that
+  show it.
   """
   @spec payment_changed() :: String.t()
   def payment_changed, do: "mishka_pay:payment:changed"
 
   @doc """
-  Fired after a subscription resource (`MishkaPay.Ash.Subscription`) synced, cancelled or resumed a
-  subscription, with `%{subscription: %MishkaPay.Subscription{}, record: record}`. A host listens
-  here to give or take access, or to push the change to the screens that show it.
+  Fired after a subscription resource (the `:subscription` kind of `MishkaPay.Ash.Resource`)
+  synced, cancelled or resumed a subscription, with `%{subscription: %MishkaPay.Subscription{},
+  record: record}`. A host listens here to give or take access, or to push the change to the
+  screens that show it.
   """
   @spec subscription_changed() :: String.t()
   def subscription_changed, do: "mishka_pay:subscription:changed"
 
   @doc """
-  Fired after a customer resource (`MishkaPay.Ash.Customer`) registered, synced or edited a
-  customer, with `%{customer: %MishkaPay.Customer{}, record: record}`. A host listens here to link
-  the customer to its user, or to push the change to the screens that show it.
+  Fired after a customer resource (the `:customer` kind of `MishkaPay.Ash.Resource`) registered,
+  synced or edited a customer, with `%{customer: %MishkaPay.Customer{}, record: record}`. A host
+  listens here to link the customer to its user, or to push the change to the screens that show
+  it.
   """
   @spec customer_changed() :: String.t()
   def customer_changed, do: "mishka_pay:customer:changed"
 
   @doc """
-  Fired after a dispute resource (`MishkaPay.Ash.Dispute`) synced, answered or accepted a
-  dispute, with `%{dispute: %MishkaPay.Dispute{}, record: record}`. A host listens here to take
-  back what the payment gave while it is open, and give it again when it is won.
+  Fired after a dispute resource (the `:dispute` kind of `MishkaPay.Ash.Resource`) synced,
+  answered or accepted a dispute, with `%{dispute: %MishkaPay.Dispute{}, record: record}`. A host
+  listens here to take back what the payment gave while it is open, and give it again when it is
+  won.
   """
   @spec dispute_changed() :: String.t()
   def dispute_changed, do: "mishka_pay:dispute:changed"

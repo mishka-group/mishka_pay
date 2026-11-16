@@ -7,14 +7,17 @@ if Code.ensure_loaded?(Ash) do
     @moduledoc """
     Makes a module the `mishka_pay:event:process` listener that syncs the customer an event is
     about (`customer.created`, `customer.updated`, `customer.deleted` on Stripe) into a customer
-    resource (`MishkaPay.Ash.Customer`):
+    resource (the `:customer` kind of `MishkaPay.Ash.Resource`):
 
         defmodule MyApp.Pay.CustomerSync do
           use MishkaPay.Ash.Customer.Listener, resource: MyApp.Pay.Customer
         end
 
-    Supervise it like any plugin. An event about anything else is left alone; a customer the
-    provider cannot give fails the event, so the inbox tries it again later.
+    `MishkaPay.Ash.Resource` makes one for each resource that listens (`listen? true`), as
+    `<Resource>.MishkaPayListener`; write one by hand with `listen? false`, such as to give it
+    another `:priority`. Supervise it like any plugin. An event about anything else is left
+    alone; a customer the provider cannot give fails the event, so the inbox tries it again
+    later.
     """
 
     @doc false

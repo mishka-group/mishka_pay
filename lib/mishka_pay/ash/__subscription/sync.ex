@@ -16,10 +16,10 @@ if Code.ensure_loaded?(Ash) do
     alias MishkaPay.Helpers.Plugins
 
     @impl true
-    def change(changeset, _opts, _context) do
+    def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&fetch/1)
-      |> Ash.Changeset.after_transaction(&announce/2)
+      |> MishkaPay.Ash.announce(opts, &announce/2)
     end
 
     defp fetch(changeset) do

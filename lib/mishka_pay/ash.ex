@@ -5,18 +5,26 @@
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash do
     @moduledoc """
-    The Ash layer, for projects that use Ash: resource fragments a host adds to resources of its
-    own domain and data layer, and the listeners that keep them current. Without Ash none of it
-    compiles, and the rest of Mishka Pay works on plain structs.
+    The Ash layer, for projects that use Ash: the `MishkaPay.Ash.Resource` extension a host adds
+    to resources of its own domain and data layer, and the listeners that keep them current.
+    Without Ash none of it compiles, and the rest of Mishka Pay works on plain structs.
 
-      * `MishkaPay.Ash.Inbox` stores each checked webhook event once and works it with AshOban;
-        `MishkaPay.Ash.Inbox.Listener` fills it from `MishkaPay.Webhook`.
-      * `MishkaPay.Ash.Payment` keeps each provider payment, synced from the provider, with
-        `:start_checkout` and `:refund` actions; `MishkaPay.Ash.Payment.Listener` syncs the
-        payment each inbox event concerns.
+        defmodule MyApp.Pay.Payment do
+          use Ash.Resource,
+            domain: MyApp.Pay,
+            data_layer: AshPostgres.DataLayer,
+            extensions: [MishkaPay.Ash.Resource]
 
-    A host owns the tables, the domain, the policies and the notifiers: a fragment brings only the
-    attributes, identities, calculations and actions.
+          mishka_pay do
+            kind :payment
+          end
+        end
+
+    A resource keeps one kind: the webhook `:inbox` (each checked event, worked by AshOban),
+    `:payment`, `:subscription`, `:customer` or `:dispute`, each synced from its provider. A host
+    owns the tables, the domain, the policies and the notifiers; the extension brings the
+    attributes, identities, calculations, actions, code interface and listener. `listeners/1`
+    lists the listeners of a domain for the application's children.
 
     ## Errors
 
@@ -27,6 +35,31 @@ if Code.ensure_loaded?(Ash) do
     """
 
     alias MishkaPay.Errors
+
+    @doc """
+    The webhook listeners of a domain's resources (`listen? true` in `MishkaPay.Ash.Resource`), in
+    the domain's order, for the application's children:
+
+        children = [MishkaPay.Providers.Stripe, MyApp.Pay.Keys] ++ MishkaPay.Ash.listeners(MyApp.Pay)
+    """
+    @spec listeners(Ash.Domain.t()) :: [module()]
+    def listeners(domain) do
+      for resource <- Ash.Domain.Info.resources(domain),
+          listener = MishkaPay.Ash.Resource.Info.listener(resource),
+          do: listener
+    end
+
+    @doc false
+    # The `mishka_pay:<kind>:changed` announcement of a change, after its transaction, unless the
+    # resource says `announce? false`.
+    @spec announce(Ash.Changeset.t(), keyword(), (Ash.Changeset.t(), term() -> term())) ::
+            Ash.Changeset.t()
+    def announce(changeset, opts, announce) do
+      case Keyword.get(opts, :announce?, true) do
+        true -> Ash.Changeset.after_transaction(changeset, announce)
+        false -> changeset
+      end
+    end
 
     @doc "A `MishkaPay.Errors` error (or any Splode error) as Ash errors, one per inner error."
     @spec to_ash_error(Exception.t()) :: [Exception.t()]

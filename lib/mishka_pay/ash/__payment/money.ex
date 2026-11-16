@@ -4,7 +4,10 @@
 
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.Money do
-    @moduledoc "The `:money` calculations of `MishkaPay.Ash.Payment`: a stored amount with its currency, as `Money`."
+    @moduledoc """
+    The `:money` calculations of `MishkaPay.Ash.Resource`'s kinds: a stored amount with its
+    currency, as `Money`.
+    """
 
     use Ash.Resource.Calculation
 

@@ -12,7 +12,9 @@ defmodule MishkaPay.Ash.DisputeTest do
 
   alias MishkaPay.{Dispute, Webhook}
   alias MishkaPay.Providers.Stripe
-  alias MishkaPay.Support.{DisputeSync, DisputeWatcher, Inbox, StripeMock}
+  alias MishkaPay.Support.Dispute.MishkaPayListener, as: DisputeSync
+  alias MishkaPay.Support.{DisputeWatcher, StripeMock}
+  alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
 
   @moduletag :stripe_mock
 

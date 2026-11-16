@@ -5,7 +5,8 @@
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.Refund do
     @moduledoc """
-    The `:refund` action of `MishkaPay.Ash.Payment`: refunds the stored payment through its
+    The `:refund` action of the `:payment` kind (`MishkaPay.Ash.Resource`): refunds the stored
+    payment through its
     provider before the transaction starts (as often as the tenant allows, see
     `MishkaPay.Refund`), reads the payment again and writes it, keeps the
     `MishkaPay.Refund` in the record's `:refund` metadata, and fires `mishka_pay:payment:changed`.
@@ -18,13 +19,13 @@ if Code.ensure_loaded?(Ash) do
     alias MishkaPay.Ash.Payment.Sync
 
     @impl true
-    def change(changeset, _opts, _context) do
+    def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&refund/1)
       |> Ash.Changeset.after_action(fn changeset, record ->
         {:ok, Ash.Resource.put_metadata(record, :refund, changeset.context[:mishka_pay_refund])}
       end)
-      |> Ash.Changeset.after_transaction(&Sync.announce/2)
+      |> MishkaPay.Ash.announce(opts, &Sync.announce/2)
     end
 
     defp refund(%{data: payment} = changeset) do

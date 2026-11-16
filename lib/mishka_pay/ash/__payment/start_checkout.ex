@@ -4,7 +4,10 @@
 
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Payment.StartCheckout do
-    @moduledoc "The `:start_checkout` action of `MishkaPay.Ash.Payment`: `MishkaPay.checkout/1` with Ash errors."
+    @moduledoc """
+    The `:start_checkout` action of the `:payment` kind (`MishkaPay.Ash.Resource`):
+    `MishkaPay.checkout/1` with Ash errors.
+    """
 
     use Ash.Resource.Actions.Implementation
 

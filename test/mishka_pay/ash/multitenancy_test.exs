@@ -8,7 +8,9 @@ defmodule MishkaPay.Ash.MultitenancyTest do
   use MishkaPay.DataCase, async: false
 
   alias MishkaPay.Providers.Stripe
-  alias MishkaPay.Support.{Inbox, SitePayment, SitePaymentSync, StripeMock}
+  alias MishkaPay.Support.{SitePayment, StripeMock}
+  alias MishkaPay.Support.SitePayment.MishkaPayListener, as: SitePaymentSync
+  alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
 
   @moduletag :stripe_mock
 

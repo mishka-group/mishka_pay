@@ -6,7 +6,7 @@ if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Subscription.Update do
     @moduledoc """
     The `:cancel`, `:resume`, `:change`, `:pause` and `:resume_collection` actions of
-    `MishkaPay.Ash.Subscription`: asks the provider before
+    the `:subscription` kind of `MishkaPay.Ash.Resource`: asks the provider before
     the transaction starts, writes the subscription as the provider answers it, and fires
     `mishka_pay:subscription:changed` after.
     """
@@ -29,7 +29,7 @@ if Code.ensure_loaded?(Ash) do
     def change(changeset, opts, _context) do
       changeset
       |> Ash.Changeset.before_transaction(&ask(&1, opts[:operation]))
-      |> Ash.Changeset.after_transaction(&Sync.announce/2)
+      |> MishkaPay.Ash.announce(opts, &Sync.announce/2)
     end
 
     defp ask(%{data: row} = changeset, :cancel) do

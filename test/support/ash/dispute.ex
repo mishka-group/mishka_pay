@@ -3,15 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 defmodule MishkaPay.Support.Dispute do
-  @moduledoc "A host's dispute resource, as `MishkaPay.Ash.Dispute` shows it."
+  @moduledoc "A host's dispute resource, as `MishkaPay.Ash.Resource` shows its `:dispute` kind."
 
   use Ash.Resource,
     domain: MishkaPay.Support.Domain,
     data_layer: AshPostgres.DataLayer,
-    fragments: [MishkaPay.Ash.Dispute]
+    extensions: [MishkaPay.Ash.Resource]
 
   postgres do
     table "pay_disputes"
     repo MishkaPay.Support.Repo
+  end
+
+  mishka_pay do
+    kind :dispute
   end
 end

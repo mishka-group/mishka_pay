@@ -2,8 +2,9 @@
 
 Mishka Pay (`:mishka_pay`) takes payments in Elixir projects: checkouts, payments, refunds,
 subscriptions and verified webhooks, the same way for every provider. Stripe is the full provider;
-PayPal's adapter exists and waits for its sandbox run. An optional Ash layer stores events,
-payments and subscriptions in the host's own resources.
+PayPal's adapter exists and waits for its sandbox run. An optional Ash layer (the
+`MishkaPay.Ash.Resource` extension) stores events, payments, subscriptions, customers and disputes
+in the host's own resources.
 
 Read this file before writing any code that touches payments. Then load the sub-rule for the area
 you work in (list at the end). When something is not covered here, read the module's own docs
@@ -335,7 +336,7 @@ nothing. Supervise every listener like any child.
 | `usage-rules/stripe.md` | anything Stripe: checkout, Managed Payments, ids, test cards, test clocks |
 | `usage-rules/subscriptions.md` | plans, trials, cancel and resume, invoices, renewals |
 | `usage-rules/webhooks.md` | the webhook endpoint, signatures, tenants, answers, listeners |
-| `usage-rules/ash.md` | storing events, payments or subscriptions in Ash resources |
+| `usage-rules/ash.md` | storing events, payments, subscriptions, customers or disputes in Ash resources |
 | `usage-rules/testing.md` | tests of code that takes payments |
 | `usage-rules/providers.md` | writing a new provider, or a capability for one |
 | `usage-rules/paypal.md` | PayPal (coming soon) |

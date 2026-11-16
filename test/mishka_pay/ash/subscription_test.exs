@@ -12,7 +12,9 @@ defmodule MishkaPay.Ash.SubscriptionTest do
 
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.{Subscription, Webhook}
-  alias MishkaPay.Support.{Inbox, StripeMock, SubscriptionSync, SubscriptionWatcher}
+  alias MishkaPay.Support.{StripeMock, SubscriptionWatcher}
+  alias MishkaPay.Support.Subscription.MishkaPayListener, as: SubscriptionSync
+  alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
 
   @moduletag :stripe_mock
 

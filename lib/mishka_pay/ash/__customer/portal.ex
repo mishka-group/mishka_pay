@@ -5,7 +5,8 @@
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Customer.Portal do
     @moduledoc """
-    The `:portal` action of `MishkaPay.Ash.Customer`: reads the row (with the caller's actor and
+    The `:portal` action of the `:customer` kind (`MishkaPay.Ash.Resource`): reads the row (with
+    the caller's actor and
     tenant) and opens its provider's customer portal with `MishkaPay.portal_session/1`.
     """
 

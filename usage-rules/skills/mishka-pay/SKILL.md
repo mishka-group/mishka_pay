@@ -1,6 +1,6 @@
 ---
 name: mishka-pay
-description: "Use this skill when a project takes payments with Mishka Pay (`:mishka_pay` in mix.exs, `MishkaPay.checkout`, `MishkaPay.refund`, `MishkaPay.fetch_payment`, `MishkaPay.Webhook`, `MishkaPay.Credentials`, `MishkaPay.Ash.Payment`, `MishkaPay.Errors.*`, `mishka_pay:payment:changed`): adding a checkout or a subscription plan, a refund, a webhook endpoint, per-site payment keys, the Ash payment tables, or tests of payment code."
+description: "Use this skill when a project takes payments with Mishka Pay (`:mishka_pay` in mix.exs, `MishkaPay.checkout`, `MishkaPay.refund`, `MishkaPay.fetch_payment`, `MishkaPay.Webhook`, `MishkaPay.Credentials`, `MishkaPay.Ash.Resource`, `MishkaPay.Errors.*`, `mishka_pay:payment:changed`): adding a checkout or a subscription plan, a refund, a webhook endpoint, per-site payment keys, the Ash payment tables, or tests of payment code."
 ---
 
 ## Overview

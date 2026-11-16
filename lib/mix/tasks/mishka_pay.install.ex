@@ -29,8 +29,9 @@ defmodule Mix.Tasks.MishkaPay.Install.Docs do
     Options:
 
       * `--ash`: the Ash layer: a `<App>.Pay` domain with the webhook inbox, payments,
-        subscriptions, customers and disputes as resources of the project, their listeners, and
-        the inbox's Oban queue. It needs ash_postgres and ash_oban (`mix igniter.install ash_postgres
+        subscriptions, customers and disputes as resources of the project
+        (`MishkaPay.Ash.Resource`), the listener the extension makes for each in the application's
+        children, and the inbox's Oban queue. It needs ash_postgres and ash_oban (`mix igniter.install ash_postgres
         ash_oban`), then `mix ash.codegen mishka_pay`.
       * `--pubsub`: `<App>.Pay.Broadcast`, Mishka Pay's PubSub plugin on the project's
         `<App>.PubSub`.
@@ -50,11 +51,11 @@ if Code.ensure_loaded?(Igniter) do
     alias Igniter.Project.{Application, Config}
 
     @resources [
-      {"WebhookEvent", MishkaPay.Ash.Inbox, "pay_webhook_events", "Inbox"},
-      {"Payment", MishkaPay.Ash.Payment, "pay_payments", "PaymentSync"},
-      {"Subscription", MishkaPay.Ash.Subscription, "pay_subscriptions", "SubscriptionSync"},
-      {"Customer", MishkaPay.Ash.Customer, "pay_customers", "CustomerSync"},
-      {"Dispute", MishkaPay.Ash.Dispute, "pay_disputes", "DisputeSync"}
+      {"WebhookEvent", :inbox, "pay_webhook_events"},
+      {"Payment", :payment, "pay_payments"},
+      {"Subscription", :subscription, "pay_subscriptions"},
+      {"Customer", :customer, "pay_customers"},
+      {"Dispute", :dispute, "pay_disputes"}
     ]
 
     @impl Igniter.Mix.Task
@@ -186,21 +187,16 @@ if Code.ensure_loaded?(Igniter) do
       repo = Igniter.Project.Module.module_name(igniter, "Repo")
 
       igniter =
-        Enum.reduce(@resources, igniter, fn {name, fragment, table, listener}, igniter ->
+        Enum.reduce(@resources, igniter, fn {name, kind, table}, igniter ->
           resource = Module.concat(domain, name)
 
           igniter
           |> Igniter.Project.Module.create_module(
             resource,
-            resource_body(domain, fragment, table, repo),
+            resource_body(domain, kind, table, repo),
             on_exists: :skip
           )
-          |> Igniter.Project.Module.create_module(
-            Module.concat(domain, listener),
-            listener_body(fragment, resource),
-            on_exists: :skip
-          )
-          |> Application.add_new_child(Module.concat(domain, listener),
+          |> Application.add_new_child(Module.concat(resource, MishkaPayListener),
             after: [MishkaPay.Providers.Stripe]
           )
         end)
@@ -227,12 +223,16 @@ if Code.ensure_loaded?(Igniter) do
       """)
     end
 
-    defp resource_body(domain, fragment, table, repo) do
+    defp resource_body(domain, kind, table, repo) do
       """
       use Ash.Resource,
         domain: #{inspect(domain)},
         data_layer: AshPostgres.DataLayer,
-        fragments: [#{inspect(fragment)}]
+        extensions: [MishkaPay.Ash.Resource]
+
+      mishka_pay do
+        kind #{inspect(kind)}
+      end
 
       postgres do
         table "#{table}"
@@ -241,15 +241,9 @@ if Code.ensure_loaded?(Igniter) do
       """
     end
 
-    defp listener_body(MishkaPay.Ash.Inbox, resource),
-      do: "use MishkaPay.Ash.Inbox.Listener, resource: #{inspect(resource)}"
-
-    defp listener_body(fragment, resource),
-      do: "use #{inspect(fragment)}.Listener, resource: #{inspect(resource)}"
-
     defp domain_body(domain) do
       resources =
-        Enum.map_join(@resources, "\n", fn {name, _f, _t, _l} ->
+        Enum.map_join(@resources, "\n", fn {name, _kind, _table} ->
           "    resource #{inspect(Module.concat(domain, name))}"
         end)
 

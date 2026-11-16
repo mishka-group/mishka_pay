@@ -5,17 +5,21 @@
 defmodule MishkaPay.Support.SitePayment do
   @moduledoc """
   A multi-tenant host's payment resource, as Mishka CMS keeps its rows: Ash multitenancy on the
-  host's own `:site_id`, with `MishkaPay.Ash.Payment` on top.
+  host's own `:site_id`, with the `:payment` kind of `MishkaPay.Ash.Resource` on top.
   """
 
   use Ash.Resource,
     domain: MishkaPay.Support.Domain,
     data_layer: AshPostgres.DataLayer,
-    fragments: [MishkaPay.Ash.Payment]
+    extensions: [MishkaPay.Ash.Resource]
 
   postgres do
     table "site_payments"
     repo MishkaPay.Support.Repo
+  end
+
+  mishka_pay do
+    kind :payment
   end
 
   multitenancy do

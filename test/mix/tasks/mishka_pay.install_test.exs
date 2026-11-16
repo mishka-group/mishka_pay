@@ -42,12 +42,23 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
   end
 
   test "--ash adds the domain, the five resources and their listeners; --pubsub the broadcast" do
-    phx_test_project()
-    |> Igniter.compose_task("mishka_pay.install", ["--ash", "--pubsub"])
-    |> assert_creates("lib/test/pay.ex")
-    |> assert_creates("lib/test/pay/payment.ex")
-    |> assert_creates("lib/test/pay/webhook_event.ex")
-    |> assert_creates("lib/test/pay/dispute_sync.ex")
-    |> assert_creates("lib/test/pay/broadcast.ex")
+    igniter =
+      phx_test_project()
+      |> Igniter.compose_task("mishka_pay.install", ["--ash", "--pubsub"])
+      |> assert_creates("lib/test/pay.ex")
+      |> assert_creates("lib/test/pay/webhook_event.ex")
+      |> assert_creates("lib/test/pay/broadcast.ex")
+      |> assert_has_patch("lib/test/application.ex", """
+      + |      Test.Pay.Dispute.MishkaPayListener,
+      """)
+
+    payment =
+      igniter.rewrite
+      |> Rewrite.source!("lib/test/pay/payment.ex")
+      |> Rewrite.Source.get(:content)
+
+    assert payment =~ "extensions: [MishkaPay.Ash.Resource]"
+    assert payment =~ ~r/mishka_pay do\s+kind[( ]:payment\)?\s+end/
+    refute Rewrite.has_source?(igniter.rewrite, "lib/test/pay/payment_sync.ex")
   end
 end
