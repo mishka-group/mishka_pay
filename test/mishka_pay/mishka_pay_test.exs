@@ -510,6 +510,58 @@ defmodule MishkaPayTest do
       end
     end
 
+    test "a plan or a quantity changes with the proration the caller chose, previewed first" do
+      change = %{
+        provider: "acme",
+        tenant: "site-a",
+        subscription_id: "acme_sub_active",
+        price_id: "acme_price_team",
+        quantity: 3,
+        proration: "always_invoice"
+      }
+
+      assert {:ok, %MishkaPay.Invoice{amount_due: due, lines: [credit, charge]} = preview} =
+               MishkaPay.preview_subscription_change(change)
+
+      assert Money.equal?(due, Money.new(:USD, "4.50"))
+      assert credit.proration and charge.proration
+      assert "acme_upcoming_" <> _ = preview.id
+
+      assert {:ok, %MishkaPay.Subscription{items: [%{id: "acme_price_team", quantity: 3}]}} =
+               MishkaPay.change_subscription(change)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :price_id}]}} =
+               MishkaPay.change_subscription(%{
+                 provider: "acme",
+                 subscription_id: "acme_sub_active"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :proration}]}} =
+               MishkaPay.change_subscription(Map.put(change, :proration, "sometimes"))
+    end
+
+    test "collection pauses with the behavior the caller chose, resumes, and an invoice is read" do
+      later = DateTime.add(DateTime.utc_now(), 30, :day)
+
+      assert {:ok, %MishkaPay.Subscription{pause_behavior: :keep_as_draft, resumes_at: ^later}} =
+               MishkaPay.pause_collection("acme", "acme_sub_active", "site-a",
+                 behavior: :keep_as_draft,
+                 resumes_at: later
+               )
+
+      assert {:ok, %MishkaPay.Subscription{pause_behavior: :void}} =
+               MishkaPay.pause_collection("acme", "acme_sub_active", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :behavior}]}} =
+               MishkaPay.pause_collection("acme", "acme_sub_active", "site-a", behavior: :forever)
+
+      assert {:ok, %MishkaPay.Subscription{pause_behavior: nil}} =
+               MishkaPay.resume_collection("acme", "acme_sub_active", "site-a")
+
+      assert {:ok, %MishkaPay.Invoice{lines: [%MishkaPay.InvoiceLine{description: "Pro plan"}]}} =
+               MishkaPay.fetch_invoice("acme", "acme_in_1", "site-a")
+    end
+
     test "a provider without subscriptions refuses a subscription checkout and every call" do
       MishkaPay.Test.start_plugin!(CheckoutOnly)
 

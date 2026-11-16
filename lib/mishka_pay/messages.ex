@@ -51,6 +51,9 @@ defmodule MishkaPay.Messages do
           | :expires_range
           | :plain_id
           | :link_reference
+          | :change_nothing
+          | :change_item
+          | :pause_behavior
           | :link_items
           | :invoice_mode
           | :rejected_missing
@@ -227,6 +230,27 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:rejected_exists),
     do: dgettext_noop("mishka_pay", "%{provider} already has one with that code or id")
+
+  defp msgid(:change_nothing),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A subscription change needs a new plan, a new quantity or a new billing period"
+      )
+
+  defp msgid(:change_item),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "This subscription has more than one item: say which one changes"
+      )
+
+  defp msgid(:pause_behavior),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A pause keeps its invoices as void, keep_as_draft or mark_uncollectible"
+      )
 
   defp msgid(:link_reference),
     do:

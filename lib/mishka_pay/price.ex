@@ -34,6 +34,9 @@ defmodule MishkaPay.Price do
       price that was used).
     * `:metadata`: extra pairs, string keys to string values.
     * `:created_at`: filled in by the provider.
+
+  On a subscription's item (`MishkaPay.Subscription`), `:item_id` is the provider's id of that
+  line (`si_...` at Stripe).
   """
 
   use GuardedStruct
@@ -70,6 +73,7 @@ defmodule MishkaPay.Price do
     field :active, boolean(), derives: "validate(boolean)"
     dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
     field :created_at, DateTime.t(), derives: "validate(struct)"
+    field :item_id, String.t(), derives: "validate(string)"
   end
 
   # An interval from JSON or a form comes as a string.

@@ -72,6 +72,7 @@ defmodule MishkaPay.Providers.Stripe do
       :expire,
       :refund,
       :subscription,
+      :subscription_change,
       :customer,
       :portal,
       :discount,
@@ -220,6 +221,94 @@ defmodule MishkaPay.Providers.Stripe do
     case Enum.find(results, &match?({:error, _}, &1)) do
       nil -> {:ok, Enum.map(results, fn {:ok, item} -> item end)}
       error -> error
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_invoice(invoice_id, keys) do
+    with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
+         {:ok, invoice} <- request(:get, "/v1/invoices/#{invoice_id}", [], keys) do
+      Mapper.invoice(invoice)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def change_subscription(change, keys) do
+    with {:ok, item_id} <- item_of(change, keys),
+         {:ok, _changed} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{change.subscription_id}",
+             Mapper.change_params(change, item_id),
+             keys
+           ) do
+      fetch_subscription(change.subscription_id, keys)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def preview_subscription_change(change, keys) do
+    with {:ok, item_id} <- item_of(change, keys),
+         {:ok, invoice} <-
+           request(
+             :post,
+             "/v1/invoices/create_preview",
+             Mapper.preview_params(change, item_id),
+             keys
+           ) do
+      Mapper.invoice(invoice)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def pause_collection(subscription_id, opts, keys) do
+    pause = %{
+      "behavior" => Atom.to_string(opts[:behavior]),
+      "resumes_at" => opts[:resumes_at] && DateTime.to_unix(opts[:resumes_at])
+    }
+
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, _paused} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{subscription_id}",
+             %{"pause_collection" => pause},
+             keys
+           ) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  # Stripe takes an empty `pause_collection` as "collect again".
+  @impl MishkaPay.Provider
+  def resume_collection(subscription_id, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, _resumed} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{subscription_id}",
+             %{"pause_collection" => ""},
+             keys
+           ) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  # The item a change names, or the subscription's only one; one of several must be named.
+  defp item_of(%{item_id: item_id} = change, _keys) when is_binary(item_id) do
+    with :ok <- stripe_id(change.subscription_id, "sub_", :subscription_id),
+         :ok <- stripe_id(item_id, "si_", :item_id),
+         :ok <- maybe_id(change.price_id, "price_", :price_id),
+         do: {:ok, item_id}
+  end
+
+  defp item_of(change, keys) do
+    with :ok <- maybe_id(change.price_id, "price_", :price_id),
+         {:ok, subscription} <- fetch_subscription(change.subscription_id, keys) do
+      case subscription.items do
+        [%{item_id: item_id}] when is_binary(item_id) -> {:ok, item_id}
+        _many_or_none -> ProviderKit.invalid(:item_id, Messages.text(:change_item))
+      end
     end
   end
 

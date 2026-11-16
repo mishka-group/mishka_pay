@@ -12,7 +12,11 @@ defmodule MishkaPay.Subscription do
     * `:status`: `:incomplete` (the first payment is not done), `:incomplete_expired` (it never
       was), `:trialing`, `:active`, `:past_due` (a renewal failed and is being tried again),
       `:unpaid` (the tries ran out), `:paused` or `:canceled`.
-    * `:items`: what it charges for, each a `MishkaPay.Price` with its `:interval`.
+    * `:items`: what it charges for, each a `MishkaPay.Price` with its `:interval`, `:quantity`
+      and `:item_id` (the line a `MishkaPay.SubscriptionChange` names).
+    * `:pause_behavior`, `:resumes_at`: while collection is paused
+      (`MishkaPay.pause_collection/4`), what happens to its invoices (`:void`,
+      `:keep_as_draft` or `:mark_uncollectible`) and when collection starts again by itself.
     * `:customer_id`, `:customer_email`, `:customer_name`: the buyer.
     * `:current_period_start`, `:current_period_end`: the period paid for now.
     * `:cancel_at_period_end`: `true` when it ends at `:current_period_end` (see
@@ -42,8 +46,19 @@ defmodule MishkaPay.Subscription do
     field :canceled_at, DateTime.t(), derives: "validate(struct)"
     field :trial_end, DateTime.t(), derives: "validate(struct)"
     field :latest_invoice_id, String.t(), derives: "validate(string)"
+
+    field :pause_behavior, :void | :keep_as_draft | :mark_uncollectible,
+      derives: "validate(enum=Atom[void::keep_as_draft::mark_uncollectible])",
+      validator: {__MODULE__, :pause_behavior}
+
+    field :resumes_at, DateTime.t(), derives: "validate(struct)"
     field :reference, String.t(), derives: "validate(string)"
     dynamic_field :metadata
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
+
+  # A provider names the behavior as a string.
+  @doc false
+  def pause_behavior(field, value),
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(void keep_as_draft mark_uncollectible))
 end

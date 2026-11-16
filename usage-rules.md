@@ -85,6 +85,9 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
+| `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |
+| `MishkaPay.pause_collection(provider, id, tenant, behavior: ...)`, `resume_collection/3` | stops or starts charging without cancelling |
+| `MishkaPay.fetch_invoice(provider, invoice_id, tenant)` | `%MishkaPay.Invoice{}` with its `:lines` |
 | `MishkaPay.list_invoices(provider, tenant, subscription_id: id)` (or `customer_id:`) | a `MishkaPay.Page` of `%MishkaPay.Invoice{}` |
 | `MishkaPay.list_payments(provider, tenant, customer_id: id)` | a `MishkaPay.Page` of `%MishkaPay.Payment{}` |
 | `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |

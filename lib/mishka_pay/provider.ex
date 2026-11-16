@@ -47,8 +47,11 @@ defmodule MishkaPay.Provider do
     * `:expire`: `expire_checkout/2`;
     * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
-    * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
-      `list_invoices/2` (a subscription starts with a checkout in `mode: :subscription`);
+    * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
+      `list_invoices/2` and `fetch_invoice/2` (a subscription starts with a checkout in
+      `mode: :subscription`);
+    * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
+      `pause_collection/3`, `resume_collection/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
     * `:portal`: `portal_session/2`;
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
@@ -76,6 +79,7 @@ defmodule MishkaPay.Provider do
     :payment_list,
     :refund,
     :subscription,
+    :subscription_change,
     :customer,
     :portal,
     :discount,
@@ -93,6 +97,8 @@ defmodule MishkaPay.Provider do
     * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
     * `:subscription`: charges again on a schedule.
+    * `:subscription_change`: changes a running subscription's plan or quantity with proration,
+      previews what that bills, and pauses or resumes its collection.
     * `:customer`: keeps buyers (create, read, update, list).
     * `:portal`: has a hosted page where a customer manages their own billing.
     * `:discount`: keeps coupons and the promotion codes buyers type.
@@ -107,6 +113,7 @@ defmodule MishkaPay.Provider do
           | :expire
           | :refund
           | :subscription
+          | :subscription_change
           | :customer
           | :portal
           | :discount
@@ -182,6 +189,40 @@ defmodule MishkaPay.Provider do
   """
   @callback list_invoices(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription`. Reads one invoice, with its lines."
+  @callback fetch_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_change`. Changes a subscription's plan or quantity as the change says,
+  bills the difference its way, and answers the subscription after.
+  """
+  @callback change_subscription(MishkaPay.SubscriptionChange.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_change`. The invoice the change would make, with its proration lines,
+  without changing anything.
+  """
+  @callback preview_subscription_change(
+              MishkaPay.SubscriptionChange.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_change`. Pauses collecting a subscription's payments: `:behavior` says
+  what happens to its invoices meanwhile, `:resumes_at` when collection starts again by itself.
+  """
+  @callback pause_collection(
+              subscription_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription_change`. Collects a paused subscription's payments again."
+  @callback resume_collection(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:payment_list`. One page of payments, newest first; only `:customer_id`'s when given."
   @callback list_payments(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -315,6 +356,11 @@ defmodule MishkaPay.Provider do
                       cancel_subscription: 3,
                       resume_subscription: 2,
                       list_invoices: 2,
+                      fetch_invoice: 2,
+                      change_subscription: 2,
+                      preview_subscription_change: 2,
+                      pause_collection: 3,
+                      resume_collection: 2,
                       create_customer: 2,
                       fetch_customer: 2,
                       update_customer: 2,
@@ -352,7 +398,14 @@ defmodule MishkaPay.Provider do
       fetch_subscription: 2,
       cancel_subscription: 3,
       resume_subscription: 2,
-      list_invoices: 2
+      list_invoices: 2,
+      fetch_invoice: 2
+    ],
+    subscription_change: [
+      change_subscription: 2,
+      preview_subscription_change: 2,
+      pause_collection: 3,
+      resume_collection: 2
     ],
     customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
     portal: [portal_session: 2],

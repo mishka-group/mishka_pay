@@ -23,7 +23,9 @@ end
   - `:payment_list`: `list_payments/2`;
   - `:refund`: `refund/2`;
   - `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
-    `list_invoices/2`;
+    `list_invoices/2`, `fetch_invoice/2`;
+  - `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
+    `pause_collection/3`, `resume_collection/2`;
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
   - `:portal`: `portal_session/2`;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,

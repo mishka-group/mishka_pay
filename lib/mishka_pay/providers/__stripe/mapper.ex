@@ -194,6 +194,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp money(_minor, _currency), do: nil
 
+  defp signed_money(minor, currency) when is_integer(minor) and is_binary(currency) do
+    case Money.signed_from_minor(minor, currency) do
+      {:ok, money} -> money
+      {:error, _odd} -> nil
+    end
+  end
+
+  defp signed_money(_minor, _currency), do: nil
+
   @doc """
   A PaymentIntent, with its latest charge, the charge's refunds and the customer expanded, as a
   `MishkaPay.Payment`.
@@ -279,6 +288,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       canceled_at: time(sub["canceled_at"]),
       trial_end: time(sub["trial_end"]),
       latest_invoice_id: id_of(sub["latest_invoice"]),
+      pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
+      resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),
       reference: get_in(sub, ["metadata", @reference]),
       metadata: Map.delete(sub["metadata"] || %{}, @reference),
       created_at: time(sub["created"])
@@ -296,6 +307,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         [
           %{
             id: price["id"],
+            item_id: item["id"],
             name: expanded(price["product"])["name"] || price["nickname"],
             amount: amount,
             quantity: item["quantity"] || 1,
@@ -373,6 +385,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       status: known(invoice["status"], @invoice_statuses),
       amount_due: money(invoice["amount_due"], invoice["currency"]),
       amount_paid: money(invoice["amount_paid"], invoice["currency"]),
+      total: money(invoice["total"], invoice["currency"]),
+      amount_tax: money(tax_of(invoice), invoice["currency"]),
+      lines:
+        invoice
+        |> get_in(["lines", "data"])
+        |> List.wrap()
+        |> Enum.map(&line(&1, invoice["currency"])),
+      customer_id: id_of(invoice["customer"]),
       period_start: time(invoice["period_start"]),
       period_end: time(invoice["period_end"]),
       hosted_url: invoice["hosted_invoice_url"],
@@ -382,6 +402,59 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
     |> Invoice.builder()
     |> MishkaPay.Errors.from_builder()
+  end
+
+  # Stripe sums an invoice's taxes in `total_taxes`.
+  defp tax_of(%{"total_taxes" => taxes}) when is_list(taxes),
+    do: Enum.reduce(taxes, 0, &((&1["amount"] || 0) + &2))
+
+  defp tax_of(_no_taxes), do: nil
+
+  defp line(line, currency) do
+    %{
+      description: line["description"],
+      amount: signed_money(line["amount"], currency),
+      quantity: line["quantity"],
+      price_id: id_of(get_in(line, ["pricing", "price_details", "price"])),
+      proration:
+        get_in(line, ["parent", "subscription_item_details", "proration"]) == true or
+          line["proration"] == true,
+      period_start: time(get_in(line, ["period", "start"])),
+      period_end: time(get_in(line, ["period", "end"]))
+    }
+  end
+
+  @doc """
+  Params of `POST /v1/subscriptions/:id` for a change: the item with its new price and quantity,
+  and how the difference is billed; only what the change sets.
+  """
+  @spec change_params(MishkaPay.SubscriptionChange.t(), String.t()) :: map()
+  def change_params(change, item_id) do
+    %{
+      "items" => [change_item(change, item_id)],
+      "proration_behavior" => change.proration && to_string(change.proration),
+      "proration_date" => change.proration_date && DateTime.to_unix(change.proration_date),
+      "billing_cycle_anchor" =>
+        change.billing_cycle_anchor && %{"type" => to_string(change.billing_cycle_anchor)},
+      "payment_behavior" => change.payment_behavior && to_string(change.payment_behavior)
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  @doc "Params of `POST /v1/invoices/create_preview` for the same change, without making it."
+  @spec preview_params(MishkaPay.SubscriptionChange.t(), String.t()) :: map()
+  def preview_params(change, item_id) do
+    details =
+      change
+      |> change_params(item_id)
+      |> Map.drop(["payment_behavior"])
+
+    %{"subscription" => change.subscription_id, "subscription_details" => details}
+  end
+
+  defp change_item(change, item_id) do
+    %{"id" => item_id, "price" => change.price_id, "quantity" => change.quantity}
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   defp known(value, values) when is_binary(value) do

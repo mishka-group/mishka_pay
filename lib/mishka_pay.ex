@@ -48,8 +48,9 @@ defmodule MishkaPay do
   `:customer_list`, `:portal`, `:checkout_expire`, `:coupon_create`, `:coupon`, `:coupon_list`,
   `:coupon_delete`, `:promotion_code_create`, `:promotion_code`, `:promotion_code_list` or
   `:promotion_code_update`, `:payment_list`, `:invoices`, `:product_create`, `:product`,
-  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update`, `:price_list`, `:payment_link_create`, `:payment_link`, `:payment_link_update`
-  or `:payment_link_list`,
+  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update`, `:price_list`, `:payment_link_create`, `:payment_link`, `:payment_link_update`,
+  `:payment_link_list`, `:invoice`, `:subscription_change`, `:subscription_preview`,
+  `:subscription_pause` or `:subscription_unpause`,
   with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
@@ -540,6 +541,86 @@ defmodule MishkaPay do
           {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_invoices(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
     subscription(:invoices, provider, tenant, & &1.list_invoices(limited(opts), &2))
+  end
+
+  @doc "Reads invoice `invoice_id` from `provider`, with its lines, bill page and PDF."
+  @spec fetch_invoice(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def fetch_invoice(provider, invoice_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(invoice_id) do
+    subscription(:invoice, provider, tenant, & &1.fetch_invoice(invoice_id, &2))
+  end
+
+  @doc """
+  Changes a running subscription (see `MishkaPay.SubscriptionChange`): a new plan
+  (`:price_id`), a new quantity, or both, billed the way `:proration` says. Answers the
+  subscription after. Preview it first with `preview_subscription_change/1`.
+  """
+  @spec change_subscription(map()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def change_subscription(attrs) when is_map(attrs) do
+    changed(:subscription_change, attrs, :change_subscription)
+  end
+
+  @doc """
+  The invoice `change_subscription/1` would make with the same `attrs`, with its proration lines,
+  without changing anything. Pass its `:proration_date` to the change to bill exactly this.
+  """
+  @spec preview_subscription_change(map()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def preview_subscription_change(attrs) when is_map(attrs) do
+    attrs = Map.put_new_lazy(attrs, :proration_date, &DateTime.utc_now/0)
+    changed(:subscription_preview, attrs, :preview_subscription_change)
+  end
+
+  @doc """
+  Pauses collecting subscription `subscription_id`'s payments; the subscription stays. `behavior:`
+  `:void` (the default: its invoices are voided), `:keep_as_draft` or `:mark_uncollectible`;
+  `resumes_at:` when collection starts again by itself.
+  """
+  @spec pause_collection(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def pause_collection(provider, subscription_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(subscription_id) do
+    behavior = Keyword.get(opts, :behavior, :void)
+
+    case behavior in [:void, :keep_as_draft, :mark_uncollectible] do
+      true ->
+        capable(
+          :subscription_change,
+          :subscription_pause,
+          provider,
+          tenant,
+          & &1.pause_collection(subscription_id, Keyword.put(opts, :behavior, behavior), &2)
+        )
+
+      false ->
+        MishkaPay.ProviderKit.invalid(:behavior, Messages.text(:pause_behavior))
+    end
+  end
+
+  @doc "Collects paused subscription `subscription_id`'s payments again."
+  @spec resume_collection(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def resume_collection(provider, subscription_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(subscription_id) do
+    capable(
+      :subscription_change,
+      :subscription_unpause,
+      provider,
+      tenant,
+      & &1.resume_collection(subscription_id, &2)
+    )
+  end
+
+  defp changed(operation, attrs, callback) do
+    span(operation, attrs, fn ->
+      with {:ok, change} <- Errors.from_builder(MishkaPay.SubscriptionChange.builder(attrs)),
+           {:ok, module} <- Provider.capable(change.provider, :subscription_change),
+           {:ok, keys} <- Credentials.fetch(change.provider, change.tenant) do
+        apply(module, callback, [change, keys])
+      end
+    end)
   end
 
   defp subscription(operation, provider, tenant, call) do

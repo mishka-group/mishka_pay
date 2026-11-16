@@ -35,9 +35,9 @@ if Code.ensure_loaded?(Ash) do
 
     The provider and its subscription id, the tenant, the `:status` (see `MishkaPay.Subscription`),
     the `:plan` (its items' names), what each period costs (`:amount`, `:currency`, with the
-    `:money` calculation) and how often (`:interval`, `:interval_count`), the end of the period paid
+    `:money` calculation) and how often (`:interval`, `:interval_count`), how many (`:quantity`), the end of the period paid
     for (`:current_period_end`), whether it ends then (`:cancel_at_period_end`), `:canceled_at`,
-    `:trial_end`, the buyer (`:customer_id`, `:customer_email`, `:customer_name`), the caller's
+    `:trial_end`, a pause (`:pause_behavior`, `:resumes_at`), the buyer (`:customer_id`, `:customer_email`, `:customer_name`), the caller's
     `:reference`, when the provider made it and when it was last synced. An identity on provider
     and subscription id keeps one row per subscription.
 
@@ -49,6 +49,11 @@ if Code.ensure_loaded?(Ash) do
       * `:cancel` cancels it through its provider (`MishkaPay.cancel_subscription/4`), `at:
         :period_end` (the default) or `:now`, and writes what the provider answered.
       * `:resume` takes back a cancel set for the period's end (`MishkaPay.resume_subscription/3`).
+      * `:change` changes its plan (`:price_id`) or quantity, with every option of
+        `MishkaPay.SubscriptionChange` (`:proration`, `:proration_date`, `:billing_cycle_anchor`,
+        `:payment_behavior`, `:item_id`) as arguments (`MishkaPay.change_subscription/1`).
+      * `:pause` pauses collecting its payments (`behavior:` and `resumes_at:`, see
+        `MishkaPay.pause_collection/4`); `:resume_collection` collects again.
 
     After each, `mishka_pay:subscription:changed` (`MishkaPay.Events.subscription_changed/0`) is
     fired with the subscription and the row. Errors come back as Ash errors
@@ -83,6 +88,13 @@ if Code.ensure_loaded?(Ash) do
         public?: true
 
       attribute :interval_count, :integer, public?: true
+      attribute :quantity, :integer, public?: true
+
+      attribute :pause_behavior, :atom,
+        constraints: [one_of: [:void, :keep_as_draft, :mark_uncollectible]],
+        public?: true
+
+      attribute :resumes_at, :utc_datetime_usec, public?: true
       attribute :current_period_end, :utc_datetime_usec, public?: true
       attribute :cancel_at_period_end, :boolean, allow_nil?: false, default: false, public?: true
       attribute :canceled_at, :utc_datetime_usec, public?: true
@@ -124,6 +136,9 @@ if Code.ensure_loaded?(Ash) do
           :currency,
           :interval,
           :interval_count,
+          :quantity,
+          :pause_behavior,
+          :resumes_at,
           :current_period_end,
           :cancel_at_period_end,
           :canceled_at,
@@ -153,6 +168,48 @@ if Code.ensure_loaded?(Ash) do
       update :resume do
         require_atomic? false
         change {MishkaPay.Ash.Subscription.Update, operation: :resume}
+      end
+
+      update :change do
+        require_atomic? false
+        argument :price_id, :string
+        argument :quantity, :integer, constraints: [min: 1]
+        argument :item_id, :string
+
+        argument :proration, :atom,
+          constraints: [one_of: [:create_prorations, :always_invoice, :none]]
+
+        argument :proration_date, :utc_datetime
+        argument :billing_cycle_anchor, :atom, constraints: [one_of: [:now, :unchanged]]
+
+        argument :payment_behavior, :atom,
+          constraints: [
+            one_of: [
+              :allow_incomplete,
+              :error_if_incomplete,
+              :pending_if_incomplete,
+              :default_incomplete
+            ]
+          ]
+
+        change {MishkaPay.Ash.Subscription.Update, operation: :change}
+      end
+
+      update :pause do
+        require_atomic? false
+
+        argument :behavior, :atom,
+          constraints: [one_of: [:void, :keep_as_draft, :mark_uncollectible]],
+          default: :void,
+          allow_nil?: false
+
+        argument :resumes_at, :utc_datetime
+        change {MishkaPay.Ash.Subscription.Update, operation: :pause}
+      end
+
+      update :resume_collection do
+        require_atomic? false
+        change {MishkaPay.Ash.Subscription.Update, operation: :resume_collection}
       end
     end
   end

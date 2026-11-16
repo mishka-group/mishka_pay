@@ -367,6 +367,65 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_subscription("stripe", "pi_123", "site-a")
     end
 
+    test "a subscription change, its preview, a pause and an invoice read go as Stripe's spec accepts" do
+      change = %{
+        provider: "stripe",
+        tenant: "site-a",
+        subscription_id: "sub_123",
+        item_id: "si_123",
+        price_id: "price_123",
+        quantity: 2,
+        proration: :always_invoice,
+        billing_cycle_anchor: :unchanged,
+        payment_behavior: :error_if_incomplete
+      }
+
+      assert {:ok, %Invoice{}} = MishkaPay.preview_subscription_change(change)
+      assert {:ok, %Subscription{}} = MishkaPay.change_subscription(change)
+
+      assert {:ok, %Subscription{}} =
+               MishkaPay.pause_collection("stripe", "sub_123", "site-a",
+                 behavior: :mark_uncollectible,
+                 resumes_at: DateTime.add(DateTime.utc_now(), 7, :day)
+               )
+
+      assert {:ok, %Subscription{}} = MishkaPay.resume_collection("stripe", "sub_123", "site-a")
+
+      assert {:ok, %Invoice{id: "in_" <> _}} =
+               MishkaPay.fetch_invoice("stripe", "in_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :price_id}]}} =
+               MishkaPay.change_subscription(%{change | price_id: "prod_123"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :item_id}]}} =
+               MishkaPay.change_subscription(%{change | item_id: "sub_1"})
+
+      params =
+        Stripe.Mapper.change_params(
+          struct!(
+            MishkaPay.SubscriptionChange,
+            Map.put(change, :proration_date, ~U[2026-11-16 00:00:00Z])
+          ),
+          "si_123"
+        )
+
+      assert params == %{
+               "items" => [%{"id" => "si_123", "price" => "price_123", "quantity" => 2}],
+               "proration_behavior" => "always_invoice",
+               "proration_date" => 1_794_787_200,
+               "billing_cycle_anchor" => %{"type" => "unchanged"},
+               "payment_behavior" => "error_if_incomplete"
+             }
+
+      assert %{"subscription" => "sub_123", "subscription_details" => details} =
+               Stripe.Mapper.preview_params(
+                 struct!(MishkaPay.SubscriptionChange, change),
+                 "si_123"
+               )
+
+      refute Map.has_key?(details, "payment_behavior")
+    end
+
     test "a checkout is read back by its session id, and a bad id never reaches a path" do
       assert {:ok, %Checkout{id: "cs_" <> _, provider: "stripe"}} =
                MishkaPay.fetch_checkout("stripe", "cs_test_123", "site-a")

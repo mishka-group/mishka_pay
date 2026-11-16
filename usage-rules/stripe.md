@@ -46,6 +46,15 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
 
+## Subscription changes
+
+- A preview is `POST /v1/invoices/create_preview`; its id starts with `upcoming_in_` and it is
+  never stored. Pass its `proration_date` to the change to bill the same amount.
+- In this API version `billing_cycle_anchor` is an object (`billing_cycle_anchor[type]`);
+  Mishka Pay sends it so.
+- Test a change on a test clock: advance it, preview with the clock's `frozen_time` as
+  `proration_date`, change, and compare the new invoice's `amount_due` with the preview's.
+
 ## Payment links, invoices and tax
 
 - A payment link's `max_purchases` is Stripe's `restrictions.completed_sessions.limit`; once
