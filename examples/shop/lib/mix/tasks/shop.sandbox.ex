@@ -19,9 +19,7 @@ defmodule Mix.Tasks.Shop.Sandbox do
 
   use Mix.Task
 
-  alias MishkaPay.Client
-  alias MishkaPay.Providers.Stripe
-  alias Shop.Pay.Payment
+  alias Shop.Pay.{Payment, StripeSandbox}
 
   @tenant "demo"
 
@@ -123,15 +121,15 @@ defmodule Mix.Tasks.Shop.Sandbox do
     Mix.shell().info("\nDone. Open the shop to see them: http://localhost:4041")
   end
 
-  defp make_subscriptions(key) do
+  defp make_subscriptions(_key) do
     Mix.shell().info("\nMaking #{length(@subscriptions)} sandbox subscriptions...\n")
 
     for {plan_slug, buyer, after_start} <- @subscriptions do
       plan =
         Shop.Catalog.fetch(plan_slug) || Mix.raise("No plan #{plan_slug}: run the seeds first")
 
-      case key
-           |> subscribe(plan, customer_with_card(key, buyer))
+      case plan
+           |> StripeSandbox.subscribe(customer_with_card(buyer))
            |> sync_subscription()
            |> then_do(after_start) do
         {:ok, sub} ->
@@ -147,46 +145,10 @@ defmodule Mix.Tasks.Shop.Sandbox do
   end
 
   # A buyer with a Mastercard test card on file, as a subscription renews with it.
-  defp customer_with_card(key, name) do
-    customer = customer(key, name)
-
-    {200, %{"id" => card}} =
-      stripe(key, "/v1/payment_methods/pm_card_mastercard/attach", %{"customer" => customer})
-
-    {200, _customer} =
-      stripe(key, "/v1/customers/#{customer}", %{
-        "invoice_settings" => %{"default_payment_method" => card}
-      })
-
+  defp customer_with_card(name) do
+    customer = StripeSandbox.customer(name)
+    StripeSandbox.default_card(customer, "pm_card_mastercard")
     customer
-  end
-
-  # A Stripe product for the plan, then a subscription to its price, with the plan's trial.
-  defp subscribe(key, plan, customer) do
-    {200, %{"id" => product}} = stripe(key, "/v1/products", %{"name" => plan.name})
-    cents = plan.price |> Decimal.mult(100) |> Decimal.to_integer()
-
-    {200, %{"id" => id}} =
-      stripe(key, "/v1/subscriptions", %{
-        "customer" => customer,
-        "trial_period_days" => plan.trial_days,
-        "metadata" => %{"mishka_pay_reference" => Shop.Catalog.reference(plan)},
-        "items" => [
-          %{
-            "price_data" => %{
-              "currency" => "usd",
-              "product" => product,
-              "unit_amount" => cents,
-              "recurring" => %{
-                "interval" => Atom.to_string(plan.interval),
-                "interval_count" => plan.interval_count
-              }
-            }
-          }
-        ]
-      })
-
-    id
   end
 
   defp sync_subscription(subscription_id) do
@@ -208,11 +170,7 @@ defmodule Mix.Tasks.Shop.Sandbox do
     |> Ash.update(authorize?: false)
   end
 
-  defp customer(key, name) do
-    email = name |> String.downcase() |> String.replace(" ", ".") |> Kernel.<>("@example.com")
-    {200, %{"id" => id}} = stripe(key, "/v1/customers", %{"name" => name, "email" => email})
-    id
-  end
+  defp customer(_key, name), do: StripeSandbox.customer(name)
 
   # A card pays at once; a declined card leaves a failed PaymentIntent; no card leaves one
   # waiting for a payment method.
@@ -267,18 +225,5 @@ defmodule Mix.Tasks.Shop.Sandbox do
   defp refund_args(amount, reason),
     do: Map.put(refund_args(nil, reason), :amount, %{amount: amount, currency: "USD"})
 
-  defp stripe(key, path, params) do
-    {:ok, %{status: status, body: body}} =
-      Client.request(%{
-        provider: "stripe",
-        method: :post,
-        base_url: "https://api.stripe.com",
-        path: path,
-        auth: {:bearer, key},
-        headers: %{"stripe-version" => Stripe.version()},
-        form: Stripe.form(params)
-      })
-
-    {status, body}
-  end
+  defp stripe(_key, path, params), do: StripeSandbox.post(path, params)
 end

@@ -9,6 +9,7 @@ defmodule Shop.Pay do
   resources do
     resource Shop.Pay.Payment
     resource Shop.Pay.Subscription
+    resource Shop.Pay.ClockRun
     resource Shop.Pay.WebhookEvent
     resource Shop.Pay.Setting
     resource Shop.Catalog.Product

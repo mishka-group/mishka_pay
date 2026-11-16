@@ -22,10 +22,34 @@ defmodule Shop.Pay.WebhookSimulator do
   @doc "The event types the simulator sends."
   def types, do: @types
 
-  @doc "Sends `type` about `payment_id` for `tenant`; answers the HTTP status and the event id."
-  def send_event(payment_id, type, tenant, signature \\ :good) when type in @types do
+  @situations [
+    good: %{label: "Good signature", expect: [200]},
+    bad_signature: %{label: "Bad signature", expect: [400]},
+    old_timestamp: %{label: "Too old (a replay, over 5 minutes)", expect: [400]},
+    unknown_tenant: %{label: "A site with no keys", expect: [400]},
+    unknown_provider: %{label: "A provider not installed", expect: [404]},
+    wrong_method: %{label: "GET instead of POST", expect: [405]},
+    too_large: %{label: "A body over 1 MB", expect: [413]},
+    listener_fails: %{label: "A listener fails to take it", expect: [500]},
+    twice: %{label: "The same event twice", expect: [200, 200]}
+  ]
+
+  @doc "Every situation the simulator plays, with what the endpoint must answer."
+  def situations, do: @situations
+
+  @doc """
+  Sends a `type` event about `id` for `tenant` in `situation`, and answers the HTTP statuses the
+  endpoint gave (two for `:twice`) and the event id.
+  """
+  def send_event(id, type, tenant, situation) when type in @types do
     event_id = "evt_sim_" <> String.replace(Ecto.UUID.generate(), "-", "")
-    time = System.system_time(:second)
+
+    time =
+      if situation == :old_timestamp,
+        do: System.system_time(:second) - 600,
+        else: System.system_time(:second)
+
+    type = if situation == :listener_fails, do: Shop.Pay.FailingListener.type(), else: type
 
     body =
       JSON.encode!(%{
@@ -35,27 +59,50 @@ defmodule Shop.Pay.WebhookSimulator do
         "created" => time,
         "livemode" => false,
         "api_version" => Stripe.version(),
-        "data" => %{"object" => object(type, payment_id)}
+        "data" => %{"object" => object(type, id), "padding" => padding(situation)}
       })
 
     secret =
-      case signature do
-        :good -> Shop.Pay.Keys.webhook_secret()
-        :bad_signature -> "whsec_not_the_right_one"
-      end
+      if situation == :bad_signature,
+        do: "whsec_not_the_right_one",
+        else: Shop.Pay.Keys.webhook_secret()
 
+    request =
+      request(situation, tenant, body, "t=#{time},v1=#{Stripe.signature(body, time, secret)}")
+
+    times = if situation == :twice, do: 2, else: 1
+
+    {Enum.map(1..times, fn _try -> deliver(request) end), event_id}
+  end
+
+  defp request(situation, tenant, body, signature) do
+    provider = if situation == :unknown_provider, do: "nopay", else: "stripe"
+    tenant = if situation == :unknown_tenant, do: "site-without-keys", else: tenant
+
+    %{
+      method: if(situation == :wrong_method, do: :get, else: :post),
+      url: ShopWeb.Endpoint.url() <> "/pay/webhooks/#{provider}/#{tenant}",
+      body: body,
+      signature: signature
+    }
+  end
+
+  defp deliver(%{method: method, url: url, body: body, signature: signature}) do
     {:ok, %{status: status}} =
-      Req.post(ShopWeb.Endpoint.url() <> "/pay/webhooks/stripe/#{tenant}",
-        body: body,
-        headers: [
-          {"content-type", "application/json"},
-          {"stripe-signature", "t=#{time},v1=#{Stripe.signature(body, time, secret)}"}
-        ],
+      Req.request(
+        method: method,
+        url: url,
+        body: if(method == :get, do: nil, else: body),
+        headers: [{"content-type", "application/json"}, {"stripe-signature", signature}],
         retry: false
       )
 
-    {status, event_id}
+    status
   end
+
+  # Over the endpoint's 1 MB limit.
+  defp padding(:too_large), do: String.duplicate("x", 1_100_000)
+  defp padding(_fits), do: nil
 
   defp object("customer.subscription." <> _change, subscription_id),
     do: %{"id" => subscription_id, "object" => "subscription"}

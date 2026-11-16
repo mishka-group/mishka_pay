@@ -704,6 +704,7 @@ defmodule ShopWeb.PayComponents do
   @doc "Sends a signed Stripe webhook about a payment to the shop's own endpoint."
   attr :types, :list, required: true
   attr :simulated, :any, required: true
+  attr :situations, :list, required: true
   attr :form, :map, default: %{}
   attr :tenant, :string, required: true
   attr :local_webhook_secret?, :boolean, required: true
@@ -733,34 +734,66 @@ defmodule ShopWeb.PayComponents do
             {type}
           </option>
         </select>
-        <select name="signature" class="select select-sm" data-testid="simulate-signature">
-          <option value="good" selected={@form[:signature] != "bad"}>Good signature</option>
-          <option value="bad" selected={@form[:signature] == "bad"}>Bad signature</option>
+        <select name="situation" class="select select-sm" data-testid="simulate-situation">
+          <option
+            :for={{name, spec} <- @situations}
+            value={name}
+            selected={Atom.to_string(name) == @form[:situation]}
+          >
+            {spec.label}
+          </option>
         </select>
         <button class="btn btn-sm" data-testid="simulate-submit">Send webhook</button>
       </form>
-      <div :if={@simulated} class="mt-2 text-sm" data-testid="simulate-result">
+      <div
+        :if={@simulated}
+        class="mt-2 text-sm flex flex-wrap items-center gap-2"
+        data-testid="simulate-result"
+        data-statuses={Enum.join(@simulated.statuses, ",")}
+        data-expected={Enum.join(@simulated.expect, ",")}
+        data-pass={to_string(@simulated.statuses == @simulated.expect)}
+      >
         <span class={[
           "badge badge-sm",
-          (@simulated.status == 200 && "badge-success") || "badge-error"
+          (@simulated.statuses == @simulated.expect && "badge-success") || "badge-error"
         ]}>
-          HTTP {@simulated.status}
+          {if @simulated.statuses == @simulated.expect, do: "as expected", else: "NOT as expected"}
         </span>
-        <code class="text-xs">{@simulated.type}</code>
+        <span>{@simulated.label}:</span>
+        <span>HTTP {Enum.join(@simulated.statuses, " then ")}</span>
+        <span class="opacity-60">(expected {Enum.join(@simulated.expect, " then ")})</span>
         <code class="text-xs opacity-70">{@simulated.event_id}</code>
-        <span class="opacity-70">{simulated_meaning(@simulated.status)}</span>
+        <span class="opacity-70 basis-full">{simulated_meaning(@simulated.situation)}</span>
       </div>
     </section>
     """
   end
 
-  defp simulated_meaning(200),
+  defp simulated_meaning(:good),
     do:
-      "accepted: the inbox works it as a job; the row shows processed, or the error once its tries run out"
+      "Stored once in the inbox and worked as a job: the row shows processed, or the error once its tries run out."
 
-  defp simulated_meaning(400), do: "refused: the signature does not match"
-  defp simulated_meaning(500), do: "a listener could not take it, Stripe would send it again"
-  defp simulated_meaning(_other), do: ""
+  defp simulated_meaning(:bad_signature),
+    do: "Refused and never stored: the signature does not match the site's secret."
+
+  defp simulated_meaning(:old_timestamp),
+    do: "Refused: a signature older than 5 minutes is a replay, even when it is real."
+
+  defp simulated_meaning(:unknown_tenant),
+    do: "Refused the same way as a bad signature, so a stranger cannot tell which sites exist."
+
+  defp simulated_meaning(:unknown_provider), do: "No such provider installed: 404."
+  defp simulated_meaning(:wrong_method), do: "The endpoint takes POST only: 405."
+
+  defp simulated_meaning(:too_large),
+    do: "Refused before reading on: a webhook body is never over 1 MB."
+
+  defp simulated_meaning(:listener_fails),
+    do:
+      "A listener could not take it: 500, so Stripe sends it again later. The inbox still kept it."
+
+  defp simulated_meaning(:twice),
+    do: "Both are answered 200, and the inbox keeps it once: a provider may send an event twice."
 
   attr :events, :any, required: true
 

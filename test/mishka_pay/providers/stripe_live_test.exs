@@ -16,6 +16,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   alias MishkaPay.{Checkout, Client, Errors, Invoice, Payment, Refund, Subscription}
   alias MishkaPay.Providers.Stripe
+  alias MishkaPay.Providers.Stripe.TestClock
   alias MishkaPay.Support.StripeMock
 
   @moduletag :stripe_live
@@ -190,10 +191,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   # until it says it is done, as Stripe's docs do.
   test "a subscription renews on Stripe's test clock, then is cancelled at the period's end, resumed and cancelled now",
        %{key: key} do
-    now = System.system_time(:second)
-
-    {200, %{"id" => clock}} =
-      stripe(key, :post, "/v1/test_helpers/test_clocks", %{"frozen_time" => now})
+    {:ok, %TestClock{id: clock, frozen_time: now}} = TestClock.create(nil, name: "live renewal")
 
     try do
       {200, %{"id" => customer}} =
@@ -236,12 +234,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       assert {plan.name, plan.interval, plan.amount} ==
                {"Pro plan", :month, Money.new(:USD, "9.00")}
 
-      {200, _advancing} =
-        stripe(key, :post, "/v1/test_helpers/test_clocks/#{clock}/advance", %{
-          "frozen_time" => now + 32 * 24 * 3600
-        })
-
-      :ready = clock_ready(key, clock, 60)
+      {:ok, %TestClock{}} = TestClock.advance(nil, clock, DateTime.add(now, 32, :day))
+      :ready = clock_ready(clock, 60)
 
       assert {:ok, [%Invoice{status: :paid}, %Invoice{status: :paid} | _]} =
                MishkaPay.invoices("stripe", id)
@@ -255,20 +249,20 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       assert {:ok, %Subscription{status: :canceled}} =
                MishkaPay.cancel_subscription("stripe", id, nil, at: :now)
     after
-      stripe(key, :delete, "/v1/test_helpers/test_clocks/#{clock}", %{})
+      TestClock.delete(nil, clock)
     end
   end
 
-  defp clock_ready(_key, _clock, 0), do: :timeout
+  defp clock_ready(_clock, 0), do: :timeout
 
-  defp clock_ready(key, clock, tries) do
-    case stripe(key, :get, "/v1/test_helpers/test_clocks/#{clock}", %{}) do
-      {200, %{"status" => "ready"}} ->
+  defp clock_ready(clock, tries) do
+    case TestClock.fetch(nil, clock) do
+      {:ok, %TestClock{status: :ready}} ->
         :ready
 
       _advancing ->
         Process.sleep(1_000)
-        clock_ready(key, clock, tries - 1)
+        clock_ready(clock, tries - 1)
     end
   end
 
