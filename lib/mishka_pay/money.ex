@@ -66,8 +66,9 @@ defmodule MishkaPay.Money do
     do: {:error, name, Messages.text(:money_field, field: name)}
 
   @doc """
-  Like `field/2`, for money that may be below zero: an invoice line that credits time not used.
-  The amount is checked as its size and keeps its sign.
+  Like `field/2`, for money that may be below zero: an invoice line that credits time not used,
+  or credit given to a customer. The amount, in a `Money` or a map, is checked as its size and
+  keeps its sign.
   """
   @spec signed_field(atom(), term()) :: {:ok, atom(), Money.t()} | {:error, atom(), String.t()}
   def signed_field(name, %Money{amount: amount} = money) do
@@ -81,7 +82,34 @@ defmodule MishkaPay.Money do
     end
   end
 
+  def signed_field(name, %{} = map) do
+    keys = Map.new(map, fn {key, value} -> {to_string(key), value} end)
+
+    case below_zero(keys["amount"]) do
+      {:ok, size} ->
+        with {:ok, ^name, money} <- checked(name, size, keys["currency"]),
+             do: {:ok, name, Money.negate!(money)}
+
+      :no ->
+        field(name, map)
+    end
+  end
+
   def signed_field(name, other), do: field(name, other)
+
+  # The size of an amount below zero, as an integer, a Decimal or a string gives it.
+  defp below_zero(amount) when is_integer(amount) and amount < 0, do: {:ok, -amount}
+
+  defp below_zero(%Decimal{sign: -1} = amount), do: {:ok, Decimal.abs(amount)}
+
+  defp below_zero(amount) when is_binary(amount) do
+    case String.trim(amount) do
+      "-" <> size -> {:ok, size}
+      _not_below -> :no
+    end
+  end
+
+  defp below_zero(_amount), do: :no
 
   defp checked(name, amount, currency) do
     case new(amount, currency) do
