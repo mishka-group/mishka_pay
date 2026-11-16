@@ -131,11 +131,6 @@ msgstr ""
 msgid "The currency field must be a known ISO 4217 code"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:392
-#, elixir-autogen, elixir-format
-msgid "The metadata field is over Stripe's limits: 49 keys of 40 characters, values of 500"
-msgstr ""
-
 #: lib/mishka_pay/messages.ex:164
 #, elixir-autogen, elixir-format
 msgid "The metadata field must map string keys to string values"
@@ -364,4 +359,9 @@ msgstr ""
 #: lib/mishka_pay/messages.ex:398
 #, elixir-autogen, elixir-format
 msgid "Stripe takes %{currency} only in whole units"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:392
+#, elixir-autogen, elixir-format, fuzzy
+msgid "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
 msgstr ""

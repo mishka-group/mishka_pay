@@ -566,6 +566,28 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
   end
 
+  @doc """
+  A Stripe refund read on its own, as a `MishkaPay.Refund`; its payment is the PaymentIntent, or
+  the charge for a refund of a payment made without one.
+  """
+  @spec refund(map()) :: {:ok, Refund.t()} | {:error, Splode.Error.t()}
+  def refund(refund) do
+    with {:ok, amount} <- from_stripe(refund["amount"], refund["currency"]) do
+      %{
+        provider: "stripe",
+        payment_id: id_of(refund["payment_intent"]) || id_of(refund["charge"]),
+        id: refund["id"],
+        amount: amount,
+        status: Map.get(@refund_statuses, refund["status"]),
+        reason: Map.get(@refund_reasons, refund["reason"]),
+        reference: get_in(refund, ["metadata", @reference]),
+        created_at: time(refund["created"])
+      }
+      |> Refund.builder()
+      |> MishkaPay.Errors.from_builder()
+    end
+  end
+
   @doc "The refund with Stripe's answer: its id, status, amount and time."
   @spec refund(map(), Refund.t()) :: {:ok, Refund.t()} | {:error, Splode.Error.t()}
   def refund(answer, %Refund{} = refund) do

@@ -22,6 +22,7 @@ end
   - `:expire`: `expire_checkout/2`;
   - `:payment_list`: `list_payments/2`;
   - `:refund`: `refund/2`;
+  - `:refund_read`: `fetch_refund/2`, `list_refunds/2`;
   - `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
     `list_invoices/2`, `fetch_invoice/2`;
   - `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,

@@ -117,10 +117,18 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     MishkaPay.Test.put_keys("stripe", %{secret_key: key, refunds: :many})
 
-    assert {:ok, %Refund{}} =
+    assert {:ok, %Refund{id: rest_id}} =
              MishkaPay.refund(%{provider: "stripe", payment_id: id, reference: "rest-#{id}"})
 
     assert {:ok, %Payment{status: :refunded}} = MishkaPay.fetch_payment("stripe", id)
+
+    assert {:ok, %Refund{id: ^rest_id, payment_id: ^id, reference: "rest-" <> _, amount: rest}} =
+             MishkaPay.fetch_refund("stripe", rest_id)
+
+    assert Money.equal?(rest, Money.new(:USD, "14.99"))
+
+    assert {:ok, %MishkaPay.Page{items: [%Refund{id: ^rest_id}, %Refund{payment_id: ^id}]}} =
+             MishkaPay.list_refunds("stripe", nil, payment_id: id)
   end
 
   test "a declined card is Stripe's 402 with its decline code", %{key: key} do

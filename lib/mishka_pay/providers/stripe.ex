@@ -73,6 +73,7 @@ defmodule MishkaPay.Providers.Stripe do
       :dispute,
       :expire,
       :refund,
+      :refund_read,
       :subscription,
       :subscription_change,
       :customer,
@@ -212,6 +213,25 @@ defmodule MishkaPay.Providers.Stripe do
       Mapper.refund(answer, refund)
     end
   end
+
+  @impl MishkaPay.Provider
+  def fetch_refund(refund_id, keys) do
+    with :ok <- refund_id(refund_id),
+         {:ok, refund} <- request(:get, "/v1/refunds/#{refund_id}", [], keys) do
+      Mapper.refund(refund)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_refunds(opts, keys) do
+    with :ok <- maybe_id(opts[:payment_id], "pi_", :payment_id) do
+      page("/v1/refunds", [payment_intent: opts[:payment_id]], opts, keys, &Mapper.refund/1)
+    end
+  end
+
+  # Stripe's refund ids start with `re_`, and `pyr_` for some payment methods.
+  defp refund_id("pyr_" <> _ = id), do: stripe_id(id, "pyr_", :refund_id)
+  defp refund_id(id), do: stripe_id(id, "re_", :refund_id)
 
   @impl MishkaPay.Provider
   def fetch_subscription(subscription_id, keys) do

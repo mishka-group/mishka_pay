@@ -687,6 +687,20 @@ defmodule MishkaPay.Providers.StripeTest do
       assert %DateTime{} = payment.created_at
     end
 
+    test "a refund is read again and listed by payment, as Stripe's spec answers" do
+      assert {:ok, %Refund{provider: "stripe", id: "re_" <> _, amount: %Elixir.Money{}}} =
+               MishkaPay.fetch_refund("stripe", "re_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%Refund{} | _]}} =
+               MishkaPay.list_refunds("stripe", "site-a", payment_id: "pi_123", limit: 3)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :refund_id}]}} =
+               MishkaPay.fetch_refund("stripe", "pi_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
+               MishkaPay.list_refunds("stripe", "site-a", payment_id: "ch_1")
+    end
+
     test "a refund, whole or in part, comes back as Stripe made it" do
       assert {:ok, %Refund{id: "re_" <> _, status: :succeeded}} =
                MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})

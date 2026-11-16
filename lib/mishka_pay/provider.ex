@@ -47,6 +47,7 @@ defmodule MishkaPay.Provider do
     * `:expire`: `expire_checkout/2`;
     * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
+    * `:refund_read`: `fetch_refund/2`, `list_refunds/2`;
     * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
       `list_invoices/2` and `fetch_invoice/2` (a subscription starts with a checkout in
       `mode: :subscription`);
@@ -79,6 +80,7 @@ defmodule MishkaPay.Provider do
     :expire,
     :payment_list,
     :refund,
+    :refund_read,
     :subscription,
     :subscription_change,
     :customer,
@@ -98,6 +100,7 @@ defmodule MishkaPay.Provider do
     * `:expire`: ends an open checkout before the buyer pays, so its stock is free again.
     * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
+    * `:refund_read`: reads a refund again, and lists refunds page by page.
     * `:subscription`: charges again on a schedule.
     * `:subscription_change`: changes a running subscription's plan or quantity with proration,
       previews what that bills, and pauses or resumes its collection.
@@ -115,6 +118,7 @@ defmodule MishkaPay.Provider do
           :checkout
           | :expire
           | :refund
+          | :refund_read
           | :subscription
           | :subscription_change
           | :customer
@@ -165,6 +169,14 @@ defmodule MishkaPay.Provider do
   @doc "With `:refund`. Gives money back on a payment and answers the refund as the provider made it."
   @callback refund(MishkaPay.Refund.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:refund_read`. Reads one refund again, with its status."
+  @callback fetch_refund(refund_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Refund.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:refund_read`. One page of refunds, newest first; `:payment_id` filters to one payment."
+  @callback list_refunds(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:subscription`. Reads one subscription again from the provider."
   @callback fetch_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -372,6 +384,8 @@ defmodule MishkaPay.Provider do
                       fetch_payment: 2,
                       expire_checkout: 2,
                       refund: 2,
+                      fetch_refund: 2,
+                      list_refunds: 2,
                       fetch_subscription: 2,
                       cancel_subscription: 3,
                       resume_subscription: 2,
@@ -418,6 +432,7 @@ defmodule MishkaPay.Provider do
     expire: [expire_checkout: 2],
     payment_list: [list_payments: 2],
     refund: [refund: 2],
+    refund_read: [fetch_refund: 2, list_refunds: 2],
     subscription: [
       fetch_subscription: 2,
       cancel_subscription: 3,

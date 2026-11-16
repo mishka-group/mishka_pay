@@ -47,7 +47,7 @@ defmodule MishkaPay do
   `:provider`, `:unknown`). Never a key or a buyer's details. The operations:
 
     * checkouts and payments: `:checkout`, `:checkout_read`, `:checkout_expire`, `:payment`,
-      `:payment_list`, `:refund`;
+      `:payment_list`, `:refund`, `:refund_read`, `:refund_list`;
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
       `:subscription_unpause`, `:invoices`, `:invoice`;
@@ -136,6 +136,24 @@ defmodule MishkaPay do
         provider.refund(refund, keys)
       end
     end)
+  end
+
+  @doc "Reads refund `refund_id` from `provider` again, with its status."
+  @spec fetch_refund(String.t(), String.t(), term()) ::
+          {:ok, Refund.t()} | {:error, Splode.Error.t()}
+  def fetch_refund(provider, refund_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(refund_id) do
+    capable(:refund_read, :refund_read, provider, tenant, & &1.fetch_refund(refund_id, &2))
+  end
+
+  @doc """
+  One page of refunds at `provider`, newest first (`MishkaPay.Page`): `payment_id:` only one
+  payment's, plus `limit:` and `after:`.
+  """
+  @spec list_refunds(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_refunds(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:refund_read, :refund_list, provider, tenant, & &1.list_refunds(limited(opts), &2))
   end
 
   @doc """
