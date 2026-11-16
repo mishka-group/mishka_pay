@@ -16,6 +16,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:event:process` | the host, or a payment resource | works one event the Ash inbox stored |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
   | `mishka_pay:subscription:changed` | the host | a subscription's state after it was synced, cancelled or resumed |
+  | `mishka_pay:customer:changed` | the host | a customer after it was registered, synced or edited |
 
   """
 
@@ -66,4 +67,12 @@ defmodule MishkaPay.Events do
   """
   @spec subscription_changed() :: String.t()
   def subscription_changed, do: "mishka_pay:subscription:changed"
+
+  @doc """
+  Fired after a customer resource (`MishkaPay.Ash.Customer`) registered, synced or edited a
+  customer, with `%{customer: %MishkaPay.Customer{}, record: record}`. A host listens here to link
+  the customer to its user, or to push the change to the screens that show it.
+  """
+  @spec customer_changed() :: String.t()
+  def customer_changed, do: "mishka_pay:customer:changed"
 end

@@ -11,222 +11,232 @@ msgstr ""
 "Language: en\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: lib/mishka_pay/messages.ex:268
+#: lib/mishka_pay/messages.ex:280
 #, elixir-autogen, elixir-format
 msgid "%{provider} cannot do %{operation}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:230
+#: lib/mishka_pay/messages.ex:242
 #, elixir-autogen, elixir-format
 msgid "%{provider} declined the payment"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:233
+#: lib/mishka_pay/messages.ex:245
 #, elixir-autogen, elixir-format
 msgid "%{provider} declined the payment: %{reason}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:265
+#: lib/mishka_pay/messages.ex:277
 #, elixir-autogen, elixir-format
 msgid "%{provider} did not answer: %{reason}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:249
+#: lib/mishka_pay/messages.ex:261
 #, elixir-autogen, elixir-format
 msgid "%{provider} refused the request (HTTP %{status})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:252
+#: lib/mishka_pay/messages.ex:264
 #, elixir-autogen, elixir-format
 msgid "%{provider} refused the request: %{code} (HTTP %{status})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:140
+#: lib/mishka_pay/messages.ex:142
 #, elixir-autogen, elixir-format
 msgid "A checkout needs at least one item"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:166
+#: lib/mishka_pay/messages.ex:178
 #, elixir-autogen, elixir-format
 msgid "A customer is an id or an email, one of them"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:169
+#: lib/mishka_pay/messages.ex:181
 #, elixir-autogen, elixir-format
 msgid "A keys plugin must answer a map or nil"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:163
+#: lib/mishka_pay/messages.ex:165
 #, elixir-autogen, elixir-format
 msgid "A price needs a name and an amount, or a provider id"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:143
+#: lib/mishka_pay/messages.ex:145
 #, elixir-autogen, elixir-format
 msgid "All items must be in one currency"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:131
+#: lib/mishka_pay/messages.ex:133
 #, elixir-autogen, elixir-format
 msgid "Send form or json, not both"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:221
+#: lib/mishka_pay/messages.ex:233
 #, elixir-autogen, elixir-format
 msgid "Stripe takes three-decimal currencies only with a last decimal of 0"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:134
+#: lib/mishka_pay/messages.ex:136
 #, elixir-autogen, elixir-format
 msgid "The %{field} field must be an https address"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:82
+#: lib/mishka_pay/messages.ex:84
 #, elixir-autogen, elixir-format
 msgid "The %{field} field must be money: an amount and a currency"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:108
+#: lib/mishka_pay/messages.ex:110
 #, elixir-autogen, elixir-format
 msgid "The amount field has more decimal places than %{currency} has"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:104
+#: lib/mishka_pay/messages.ex:106
 #, elixir-autogen, elixir-format
 msgid "The amount field is too large"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:95
+#: lib/mishka_pay/messages.ex:97
 #, elixir-autogen, elixir-format
 msgid "The amount field must be a number"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:89
+#: lib/mishka_pay/messages.ex:91
 #, elixir-autogen, elixir-format
 msgid "The amount field must be exact: a Decimal, an integer or a string"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:183
+#: lib/mishka_pay/messages.ex:195
 #, elixir-autogen, elixir-format
 msgid "The amount field must be in the payment's currency, %{currency}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:101
+#: lib/mishka_pay/messages.ex:103
 #, elixir-autogen, elixir-format
 msgid "The amount field must be more than zero"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:98
+#: lib/mishka_pay/messages.ex:100
 #, elixir-autogen, elixir-format
 msgid "The amount field must be zero or more"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:112
+#: lib/mishka_pay/messages.ex:114
 #, elixir-autogen, elixir-format
 msgid "The base_url field must be an http or https address, with no user, query or fragment"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:85
+#: lib/mishka_pay/messages.ex:87
 #, elixir-autogen, elixir-format
 msgid "The currency field must be a known ISO 4217 code"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:214
+#: lib/mishka_pay/messages.ex:226
 #, elixir-autogen, elixir-format
 msgid "The metadata field is over Stripe's limits: 49 keys of 40 characters, values of 500"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:137
+#: lib/mishka_pay/messages.ex:139
 #, elixir-autogen, elixir-format
 msgid "The metadata field must map string keys to string values"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:128
+#: lib/mishka_pay/messages.ex:130
 #, elixir-autogen, elixir-format
 msgid "The params field must hold plain values only"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:119
+#: lib/mishka_pay/messages.ex:121
 #, elixir-autogen, elixir-format
 msgid "The path field must be one plain path from the root, with no query, dot segment or encoded slash"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:125
+#: lib/mishka_pay/messages.ex:127
 #, elixir-autogen, elixir-format
 msgid "The path field must start with /"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:236
+#: lib/mishka_pay/messages.ex:248
 #, elixir-autogen, elixir-format
 msgid "no %{provider} keys for tenant %{tenant}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:262
+#: lib/mishka_pay/messages.ex:274
 #, elixir-autogen, elixir-format
 msgid "no payment provider %{provider} is installed"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:256
+#: lib/mishka_pay/messages.ex:268
 #, elixir-autogen, elixir-format
 msgid "payment provider %{provider} cannot be looked up: a provider plugin is not loaded"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:246
+#: lib/mishka_pay/messages.ex:258
 #, elixir-autogen, elixir-format
 msgid "the %{operation} was refused: %{reason}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:240
+#: lib/mishka_pay/messages.ex:252
 #, elixir-autogen, elixir-format
 msgid "the %{provider} keys for tenant %{tenant} cannot be read (%{reason})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:227
+#: lib/mishka_pay/messages.ex:239
 #, elixir-autogen, elixir-format
 msgid "the %{provider} webhook cannot be trusted (%{reason})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:190
+#: lib/mishka_pay/messages.ex:202
 #, elixir-autogen, elixir-format
 msgid "The amount field is more than is left to refund on the payment"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:207
+#: lib/mishka_pay/messages.ex:219
 #, elixir-autogen, elixir-format
 msgid "The reference field is required: this site refunds a payment many times, and each refund needs its own"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:173
+#: lib/mishka_pay/messages.ex:185
 #, elixir-autogen, elixir-format
 msgid "The %{field} field is not a Stripe id that starts with %{prefix}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:203
+#: lib/mishka_pay/messages.ex:215
 #, elixir-autogen, elixir-format
 msgid "The payment is refunded in full: nothing is left to refund"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:154
+#: lib/mishka_pay/messages.ex:156
 #, elixir-autogen, elixir-format
 msgid "The items field has a recurring price: a one-time checkout sells once, use mode subscription"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:147
+#: lib/mishka_pay/messages.ex:149
 #, elixir-autogen, elixir-format
 msgid "The items field needs a recurring price on every item for a subscription: an interval or a provider price id"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:160
+#: lib/mishka_pay/messages.ex:162
 #, elixir-autogen, elixir-format
 msgid "The trial_days field needs a subscription checkout"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:197
+#: lib/mishka_pay/messages.ex:209
 #, elixir-autogen, elixir-format
 msgid "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment."
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:179
+#: lib/mishka_pay/messages.ex:191
 #, elixir-autogen, elixir-format
 msgid "The %{field} field is not a PayPal id: letters and digits"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:168
+#, elixir-autogen, elixir-format
+msgid "The %{field} field is required for this call"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:172
+#, elixir-autogen, elixir-format
+msgid "This reference was used in the last 24 hours with other details. Use a new reference, or change the record made then"
 msgstr ""

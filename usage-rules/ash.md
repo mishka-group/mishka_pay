@@ -31,6 +31,15 @@ defmodule MyApp.Pay.Subscription do
     repo MyApp.Repo
   end
 end
+
+defmodule MyApp.Pay.Customer do
+  use Ash.Resource, domain: MyApp.Pay, data_layer: AshPostgres.DataLayer,
+    fragments: [MishkaPay.Ash.Customer]
+  postgres do
+    table "pay_customers"
+    repo MyApp.Repo
+  end
+end
 ```
 
 Listeners (supervise each like a child):
@@ -39,6 +48,7 @@ Listeners (supervise each like a child):
 defmodule MyApp.Pay.Inbox, do: use MishkaPay.Ash.Inbox.Listener, resource: MyApp.Pay.WebhookEvent
 defmodule MyApp.Pay.PaymentSync, do: use MishkaPay.Ash.Payment.Listener, resource: MyApp.Pay.Payment
 defmodule MyApp.Pay.SubscriptionSync, do: use MishkaPay.Ash.Subscription.Listener, resource: MyApp.Pay.Subscription
+defmodule MyApp.Pay.CustomerSync, do: use MishkaPay.Ash.Customer.Listener, resource: MyApp.Pay.Customer
 ```
 
 Oban with the inbox queue and the cron plugin (AshOban's scheduler):
@@ -67,11 +77,16 @@ migration once).
 | Subscription | `:sync` | `provider`, `subscription_id`, `tenant` |
 | Subscription | `:cancel` (update) | `at`: `:period_end` (default) or `:now` |
 | Subscription | `:resume` (update) | none |
+| Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata` |
+| Customer | `:sync` | `provider`, `customer_id`, `tenant`; a deleted customer gets `deleted_at` |
+| Customer | `:edit` (update) | `email`, `name`, `phone`, `metadata` |
+| Customer | `:portal` (generic) | `id` (the row's), `return_url`, `configuration`; answers `MishkaPay.PortalSession` |
 
 - Every action asks the provider before its transaction and writes what the provider answered;
   the provider stays the source of truth. A row's tenant is kept from the first sync.
-- After each sync, refund, cancel or resume: `mishka_pay:payment:changed` /
-  `mishka_pay:subscription:changed` with `%{payment | subscription: struct, record: row}`. The
+- After each sync, refund, cancel, resume, register or edit: `mishka_pay:payment:changed` /
+  `mishka_pay:subscription:changed` / `mishka_pay:customer:changed` with
+  `%{payment | subscription | customer: struct, record: row}`. The
   host's own Ash notifiers (e.g. `Ash.Notifier.PubSub`) also see every action.
 - Errors are Ash errors on their fields (`MishkaPay.Ash.to_ash_error/1`); show
   `MishkaPay.Ash.message(error)`.

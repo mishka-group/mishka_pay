@@ -55,6 +55,8 @@ if Code.ensure_loaded?(Ash) do
     def message(%Ash.Error.Unknown.UnknownError{error: inner}) when not is_nil(inner),
       do: message(inner)
 
+    # A provider's own words (its `:message`) are for the log: they can name keys and ids.
+    def message(%MishkaPay.Errors.Rejected{} = error), do: Exception.message(error)
     def message(%{__exception__: true, message: text}) when is_binary(text), do: text
     def message(%{__exception__: true, __struct__: module} = error), do: module.message(error)
     def message(text) when is_binary(text), do: text

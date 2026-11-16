@@ -13,7 +13,8 @@ defmodule MishkaPay.Checkout do
     * `:items`: one or more `MishkaPay.Price`, all in one currency.
     * `:success_url`, `:cancel_url`: where the buyer is sent after paying or giving up; `https`, or
       `http` on `localhost`.
-    * `:customer`: an optional `MishkaPay.Customer`.
+    * `:customer`: an optional buyer: `%{id: "cus_..."}` for a customer the provider keeps, or
+      `%{email: "..."}` to fill in a new buyer's email; one or the other (`MishkaPay.Customer`).
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
       it comes back on the payment, and it makes the request's idempotency key, so the same
       reference never opens two checkouts.
@@ -130,8 +131,26 @@ defmodule MishkaPay.Checkout do
   # reported on its own.
   @doc false
   def consistent(attrs) do
-    with {:ok, attrs} <- one_currency(attrs), do: fits_mode(attrs)
+    with {:ok, attrs} <- one_currency(attrs),
+         {:ok, attrs} <- one_buyer(attrs),
+         do: fits_mode(attrs)
   end
+
+  # A checkout names its buyer by the provider's id or by an email, not both.
+  defp one_buyer(%{customer: %{} = customer} = attrs) do
+    case {is_binary(key(customer, :id)), is_binary(key(customer, :email))} do
+      {true, true} ->
+        {:error, %{field: :customer, action: :customer, message: Messages.text(:customer_one_of)}}
+
+      {false, false} ->
+        {:error, %{field: :customer, action: :customer, message: Messages.text(:customer_one_of)}}
+
+      _one ->
+        {:ok, attrs}
+    end
+  end
+
+  defp one_buyer(attrs), do: {:ok, attrs}
 
   defp fits_mode(%{mode: mode, items: items} = attrs)
        when mode in [:subscription, "subscription"] and is_list(items) do

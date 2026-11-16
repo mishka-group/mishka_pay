@@ -8,7 +8,17 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Stripe's JSON objects (API version `2026-10-28.endive`) become Mishka Pay's structs.
   """
 
-  alias MishkaPay.{Checkout, Event, Invoice, Money, Payment, Price, Refund, Subscription}
+  alias MishkaPay.{
+    Checkout,
+    Customer,
+    Event,
+    Invoice,
+    Money,
+    Payment,
+    Price,
+    Refund,
+    Subscription
+  }
 
   @reference "mishka_pay_reference"
 
@@ -45,7 +55,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "metadata" => Map.merge(checkout.metadata || %{}, reference)
     }
     |> Map.merge(mode_data(checkout, reference))
-    |> Map.merge(customer(checkout.customer))
+    |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
   end
 
@@ -91,9 +101,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp recurring(%Price{interval: interval, interval_count: count}),
     do: %{"recurring" => %{"interval" => Atom.to_string(interval), "interval_count" => count}}
 
-  defp customer(%{id: id}) when is_binary(id), do: %{"customer" => id}
-  defp customer(%{email: email}) when is_binary(email), do: %{"customer_email" => email}
-  defp customer(_none), do: %{}
+  defp buyer_params(%{id: id}) when is_binary(id), do: %{"customer" => id}
+  defp buyer_params(%{email: email}) when is_binary(email), do: %{"customer_email" => email}
+  defp buyer_params(_none), do: %{}
 
   @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
   @spec checkout(map()) :: Checkout.t()
@@ -254,6 +264,56 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     do: String.to_existing_atom(interval)
 
   defp interval(_none), do: nil
+
+  @doc """
+  Params of `POST /v1/customers` (and its update): the fields set, the reference in the metadata.
+  A field left out is not sent, so an update changes only what it names.
+  """
+  @spec customer_params(Customer.t()) :: map()
+  def customer_params(%Customer{} = customer) do
+    metadata =
+      case customer.reference do
+        nil -> customer.metadata
+        reference -> Map.put(customer.metadata || %{}, @reference, reference)
+      end
+
+    %{
+      "email" => customer.email,
+      "name" => customer.name,
+      "phone" => customer.phone,
+      "metadata" => metadata
+    }
+  end
+
+  @doc "A Customer as a `MishkaPay.Customer`; a deleted one is a rejection."
+  @spec customer(map()) :: {:ok, Customer.t()} | {:error, Splode.Error.t()}
+  def customer(%{"deleted" => true, "id" => id}) do
+    {:error,
+     MishkaPay.Errors.Rejected.exception(
+       provider: "stripe",
+       status: 404,
+       code: "customer_deleted",
+       message: "Customer #{id} was deleted"
+     )}
+  end
+
+  def customer(customer) do
+    %{
+      provider: "stripe",
+      id: customer["id"],
+      email: customer["email"],
+      name: customer["name"],
+      phone: customer["phone"],
+      reference: get_in(customer, ["metadata", @reference]),
+      metadata: Map.delete(customer["metadata"] || %{}, @reference),
+      default_payment_method:
+        id_of(get_in(customer, ["invoice_settings", "default_payment_method"])),
+      created_at: time(customer["created"])
+    }
+    |> Map.reject(fn {_field, value} -> value == "" end)
+    |> Customer.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
 
   @doc "An Invoice as a `MishkaPay.Invoice`."
   @spec invoice(map()) :: {:ok, Invoice.t()} | {:error, Splode.Error.t()}

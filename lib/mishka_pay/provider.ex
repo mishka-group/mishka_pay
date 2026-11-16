@@ -47,6 +47,8 @@ defmodule MishkaPay.Provider do
     * `:refund`: `refund/2`;
     * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
       `list_invoices/2` (a subscription starts with a checkout in `mode: :subscription`);
+    * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
+    * `:portal`: `portal_session/2`;
     * `:webhook`: `verify_webhook/3`.
 
   Every operation takes a guarded_struct and the tenant's `MishkaPay.Credentials`, and answers a
@@ -59,7 +61,7 @@ defmodule MishkaPay.Provider do
   alias MishkaInstaller.Event.Hook
   alias MishkaPay.{Errors, Events}
 
-  @capabilities [:checkout, :refund, :subscription, :webhook, :return_verify]
+  @capabilities [:checkout, :refund, :subscription, :customer, :portal, :webhook, :return_verify]
 
   @typedoc """
   What a provider can do:
@@ -67,11 +69,14 @@ defmodule MishkaPay.Provider do
     * `:checkout`: sends the buyer to pay, or embeds a payment form.
     * `:refund`: gives money back on a payment.
     * `:subscription`: charges again on a schedule.
+    * `:customer`: keeps buyers (create, read, update, list).
+    * `:portal`: has a hosted page where a customer manages their own billing.
     * `:webhook`: sends signed messages when something changes.
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
   """
-  @type capability :: :checkout | :refund | :subscription | :webhook | :return_verify
+  @type capability ::
+          :checkout | :refund | :subscription | :customer | :portal | :webhook | :return_verify
 
   @doc "The provider's id, such as `\"stripe\"`. Set by `use`."
   @callback id() :: String.t()
@@ -133,6 +138,29 @@ defmodule MishkaPay.Provider do
   @callback list_invoices(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, [MishkaPay.Invoice.t()]} | {:error, Splode.Error.t()}
 
+  @doc "With `:customer`. Makes a customer at the provider and answers it with its `:id`."
+  @callback create_customer(MishkaPay.Customer.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:customer`. Reads one customer again."
+  @callback fetch_customer(customer_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:customer`. Changes the fields set on the customer whose `:id` it carries."
+  @callback update_customer(MishkaPay.Customer.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:customer`. The newest customers, at most `:limit` (100), only those with `:email` when it
+  is given.
+  """
+  @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, [MishkaPay.Customer.t()]} | {:error, Splode.Error.t()}
+
+  @doc "With `:portal`. Opens the provider's billing page for a customer and answers its `:url`."
+  @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PortalSession.t()} | {:error, Splode.Error.t()}
+
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
   the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
@@ -154,6 +182,11 @@ defmodule MishkaPay.Provider do
                       cancel_subscription: 3,
                       resume_subscription: 2,
                       list_invoices: 2,
+                      create_customer: 2,
+                      fetch_customer: 2,
+                      update_customer: 2,
+                      list_customers: 2,
+                      portal_session: 2,
                       verify_webhook: 3
 
   @operations %{
@@ -165,6 +198,8 @@ defmodule MishkaPay.Provider do
       resume_subscription: 2,
       list_invoices: 2
     ],
+    customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
+    portal: [portal_session: 2],
     webhook: [verify_webhook: 3]
   }
 
@@ -233,6 +268,10 @@ defmodule MishkaPay.Provider do
 
     nil
   end
+
+  @doc "Every capability a provider may declare."
+  @spec capabilities() :: [capability()]
+  def capabilities, do: @capabilities
 
   @doc "Lists what a capability asks a provider to define, such as `[checkout: 2, fetch_payment: 2]`."
   @spec operations(capability()) :: keyword(pos_integer())

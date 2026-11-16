@@ -32,6 +32,10 @@ defmodule MishkaPay.Providers.Stripe do
       (`DELETE`) or at the period's end (`cancel_at_period_end`), take that back, and list its
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription.
+    * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` keep
+      Customers (`cus_...`), with the reference in their metadata; `portal_session/2` opens a
+      billing portal session for one. Stripe answers a portal session only once the account's
+      portal is set up (Settings, Billing, Customer portal), in test mode too.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
 
@@ -60,9 +64,9 @@ defmodule MishkaPay.Providers.Stripe do
   use MishkaPay.Provider,
     id: "stripe",
     label: "Stripe",
-    capabilities: [:checkout, :refund, :subscription, :webhook]
+    capabilities: [:checkout, :refund, :subscription, :customer, :portal, :webhook]
 
-  alias MishkaPay.{Checkout, Client, Errors, Messages, ProviderKit, Refund}
+  alias MishkaPay.{Checkout, Client, Customer, Errors, Messages, ProviderKit, Refund}
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -188,6 +192,64 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp subscription_expand,
     do: [{"expand[]", "customer"}, {"expand[]", "items.data.price.product"}]
+
+  @impl MishkaPay.Provider
+  def create_customer(%Customer{} = customer, keys) do
+    with :ok <- metadata(customer.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/customers", Mapper.customer_params(customer), keys,
+             key: ProviderKit.idempotency_key("customer", customer.tenant, customer.reference)
+           ) do
+      Mapper.customer(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_customer(customer_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         {:ok, answer} <- request(:get, "/v1/customers/#{customer_id}", [], keys) do
+      Mapper.customer(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_customer(%Customer{id: id} = customer, keys) do
+    with :ok <- stripe_id(id, "cus_", :id),
+         :ok <- metadata(customer.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/customers/#{id}", Mapper.customer_params(customer), keys) do
+      Mapper.customer(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_customers(opts, keys) do
+    params =
+      [{"limit", Integer.to_string(opts[:limit])}] ++
+        if(opts[:email], do: [{"email", opts[:email]}], else: [])
+
+    with {:ok, %{"data" => customers}} <- request(:get, "/v1/customers", params, keys) do
+      customers |> Enum.map(&Mapper.customer/1) |> all_ok()
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def portal_session(%MishkaPay.PortalSession{} = session, keys) do
+    with :ok <- stripe_id(session.customer_id, "cus_", :customer_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/billing_portal/sessions",
+             %{
+               "customer" => session.customer_id,
+               "return_url" => session.return_url,
+               "configuration" => session.configuration
+             },
+             keys
+           ) do
+      {:ok, %{session | id: answer["id"], url: answer["url"]}}
+    end
+  end
 
   @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do
@@ -331,7 +393,7 @@ defmodule MishkaPay.Providers.Stripe do
      Errors.Rejected.exception(
        provider: "stripe",
        status: status,
-       code: error["code"],
+       code: code_of(error),
        message: error["message"]
      )}
   end
@@ -340,6 +402,10 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
+
+  # Stripe gives a reused idempotency key a type and no code.
+  defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
+  defp code_of(error), do: error["code"]
 
   # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
   # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
