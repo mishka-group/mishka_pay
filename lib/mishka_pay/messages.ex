@@ -50,6 +50,8 @@ defmodule MishkaPay.Messages do
           | :expires_past
           | :expires_range
           | :plain_id
+          | :rejected_missing
+          | :rejected_exists
           | :keys_answer
           | :stripe_id
           | :paypal_id
@@ -177,7 +179,8 @@ defmodule MishkaPay.Messages do
     do: dgettext_noop("mishka_pay", "The %{field} field is required for this call")
 
   defp msgid(:percent_off),
-    do: dgettext_noop("mishka_pay", "The percent_off field must be more than 0 and at most 100")
+    do:
+      dgettext_noop("mishka_pay", "The percent off must be a number more than 0 and at most 100")
 
   defp msgid(:coupon_one_of),
     do: dgettext_noop("mishka_pay", "A coupon takes off a percent or an amount, one of them")
@@ -186,7 +189,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The duration_in_months field goes with a repeating coupon, and only with it"
+        "The number of months goes with a coupon that repeats, and only with it"
       )
 
   defp msgid(:discount_one_of),
@@ -203,24 +206,30 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The customer_creation field works only in a one-time checkout"
+        "Making a customer at checkout works only in a one-time checkout"
       )
 
   defp msgid(:expires_past),
-    do: dgettext_noop("mishka_pay", "The expires_at field must be a time still to come")
+    do: dgettext_noop("mishka_pay", "The checkout's expiry must be a time still to come")
 
   defp msgid(:expires_range),
     do:
       dgettext_noop(
         "mishka_pay",
-        "The expires_at field must be between %{min} minutes and %{max} hours from now"
+        "The checkout must expire between %{min} minutes and %{max} hours from now"
       )
+
+  defp msgid(:rejected_missing),
+    do: dgettext_noop("mishka_pay", "%{provider} has nothing with the id given")
+
+  defp msgid(:rejected_exists),
+    do: dgettext_noop("mishka_pay", "%{provider} already has one with that code or id")
 
   defp msgid(:plain_id),
     do:
       dgettext_noop(
         "mishka_pay",
-        "The %{field} field may hold only letters, digits, underscores and dashes"
+        "An id may hold only letters, digits, underscores and dashes"
       )
 
   defp msgid(:reference_reused),

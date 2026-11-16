@@ -517,9 +517,20 @@ defmodule MishkaPay.Providers.Stripe do
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
 
-  # Stripe gives a reused idempotency key a type and no code.
+  # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
+  # its words.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
-  defp code_of(error), do: error["code"]
+
+  defp code_of(%{"code" => code}) when is_binary(code), do: code
+
+  defp code_of(%{"message" => message}) when is_binary(message) do
+    case String.contains?(message, "already exists") do
+      true -> "already_exists"
+      false -> nil
+    end
+  end
+
+  defp code_of(_no_code), do: nil
 
   # Stripe takes a checkout's expiry between 30 minutes and 24 hours from now.
   defp expiry(nil), do: :ok

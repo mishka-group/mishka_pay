@@ -53,15 +53,13 @@ defmodule MishkaPay.Coupon do
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 
+  # A percent from a form is a string; it becomes a Decimal here, and its range is checked with
+  # the rest of the coupon, so a percent out of range is never taken for a missing one.
   @doc false
-  def percent_off(field, nil), do: {:ok, field, nil}
-
   def percent_off(field, value) do
-    with {:ok, percent} <- decimal(value),
-         true <- Decimal.gt?(percent, 0) and not Decimal.gt?(percent, 100) do
-      {:ok, field, percent}
-    else
-      _not_a_percent -> {:error, field, Messages.text(:percent_off)}
+    case decimal(value) do
+      {:ok, percent} -> {:ok, field, percent}
+      :error -> {:ok, field, value}
     end
   end
 
@@ -78,6 +76,18 @@ defmodule MishkaPay.Coupon do
 
   defp decimal(_other), do: :error
 
+  defp percent_range(%{percent_off: nil} = attrs), do: {:ok, attrs}
+
+  defp percent_range(%{percent_off: %Decimal{} = percent} = attrs) do
+    case Decimal.gt?(percent, 0) and not Decimal.gt?(percent, 100) do
+      true -> {:ok, attrs}
+      false -> error(:percent_off, :percent_off)
+    end
+  end
+
+  defp percent_range(%{percent_off: _not_a_number}), do: error(:percent_off, :percent_off)
+  defp percent_range(attrs), do: {:ok, attrs}
+
   # A duration from JSON or a form comes as a string.
   @doc false
   def duration(field, value),
@@ -89,7 +99,9 @@ defmodule MishkaPay.Coupon do
   def consistent(%{valid: valid} = attrs) when is_boolean(valid), do: {:ok, attrs}
 
   def consistent(attrs) do
-    with {:ok, attrs} <- one_off(attrs), do: months(attrs)
+    with {:ok, attrs} <- one_off(attrs),
+         {:ok, attrs} <- percent_range(attrs),
+         do: months(attrs)
   end
 
   defp one_off(attrs) do

@@ -65,6 +65,42 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a code already taken and an id Stripe does not have are plain rejections" do
+      MishkaPay.Test.stub_http(fn conn ->
+        error =
+          case conn.request_path do
+            "/v1/promotion_codes" ->
+              %{
+                "type" => "invalid_request_error",
+                "message" => "An active promotion code with `code: SPRING` already exists."
+              }
+
+            _checkout ->
+              %{
+                "type" => "invalid_request_error",
+                "code" => "resource_missing",
+                "message" => "No such coupon: 'NOPE'"
+              }
+          end
+
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      assert {:error, %Errors.Rejected{code: "already_exists"} = taken} =
+               MishkaPay.create_promotion_code(%{
+                 provider: "stripe",
+                 coupon_id: "C1",
+                 code: "SPRING"
+               })
+
+      assert MishkaPay.Ash.message(taken) == "stripe already has one with that code or id"
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"} = missing} =
+               MishkaPay.checkout(Map.put(@checkout, :discounts, [%{coupon_id: "NOPE"}]))
+
+      assert Exception.message(missing) == "stripe has nothing with the id given"
+    end
+
     test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id}} =
                MishkaPay.create_customer(%{

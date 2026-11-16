@@ -203,6 +203,7 @@ defmodule MishkaPayTest do
             {%{}, :percent_off},
             {%{percent_off: 0}, :percent_off},
             {%{percent_off: "101"}, :percent_off},
+            {%{percent_off: "ten"}, :percent_off},
             {%{percent_off: 10, duration: :repeating}, :duration_in_months},
             {%{percent_off: 10, duration: "once", duration_in_months: 3}, :duration_in_months}
           ] do
@@ -217,6 +218,13 @@ defmodule MishkaPayTest do
                  duration: "repeating",
                  duration_in_months: 3
                })
+    end
+
+    test "a percent out of range is one error about the percent, not a missing discount" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :percent_off, message: message}]}} =
+               MishkaPay.create_coupon(%{provider: "acme", percent_off: "150"})
+
+      assert message =~ "at most 100"
     end
 
     test "a promotion code needs its coupon, and an update needs its id" do
