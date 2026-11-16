@@ -64,9 +64,29 @@ defmodule MishkaPay.Providers.Stripe do
   use MishkaPay.Provider,
     id: "stripe",
     label: "Stripe",
-    capabilities: [:checkout, :refund, :subscription, :customer, :portal, :webhook]
+    capabilities: [
+      :checkout,
+      :expire,
+      :refund,
+      :subscription,
+      :customer,
+      :portal,
+      :discount,
+      :webhook
+    ]
 
-  alias MishkaPay.{Checkout, Client, Customer, Errors, Messages, ProviderKit, Refund}
+  alias MishkaPay.{
+    Checkout,
+    Client,
+    Coupon,
+    Customer,
+    Errors,
+    Messages,
+    PromotionCode,
+    ProviderKit,
+    Refund
+  }
+
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -82,6 +102,7 @@ defmodule MishkaPay.Providers.Stripe do
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- currencies(checkout.items, :checkout),
          :ok <- metadata(checkout.metadata),
+         :ok <- expiry(checkout.expires_at),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -94,6 +115,15 @@ defmodule MishkaPay.Providers.Stripe do
   def fetch_checkout(checkout_id, keys) do
     with :ok <- stripe_id(checkout_id, "cs_", :checkout_id),
          {:ok, session} <- request(:get, "/v1/checkout/sessions/#{checkout_id}", [], keys) do
+      {:ok, Mapper.checkout(session)}
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def expire_checkout(checkout_id, keys) do
+    with :ok <- stripe_id(checkout_id, "cs_", :checkout_id),
+         {:ok, session} <-
+           request(:post, "/v1/checkout/sessions/#{checkout_id}/expire", %{}, keys) do
       {:ok, Mapper.checkout(session)}
     end
   end
@@ -252,6 +282,90 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
+  def create_coupon(%Coupon{} = coupon, keys) do
+    with :ok <- plain_id(coupon.id, :id),
+         :ok <- metadata(coupon.metadata),
+         :ok <- money_off(coupon.amount_off),
+         {:ok, answer} <- request(:post, "/v1/coupons", Mapper.coupon_params(coupon), keys) do
+      Mapper.coupon(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_coupon(coupon_id, keys) do
+    with :ok <- plain_id(coupon_id, :coupon_id),
+         {:ok, answer} <- request(:get, "/v1/coupons/#{coupon_id}", [], keys) do
+      Mapper.coupon(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_coupons(opts, keys) do
+    with {:ok, %{"data" => coupons}} <-
+           request(:get, "/v1/coupons", [{"limit", Integer.to_string(opts[:limit])}], keys) do
+      coupons |> Enum.map(&Mapper.coupon/1) |> all_ok()
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def delete_coupon(coupon_id, keys) do
+    with :ok <- plain_id(coupon_id, :coupon_id),
+         {:ok, _deleted} <- request(:delete, "/v1/coupons/#{coupon_id}", [], keys),
+         do: :ok
+  end
+
+  @impl MishkaPay.Provider
+  def create_promotion_code(%PromotionCode{} = code, keys) do
+    with :ok <- plain_id(code.coupon_id, :coupon_id),
+         :ok <- metadata(code.metadata),
+         :ok <- money_off(code.minimum_amount),
+         {:ok, answer} <-
+           request(:post, "/v1/promotion_codes", Mapper.promotion_code_params(code), keys) do
+      Mapper.promotion_code(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_promotion_code(promotion_code_id, keys) do
+    with :ok <- stripe_id(promotion_code_id, "promo_", :promotion_code_id),
+         {:ok, answer} <- request(:get, "/v1/promotion_codes/#{promotion_code_id}", [], keys) do
+      Mapper.promotion_code(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_promotion_codes(opts, keys) do
+    params =
+      [
+        {"limit", Integer.to_string(opts[:limit])},
+        {"code", opts[:code]},
+        {"coupon", opts[:coupon_id]},
+        {"active", opts[:active]}
+      ]
+      |> Enum.reject(fn {_name, value} -> is_nil(value) end)
+      |> Enum.map(fn {name, value} -> {name, to_string(value)} end)
+
+    with {:ok, %{"data" => codes}} <- request(:get, "/v1/promotion_codes", params, keys) do
+      codes |> Enum.map(&Mapper.promotion_code/1) |> all_ok()
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_promotion_code(%PromotionCode{id: id} = code, keys) do
+    with :ok <- stripe_id(id, "promo_", :id),
+         :ok <- metadata(code.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/promotion_codes/#{id}",
+             Mapper.promotion_code_update_params(code),
+             keys
+           ) do
+      Mapper.promotion_code(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do
     with {:ok, secret} <- webhook_secret(keys),
          {:ok, header} <- signature_header(headers),
@@ -403,9 +517,46 @@ defmodule MishkaPay.Providers.Stripe do
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
 
-  # Stripe gives a reused idempotency key a type and no code.
+  # Stripe gives a reused idempotency key a type and no code, and a code or id already taken only
+  # its words.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
-  defp code_of(error), do: error["code"]
+
+  defp code_of(%{"code" => code}) when is_binary(code), do: code
+
+  defp code_of(%{"message" => message}) when is_binary(message) do
+    case String.contains?(message, "already exists") do
+      true -> "already_exists"
+      false -> nil
+    end
+  end
+
+  defp code_of(_no_code), do: nil
+
+  # Stripe takes a checkout's expiry between 30 minutes and 24 hours from now.
+  defp expiry(nil), do: :ok
+
+  defp expiry(%DateTime{} = at) do
+    seconds = DateTime.diff(at, DateTime.utc_now())
+
+    case seconds >= 30 * 60 and seconds <= 24 * 60 * 60 do
+      true -> :ok
+      false -> ProviderKit.invalid(:expires_at, Messages.text(:expires_range, min: 30, max: 24))
+    end
+  end
+
+  # A coupon's or a code's own id goes into a path: letters, digits, `_` and `-` only.
+  defp plain_id(nil, _field), do: :ok
+
+  defp plain_id(id, field) do
+    case Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, id) do
+      true -> :ok
+      false -> ProviderKit.invalid(field, Messages.text(:plain_id, field: field))
+    end
+  end
+
+  # Money off or a minimum in a currency Stripe counts its own way is refused, like a price.
+  defp money_off(nil), do: :ok
+  defp money_off(money), do: currencies([%{amount: money}], :discount)
 
   # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
   # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.

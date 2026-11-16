@@ -10,12 +10,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   alias MishkaPay.{
     Checkout,
+    Coupon,
     Customer,
     Event,
     Invoice,
     Money,
     Payment,
     Price,
+    PromotionCode,
     Refund,
     Subscription
   }
@@ -57,7 +59,34 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Map.merge(mode_data(checkout, reference))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
+    |> Map.merge(options(checkout))
   end
+
+  # The checkout's options, each only when it is set.
+  defp options(%Checkout{} = checkout) do
+    %{
+      "discounts" => discounts(checkout.discounts),
+      "allow_promotion_codes" => checkout.allow_promotion_codes,
+      "automatic_tax" => enabled(checkout.automatic_tax),
+      "customer_creation" => checkout.customer_creation && to_string(checkout.customer_creation),
+      "locale" => checkout.locale,
+      "expires_at" => checkout.expires_at && DateTime.to_unix(checkout.expires_at),
+      "billing_address_collection" =>
+        checkout.billing_address && to_string(checkout.billing_address),
+      "tax_id_collection" => enabled(checkout.tax_id_collection)
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp discounts(nil), do: nil
+  defp discounts([]), do: nil
+  defp discounts(discounts), do: Enum.map(discounts, &discount/1)
+
+  defp discount(%{coupon_id: id}) when is_binary(id), do: %{"coupon" => id}
+  defp discount(%{promotion_code_id: id}), do: %{"promotion_code" => id}
+
+  defp enabled(nil), do: nil
+  defp enabled(on?), do: %{"enabled" => on?}
 
   defp mode_data(%Checkout{mode: :subscription, trial_days: days}, reference),
     do: %{
@@ -130,7 +159,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         payment_id: id_of(session["payment_intent"]),
         subscription_id: id_of(session["subscription"]),
         amount_total: money(session["amount_total"], session["currency"]),
-        amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"])
+        amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"]),
+        amount_discount:
+          money(get_in(session, ["total_details", "amount_discount"]), session["currency"]),
+        expires_at: time(session["expires_at"])
     }
   end
 
@@ -462,6 +494,109 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp id_of(%{"id" => id}), do: id
   defp id_of(id) when is_binary(id), do: id
   defp id_of(_none), do: nil
+
+  @doc "Params of `POST /v1/coupons`: what it takes off, for how long, and its limits."
+  @spec coupon_params(Coupon.t()) :: map()
+  def coupon_params(%Coupon{} = coupon) do
+    %{
+      "id" => coupon.id,
+      "name" => coupon.name,
+      "percent_off" => coupon.percent_off && Decimal.to_string(coupon.percent_off, :normal),
+      "amount_off" => coupon.amount_off && Money.to_minor(coupon.amount_off),
+      "currency" => coupon.amount_off && lower_currency(coupon.amount_off),
+      "duration" => Atom.to_string(coupon.duration),
+      "duration_in_months" => coupon.duration_in_months,
+      "max_redemptions" => coupon.max_redemptions,
+      "redeem_by" => coupon.redeem_by && DateTime.to_unix(coupon.redeem_by),
+      "metadata" => coupon.metadata
+    }
+  end
+
+  @doc "A Stripe coupon as a `MishkaPay.Coupon`."
+  @spec coupon(map()) :: {:ok, Coupon.t()} | {:error, Splode.Error.t()}
+  def coupon(coupon) do
+    %{
+      provider: "stripe",
+      id: coupon["id"],
+      name: coupon["name"],
+      percent_off: coupon["percent_off"],
+      amount_off: money(coupon["amount_off"], coupon["currency"]),
+      duration: coupon["duration"],
+      duration_in_months: coupon["duration_in_months"],
+      max_redemptions: coupon["max_redemptions"],
+      redeem_by: time(coupon["redeem_by"]),
+      metadata: coupon["metadata"],
+      valid: coupon["valid"] == true,
+      times_redeemed: coupon["times_redeemed"],
+      created_at: time(coupon["created"])
+    }
+    |> blank_names()
+    |> Coupon.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/promotion_codes`: the coupon it applies (as Stripe's `promotion`), the code
+  and its own limits.
+  """
+  @spec promotion_code_params(PromotionCode.t()) :: map()
+  def promotion_code_params(%PromotionCode{} = code) do
+    %{
+      "promotion" => %{"type" => "coupon", "coupon" => code.coupon_id},
+      "code" => code.code,
+      "active" => code.active,
+      "max_redemptions" => code.max_redemptions,
+      "expires_at" => code.expires_at && DateTime.to_unix(code.expires_at),
+      "customer" => code.customer_id,
+      "restrictions" => restrictions(code),
+      "metadata" => code.metadata
+    }
+  end
+
+  defp restrictions(%PromotionCode{first_time_transaction: first, minimum_amount: minimum}) do
+    %{
+      "first_time_transaction" => first,
+      "minimum_amount" => minimum && Money.to_minor(minimum),
+      "minimum_amount_currency" => minimum && lower_currency(minimum)
+    }
+  end
+
+  @doc "Params of `POST /v1/promotion_codes/:id`: only whether it is active, and its metadata."
+  @spec promotion_code_update_params(PromotionCode.t()) :: map()
+  def promotion_code_update_params(%PromotionCode{} = code),
+    do: %{"active" => code.active, "metadata" => code.metadata}
+
+  @doc "A Stripe promotion code as a `MishkaPay.PromotionCode`."
+  @spec promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  def promotion_code(code) do
+    restrictions = code["restrictions"] || %{}
+
+    %{
+      provider: "stripe",
+      id: code["id"],
+      code: code["code"],
+      coupon_id: id_of(get_in(code, ["promotion", "coupon"])),
+      active: code["active"],
+      max_redemptions: code["max_redemptions"],
+      expires_at: time(code["expires_at"]),
+      first_time_transaction: restrictions["first_time_transaction"],
+      minimum_amount:
+        money(restrictions["minimum_amount"], restrictions["minimum_amount_currency"]),
+      customer_id: id_of(code["customer"]),
+      metadata: code["metadata"],
+      times_redeemed: code["times_redeemed"],
+      created_at: time(code["created"])
+    }
+    |> PromotionCode.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # Stripe keeps an unnamed coupon's name as null or empty.
+  defp blank_names(%{name: ""} = attrs), do: %{attrs | name: nil}
+  defp blank_names(attrs), do: attrs
+
+  defp lower_currency(%{currency: currency}),
+    do: currency |> to_string() |> String.downcase()
 
   defp time(seconds) when is_integer(seconds) do
     case DateTime.from_unix(seconds) do

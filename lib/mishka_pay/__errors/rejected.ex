@@ -10,7 +10,8 @@ defmodule MishkaPay.Errors.Rejected do
     * `:provider`: the provider's id.
     * `:status`: the HTTP status it answered.
     * `:code`: its own short code, such as `"resource_missing"`, when it gave one;
-      `"idempotency_error"` when a reference was reused with other details.
+      `"idempotency_error"` when a reference was reused with other details, `"already_exists"`
+      when a code or id is taken.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
@@ -21,6 +22,12 @@ defmodule MishkaPay.Errors.Rejected do
 
   @impl true
   def message(%{code: "idempotency_error"}), do: Messages.text(:reference_reused)
+
+  def message(%{provider: provider, code: "resource_missing"}),
+    do: Messages.text(:rejected_missing, provider: provider)
+
+  def message(%{provider: provider, code: "already_exists"}),
+    do: Messages.text(:rejected_exists, provider: provider)
 
   def message(%{provider: provider, status: status, code: nil}),
     do: Messages.text(:rejected, provider: provider, status: status)

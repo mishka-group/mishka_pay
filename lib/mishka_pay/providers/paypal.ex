@@ -68,6 +68,7 @@ defmodule MishkaPay.Providers.PayPal do
   @impl MishkaPay.Provider
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- one_time(checkout),
+         :ok <- no_options(checkout),
          :ok <- named_prices(checkout.items),
          :ok <- currencies(checkout.items, :checkout),
          {:ok, order} <-
@@ -163,6 +164,27 @@ defmodule MishkaPay.Providers.PayPal do
     do: unsupported("checkout as merchant of record")
 
   defp one_time(_checkout), do: :ok
+
+  # Checkout options this adapter does not send yet are refused, never left out.
+  @options [
+    discounts: "discounts",
+    allow_promotion_codes: "promotion codes",
+    automatic_tax: "automatic tax",
+    customer_creation: "customer creation",
+    locale: "a page language",
+    expires_at: "an expiry",
+    billing_address: "billing address collection",
+    tax_id_collection: "tax id collection"
+  ]
+
+  defp no_options(checkout) do
+    case Enum.find(@options, fn {field, _label} -> set?(Map.get(checkout, field)) end) do
+      nil -> :ok
+      {_field, label} -> unsupported("checkout with #{label}")
+    end
+  end
+
+  defp set?(value), do: value not in [nil, false, []]
 
   defp named_prices(items) do
     case Enum.any?(items, &is_binary(&1.id)) do

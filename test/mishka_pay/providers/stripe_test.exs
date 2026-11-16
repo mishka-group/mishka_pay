@@ -65,6 +65,42 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a code already taken and an id Stripe does not have are plain rejections" do
+      MishkaPay.Test.stub_http(fn conn ->
+        error =
+          case conn.request_path do
+            "/v1/promotion_codes" ->
+              %{
+                "type" => "invalid_request_error",
+                "message" => "An active promotion code with `code: SPRING` already exists."
+              }
+
+            _checkout ->
+              %{
+                "type" => "invalid_request_error",
+                "code" => "resource_missing",
+                "message" => "No such coupon: 'NOPE'"
+              }
+          end
+
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      assert {:error, %Errors.Rejected{code: "already_exists"} = taken} =
+               MishkaPay.create_promotion_code(%{
+                 provider: "stripe",
+                 coupon_id: "C1",
+                 code: "SPRING"
+               })
+
+      assert MishkaPay.Ash.message(taken) == "stripe already has one with that code or id"
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"} = missing} =
+               MishkaPay.checkout(Map.put(@checkout, :discounts, [%{coupon_id: "NOPE"}]))
+
+      assert Exception.message(missing) == "stripe has nothing with the id given"
+    end
+
     test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id}} =
                MishkaPay.create_customer(%{
@@ -206,6 +242,87 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert get_in(params, ["line_items", Access.at(0), "price_data", "product_data", "tax_code"]) ==
                "txcd_10302000"
+    end
+
+    test "checkout options and discounts are sent as Stripe's spec accepts, and a checkout is ended" do
+      options = %{
+        discounts: [%{coupon_id: "SPRING"}],
+        automatic_tax: true,
+        customer_creation: :always,
+        locale: "de",
+        expires_at: DateTime.add(DateTime.utc_now(), 3600),
+        billing_address: :required,
+        tax_id_collection: true
+      }
+
+      assert {:ok, %Checkout{id: id, status: :open}} =
+               MishkaPay.checkout(Map.merge(@checkout, options))
+
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(Map.put(@checkout, :allow_promotion_codes, true))
+
+      assert {:ok, %Checkout{id: "cs_" <> _}} = MishkaPay.expire_checkout("stripe", id, "site-a")
+
+      params = Stripe.Mapper.checkout_params(struct!(params_checkout(), options))
+
+      assert %{
+               "discounts" => [%{"coupon" => "SPRING"}],
+               "automatic_tax" => %{"enabled" => true},
+               "customer_creation" => "always",
+               "locale" => "de",
+               "billing_address_collection" => "required",
+               "tax_id_collection" => %{"enabled" => true},
+               "expires_at" => expires_at
+             } = params
+
+      assert expires_at == DateTime.to_unix(options.expires_at)
+
+      refute Map.has_key?(
+               Stripe.Mapper.checkout_params(params_checkout()),
+               "allow_promotion_codes"
+             )
+    end
+
+    test "coupons and promotion codes are made, read, listed and changed as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.Coupon{id: coupon_id}} =
+               MishkaPay.create_coupon(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 name: "Spring",
+                 amount_off: %{amount: "5", currency: "USD"},
+                 duration: :repeating,
+                 duration_in_months: 3,
+                 max_redemptions: 100
+               })
+
+      assert {:ok, %MishkaPay.Coupon{}} = MishkaPay.fetch_coupon("stripe", coupon_id, "site-a")
+      assert {:ok, [%MishkaPay.Coupon{} | _]} = MishkaPay.list_coupons("stripe", "site-a")
+
+      assert {:ok, %MishkaPay.PromotionCode{id: "promo_" <> _ = code_id}} =
+               MishkaPay.create_promotion_code(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 coupon_id: coupon_id,
+                 code: "SPRING5",
+                 first_time_transaction: true,
+                 minimum_amount: %{amount: "20", currency: "USD"}
+               })
+
+      assert {:ok, %MishkaPay.PromotionCode{}} =
+               MishkaPay.fetch_promotion_code("stripe", code_id, "site-a")
+
+      assert {:ok, [%MishkaPay.PromotionCode{} | _]} =
+               MishkaPay.list_promotion_codes("stripe", "site-a", code: "SPRING5", active: true)
+
+      assert {:ok, %MishkaPay.PromotionCode{}} =
+               MishkaPay.update_promotion_code(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: code_id,
+                 active: false
+               })
+
+      assert :ok = MishkaPay.delete_coupon("stripe", coupon_id, "site-a")
     end
 
     test "a known price and an existing customer are accepted the same way" do
@@ -449,6 +566,24 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "ch_123"})
     end
 
+    test "an expiry out of Stripe's 30 minutes to 24 hours, or an id that is not plain, is refused" do
+      for minutes <- [10, 25 * 60] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :expires_at}]}} =
+                 MishkaPay.checkout(
+                   Map.put(@checkout, :expires_at, DateTime.add(DateTime.utc_now(), minutes * 60))
+                 )
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :coupon_id}]}} =
+               MishkaPay.fetch_coupon("stripe", "../charges")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.create_coupon(%{provider: "stripe", id: "a b", percent_off: 5})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :promotion_code_id}]}} =
+               MishkaPay.fetch_promotion_code("stripe", "cus_123")
+    end
+
     test "a currency Stripe counts differently from ISO 4217 is refused, not charged wrong" do
       huf = %{@checkout | items: [%{name: "Ebook", amount: %{amount: "1000", currency: "HUF"}}]}
 
@@ -679,6 +814,72 @@ defmodule MishkaPay.Providers.StripeTest do
     assert checkout.amount_tax == Money.new(:USD, "1.40")
     assert checkout.customer.email == "ava@example.com"
     assert {checkout.payment_id, checkout.reference} == {"pi_1", "ebook-1"}
+  end
+
+  test "a coupon and a promotion code map from Stripe's objects, the code's coupon from its promotion" do
+    assert {:ok,
+            %MishkaPay.Coupon{
+              id: "Or6TT44r",
+              duration: :once,
+              valid: true,
+              times_redeemed: 0,
+              name: nil,
+              amount_off: nil
+            } = coupon} =
+             Stripe.Mapper.coupon(%{
+               "id" => "Or6TT44r",
+               "object" => "coupon",
+               "percent_off" => 10.0,
+               "amount_off" => nil,
+               "currency" => nil,
+               "duration" => "once",
+               "name" => "",
+               "valid" => true,
+               "times_redeemed" => 0,
+               "created" => 1_794_825_000
+             })
+
+    assert Decimal.equal?(coupon.percent_off, Decimal.new(10))
+
+    assert {:ok, %MishkaPay.Coupon{amount_off: amount}} =
+             Stripe.Mapper.coupon(%{
+               "id" => "five",
+               "amount_off" => 500,
+               "currency" => "usd",
+               "duration" => "repeating",
+               "duration_in_months" => 3,
+               "valid" => false
+             })
+
+    assert Money.equal?(amount, Money.new(:USD, "5.00"))
+
+    assert {:ok,
+            %MishkaPay.PromotionCode{
+              id: "promo_1",
+              code: "SPRING5",
+              coupon_id: "Or6TT44r",
+              active: true,
+              first_time_transaction: true,
+              minimum_amount: minimum
+            }} =
+             Stripe.Mapper.promotion_code(%{
+               "id" => "promo_1",
+               "code" => "SPRING5",
+               "active" => true,
+               "promotion" => %{"type" => "coupon", "coupon" => "Or6TT44r"},
+               "restrictions" => %{
+                 "first_time_transaction" => true,
+                 "minimum_amount" => 2000,
+                 "minimum_amount_currency" => "usd"
+               },
+               "times_redeemed" => 0,
+               "created" => 1_794_825_000
+             })
+
+    assert Money.equal?(minimum, Money.new(:USD, "20.00"))
+
+    assert %{"promotion" => %{"type" => "coupon", "coupon" => "Or6TT44r"}} =
+             Stripe.Mapper.promotion_code_params(%MishkaPay.PromotionCode{coupon_id: "Or6TT44r"})
   end
 
   test "Stripe's form encoding nests maps and lists and leaves out nil" do

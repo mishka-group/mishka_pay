@@ -164,7 +164,7 @@ defmodule ShopWeb.PayComponents do
       <summary class="collapse-title font-medium">
         Checkout options
         <span class="text-sm opacity-60">
-          (provider, quantity, buyer, merchant of record, metadata)
+          (provider, quantity, buyer, discounts, tax, language, expiry, merchant of record, metadata)
         </span>
       </summary>
       <div class="collapse-content grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -222,6 +222,96 @@ defmodule ShopWeb.PayComponents do
               data-testid="option-meta-value"
             />
           </div>
+        </div>
+        <label class="fieldset">
+          <span class="fieldset-legend">Discount</span>
+          <select name="discount_mode" class="select select-sm" data-testid="option-discount-mode">
+            <option value="">None</option>
+            <option value="typed">Buyer types a promotion code</option>
+            <option value="code">Apply a promotion code (promo_...)</option>
+            <option value="coupon">Apply a coupon (its id)</option>
+          </select>
+        </label>
+        <label class="fieldset">
+          <span class="fieldset-legend">Code or coupon id to apply</span>
+          <input
+            name="discount_id"
+            placeholder="promo_... or SPRING"
+            class="input input-sm"
+            data-testid="option-discount-id"
+          />
+        </label>
+        <label class="fieldset">
+          <span class="fieldset-legend">Page language</span>
+          <select name="locale" class="select select-sm" data-testid="option-locale">
+            <option value="">Stripe's choice</option>
+            <option value="auto">The buyer's browser</option>
+            <option value="en">English</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </label>
+        <label class="fieldset">
+          <span class="fieldset-legend">Expires in minutes, 30 to 1440</span>
+          <input
+            name="expires_in"
+            type="number"
+            min="30"
+            max="1440"
+            placeholder="1440 (Stripe's default)"
+            class="input input-sm"
+            data-testid="option-expires-in"
+          />
+        </label>
+        <label class="fieldset">
+          <span class="fieldset-legend">Billing address</span>
+          <select name="billing_address" class="select select-sm" data-testid="option-billing-address">
+            <option value="">Only when needed</option>
+            <option value="required">Always ask</option>
+          </select>
+        </label>
+        <label class="fieldset">
+          <span class="fieldset-legend">Make a Stripe customer, one-time only</span>
+          <select
+            name="customer_creation"
+            class="select select-sm"
+            data-testid="option-customer-creation"
+          >
+            <option value="">Stripe's choice</option>
+            <option value="always">Always</option>
+            <option value="if_required">Only if needed</option>
+          </select>
+        </label>
+        <div class="fieldset gap-1">
+          <label class="label gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="automatic_tax"
+              value="true"
+              class="checkbox checkbox-sm"
+              data-testid="option-automatic-tax"
+            /> Stripe Tax counts the tax
+          </label>
+          <label class="label gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="tax_id_collection"
+              value="true"
+              class="checkbox checkbox-sm"
+              data-testid="option-tax-id"
+            /> Business buyers give their tax id
+          </label>
+          <label class="label gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="hold"
+              value="true"
+              class="checkbox checkbox-sm"
+              data-testid="option-hold"
+            /> Open it here, go to Stripe later
+          </label>
         </div>
       </div>
     </details>
@@ -716,6 +806,14 @@ defmodule ShopWeb.PayComponents do
       <dd data-testid="checkout-tax">
         {(@checkout.amount_tax && Money.to_string!(@checkout.amount_tax)) || "–"}
       </dd>
+      <dt class="opacity-70">Discount</dt>
+      <dd data-testid="checkout-discount">
+        {(@checkout.amount_discount && Money.to_string!(@checkout.amount_discount)) || "–"}
+      </dd>
+      <dt :if={@checkout.expires_at} class="opacity-70">Expires</dt>
+      <dd :if={@checkout.expires_at} class="text-xs" data-testid="checkout-expires">
+        {Calendar.strftime(@checkout.expires_at, "%Y-%m-%d %H:%M")} UTC
+      </dd>
       <dt class="opacity-70">Buyer email</dt>
       <dd data-testid="checkout-email">{(@checkout.customer && @checkout.customer.email) || "–"}</dd>
       <dt class="opacity-70">Payment</dt>
@@ -724,6 +822,29 @@ defmodule ShopWeb.PayComponents do
       </dd>
       <dt class="opacity-70">Reference</dt>
       <dd class="font-mono text-xs break-all">{@checkout.reference}</dd>
+      <dd :if={@checkout.status == :open} class="col-span-2 flex flex-wrap gap-2 mt-2">
+        <a
+          :if={@checkout.url}
+          href={@checkout.url}
+          class="btn btn-sm btn-primary"
+          data-testid="checkout-go"
+        >
+          Go to Stripe's page
+        </a>
+        <button
+          class="btn btn-sm btn-warning"
+          phx-click="expire_checkout"
+          phx-value-id={@checkout.id}
+          phx-disable-with="Asking Stripe..."
+          data-testid="checkout-expire"
+        >
+          End this checkout
+        </button>
+        <span class="text-xs opacity-70 self-center">
+          Ending it frees what it held: Stripe's page then refuses to take payment. Tax is counted
+          once the buyer gives an address there: read the checkout back for the final total.
+        </span>
+      </dd>
     </dl>
     """
   end

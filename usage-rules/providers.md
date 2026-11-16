@@ -19,10 +19,18 @@ end
 - Capabilities and their callbacks (`MishkaPay.Provider.operations/1`); the module does not
   compile with one missing:
   - `:checkout`: `checkout/2`, `fetch_checkout/2`, `fetch_payment/2`;
+  - `:expire`: `expire_checkout/2`;
   - `:refund`: `refund/2`;
   - `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
     `list_invoices/2`;
+  - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
+  - `:portal`: `portal_session/2`;
+  - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
+    `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,
+    `update_promotion_code/2`;
   - `:webhook`: `verify_webhook/3`.
+- A checkout option the provider cannot send (`discounts`, `locale`, `expires_at`...) is refused
+  with `Errors.Unsupported`, never dropped.
 - Leave a capability out rather than half-implement it; Mishka Pay answers `Errors.Unsupported`.
 - Every callback answers the Mishka Pay struct or a `MishkaPay.Errors` error, never the provider's
   raw body.
