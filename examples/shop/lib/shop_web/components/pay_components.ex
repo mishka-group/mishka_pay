@@ -820,7 +820,9 @@ defmodule ShopWeb.PayComponents do
           <div class="rounded-box bg-base-100 p-4" data-testid="details-events">
             <h3 class="font-medium mb-2">Webhook events about it</h3>
             <p :if={@selected.events == []} class="text-sm opacity-70">
-              None yet. Send one with the webhook simulator below.
+              {if @selected.payment.provider == "stripe",
+                do: "None yet. Send one with the webhook simulator below.",
+                else: "None yet. #{@at} sends them to the site's webhook address as they happen."}
             </p>
             <ul class="text-sm space-y-1">
               <li
