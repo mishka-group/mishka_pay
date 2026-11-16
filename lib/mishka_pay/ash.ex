@@ -71,6 +71,42 @@ if Code.ensure_loaded?(Ash) do
     end
 
     @doc false
+    # A kind's change: `ask` reads or writes the provider before the transaction (`read/2`), and
+    # `announce` fires after it unless the resource says `announce? false`.
+    @spec provider_change(Ash.Changeset.t(), keyword(), function(), function()) ::
+            Ash.Changeset.t()
+    def provider_change(changeset, opts, ask, announce) do
+      changeset
+      |> Ash.Changeset.before_transaction(&read(&1, ask))
+      |> announce(opts, announce)
+    end
+
+    @doc false
+    # A listener's sync of `resource` for an event: the row of object `id` (argument `id_name`), in
+    # the event's tenant; the event state with `:failed` set when it could not be written. A sync
+    # skipped for a newer read already kept counts as done.
+    @spec sync_event(module(), atom(), String.t(), MishkaPay.Event.t(), map()) :: map()
+    def sync_event(resource, id_name, id, event, state) do
+      tenant = event.tenant && to_string(event.tenant)
+      args = %{:provider => event.provider, id_name => id, :tenant => tenant}
+
+      case Ash.create(
+             resource,
+             args,
+             [action: :sync] ++ MishkaPay.Ash.Tenant.opts(resource, tenant)
+           ) do
+        {:ok, _row} ->
+          state
+
+        {:error, error} ->
+          case stale?(error) do
+            true -> state
+            false -> %{state | failed: message(error)}
+          end
+      end
+    end
+
+    @doc false
     # Runs `ask` (the provider call of a change) and keeps when it started in `:synced_at`: the
     # moment the provider's word was read. A `:sync` upsert writes over a row only when its read is
     # not older (`stale?/1`), so a slow read that ends after a newer one never wins.

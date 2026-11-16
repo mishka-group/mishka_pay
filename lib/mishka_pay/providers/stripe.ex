@@ -865,7 +865,7 @@ defmodule MishkaPay.Providers.Stripe do
   def list_events(opts, keys) do
     types = List.wrap(opts[:types])
 
-    case length(types) > 20 do
+    case Enum.drop(types, 20) != [] do
       true ->
         invalid(:types, Messages.text(:stripe_event_types))
 

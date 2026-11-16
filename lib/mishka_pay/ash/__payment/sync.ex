@@ -17,11 +17,7 @@ if Code.ensure_loaded?(Ash) do
 
     @impl true
     def change(changeset, opts, _context) do
-      changeset
-      |> Ash.Changeset.before_transaction(
-        &MishkaPay.Ash.read(&1, fn changeset -> fetch(changeset) end)
-      )
-      |> MishkaPay.Ash.announce(opts, &announce/2)
+      MishkaPay.Ash.provider_change(changeset, opts, &fetch/1, &announce/2)
     end
 
     defp fetch(changeset) do

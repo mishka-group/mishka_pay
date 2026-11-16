@@ -16,7 +16,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   alias MishkaPay.{Checkout, Client, Errors, Invoice, Payment, Refund, Subscription}
   alias MishkaPay.Providers.Stripe
-  alias MishkaPay.Providers.Stripe.TestClock
+  alias MishkaPay.Providers.Stripe.{TestClock, WebhookEndpoint}
   alias MishkaPay.Support.StripeMock
 
   @moduletag :stripe_live
@@ -643,8 +643,6 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
-    alias MishkaPay.Providers.Stripe.WebhookEndpoint
-
     url = "https://example.com/pay/webhooks/stripe/live-#{System.unique_integer([:positive])}"
 
     assert {:ok, %WebhookEndpoint{id: id, secret: "whsec_" <> _, api_version: version}} =

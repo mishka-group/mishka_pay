@@ -10,6 +10,8 @@ defmodule MishkaPay.Ash.SubscribedTest do
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.Support.{Member, MembersPost, SitePayment, SiteSubscription}
 
+  require Ash.Query
+
   setup do
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a"})
@@ -165,8 +167,6 @@ defmodule MishkaPay.Ash.SubscribedTest do
     assert rows |> Enum.filter(& &1.active?) |> Enum.map(& &1.provider_id) == ["sub_trialing_1"]
     assert rows |> Enum.filter(& &1.on_trial?) |> Enum.map(& &1.provider_id) == ["sub_trialing_1"]
 
-    require Ash.Query
-
     assert [%{provider_id: "sub_trialing_1"}] =
              SiteSubscription
              |> Ash.Query.filter(active?)
@@ -211,7 +211,7 @@ defmodule MishkaPay.Ash.SubscribedTest do
       case Process.get(:slow) do
         true ->
           send(test_pid, {:reading, self()})
-          assert_receive :answer, 5_000
+          assert_receive :answer
           Req.Test.json(conn, subscription("sub_active_1", "active", member.id))
 
         _fast ->
@@ -225,7 +225,7 @@ defmodule MishkaPay.Ash.SubscribedTest do
         sync("sub_active_1", "site-a")
       end)
 
-    assert_receive {:reading, reader}, 5_000
+    assert_receive {:reading, reader}
     assert {:ok, %{status: :canceled}} = sync("sub_active_1", "site-a")
     send(reader, :answer)
 

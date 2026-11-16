@@ -21,11 +21,7 @@ if Code.ensure_loaded?(Ash) do
 
     @impl true
     def change(changeset, opts, _context) do
-      changeset
-      |> Ash.Changeset.before_transaction(
-        &MishkaPay.Ash.read(&1, fn changeset -> ask(changeset, opts[:operation]) end)
-      )
-      |> MishkaPay.Ash.announce(opts, &announce/2)
+      MishkaPay.Ash.provider_change(changeset, opts, &ask(&1, opts[:operation]), &announce/2)
     end
 
     defp ask(changeset, :register) do

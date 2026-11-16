@@ -23,24 +23,25 @@ defmodule MishkaPay.Providers.StripeWebhookEndpointTest do
 
     MishkaPay.Test.stub_http(fn conn ->
       case conn.method do
-        "GET" ->
-          Req.Test.json(conn, %{"data" => endpoints, "has_more" => false})
-
-        "POST" ->
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          form = URI.query_decoder(body) |> Enum.to_list()
-          send(test_pid, {:write, conn.request_path, form})
-          events = for {"enabled_events[" <> _, event} <- form, do: event
-
-          Req.Test.json(conn, %{
-            "id" => "we_1",
-            "url" => @url,
-            "status" => "enabled",
-            "enabled_events" => events,
-            "secret" => (conn.request_path == "/v1/webhook_endpoints" && "whsec_new") || nil
-          })
+        "GET" -> Req.Test.json(conn, %{"data" => endpoints, "has_more" => false})
+        "POST" -> written(conn, test_pid)
       end
     end)
+  end
+
+  defp written(conn, test_pid) do
+    {:ok, body, conn} = Plug.Conn.read_body(conn)
+    form = body |> URI.query_decoder() |> Enum.to_list()
+    send(test_pid, {:write, conn.request_path, form})
+    events = for {"enabled_events[" <> _, event} <- form, do: event
+
+    Req.Test.json(conn, %{
+      "id" => "we_1",
+      "url" => @url,
+      "status" => "enabled",
+      "enabled_events" => events,
+      "secret" => (conn.request_path == "/v1/webhook_endpoints" && "whsec_new") || nil
+    })
   end
 
   defp handled, do: Stripe.handled_events() |> Map.keys() |> Enum.sort()
