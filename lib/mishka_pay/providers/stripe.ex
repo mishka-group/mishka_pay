@@ -1690,7 +1690,8 @@ defmodule MishkaPay.Providers.Stripe do
     {"does not contain any recurring prices", "one_time_only"},
     {"must pass a recurring price", "recurring_only"},
     {"separate authorization and capture", "capture_invoice"},
-    {"Stripe Tax has not been activated", "tax_not_set_up"}
+    {"Stripe Tax has not been activated", "tax_not_set_up"},
+    {"feature in the portal configuration is disabled", "portal_feature_off"}
   ]
 
   defp code_of(%{"message" => message}) when is_binary(message),

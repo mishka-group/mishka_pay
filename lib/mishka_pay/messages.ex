@@ -108,6 +108,7 @@ defmodule MishkaPay.Messages do
           | :search_needs
           | :fields_three
           | :merchant_of_record_off
+          | :portal_feature_off
           | :dropdown_options
           | :declined
           | :declined_reason
@@ -558,6 +559,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
+      )
+
+  defp msgid(:portal_feature_off),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The customer portal has this task turned off: turn it on in the portal's settings at the provider, or use another portal configuration"
       )
 
   defp msgid(:merchant_of_record_off),

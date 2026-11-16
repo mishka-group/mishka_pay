@@ -24,7 +24,7 @@ defmodule MishkaPay.Errors.Rejected do
       does not have the form its kind needs; `"tax_not_set_up"` a tax calculation on an account
       whose tax service is off; `"tax_location_invalid"` a buyer's address too thin to count the
       tax; `"managed_payments_shipping"` shipping asked of a checkout the provider sells as
-      merchant of record.
+      merchant of record; `"portal_feature_off"` a portal task the portal's settings turn off.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
   """
@@ -41,6 +41,7 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{code: "managed_payments_invoice"}), do: Messages.text(:managed_payments_invoice)
   def message(%{code: "tax_code_missing"}), do: Messages.text(:tax_code_missing)
+  def message(%{code: "portal_feature_off"}), do: Messages.text(:portal_feature_off)
   def message(%{code: "capture_invoice"}), do: Messages.text(:capture_invoice)
 
   def message(%{code: "merchant_of_record_off", param: param}),
