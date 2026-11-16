@@ -32,6 +32,12 @@ end
   (`docker run -p 12111:12111 stripe/stripe-mock`) and forward to it from `stub_http/1`.
 - Wait on messages or telemetry (`:telemetry_test.attach_event_handlers/2`, `assert_receive`),
   never on `Process.sleep`.
+- PayPal with no keys and no network: `MishkaPay.Test.PayPal.stub!()` answers as PayPal does
+  (Orders, captures, refunds, plans, subscriptions, webhook checks); `MishkaPay.Test.PayPal.order/3`
+  and `subscription/3` put one in a state (`"APPROVED"`, `"ACTIVE"`...). A webhook message passes
+  PayPal's check when its `paypal-transmission-sig` header is `"good"`.
+- Sandbox tests run only when the keys are in the environment (`.env` locally); without them the
+  stand-ins answer, so CI needs no secrets.
 - Test your webhook code without a provider: `MishkaPay.Test.deliver_event(tenant, type, object,
   webhook_secret)` posts a Stripe event signed the way Stripe signs it through
   `MishkaPay.Webhook`; `signed_event/4` gives the `{body, headers}` for your own request, and

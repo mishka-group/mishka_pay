@@ -14,16 +14,23 @@ if Code.ensure_loaded?(Ash) do
         end
 
     `MishkaPay.Ash.Resource` makes one for each resource that listens (`listen? true`), as
-    `<Resource>.MishkaPayListener`. An event about another object is left alone; an object the
-    provider cannot give fails the event, so the inbox tries it again later.
+    `<Resource>.MishkaPayListener`. An event about another object is left alone, and so is one from
+    a provider that cannot read this kind at all (a PayPal `CATALOG.PRODUCT.CREATED`: Mishka Pay has
+    no PayPal catalog); an object the provider fails to give fails the event, so the inbox tries it
+    again later.
     """
+
+    alias MishkaPay.Ash.Object.Spec
+    alias MishkaPay.Errors.Unsupported
 
     @doc false
     defmacro __using__(opts) do
       resource = Keyword.fetch!(opts, :resource)
       kind = Keyword.fetch!(opts, :kind)
       priority = Keyword.get(opts, :priority, 50)
-      object = MishkaPay.Ash.Object.Spec.object(kind)
+      object = Spec.object(kind)
+      capability = Spec.capability(kind)
+      id_argument = Spec.id_argument(kind)
 
       quote do
         use MishkaInstaller.Event.Hook,
@@ -37,16 +44,22 @@ if Code.ensure_loaded?(Ash) do
                 failed: nil
               } = state
             )
-            when is_binary(id),
-            do:
+            when is_binary(id) do
+          case MishkaPay.Provider.capable(event.provider, unquote(capability)) do
+            {:error, %unquote(Unsupported){}} ->
+              {:reply, state}
+
+            _capable_or_unknown ->
               {:reply,
                MishkaPay.Ash.sync_event(
                  unquote(resource),
-                 unquote(MishkaPay.Ash.Object.Spec.id_argument(kind)),
+                 unquote(id_argument),
                  id,
                  event,
                  state
                )}
+          end
+        end
 
         def call(state), do: {:reply, state}
       end

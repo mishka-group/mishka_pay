@@ -7,7 +7,7 @@ defmodule MishkaPay.Errors.Unsupported do
   The provider cannot do this operation, as its `capabilities/0` says: a refund through a provider
   without refunds, for example.
 
-    * `:provider`: the provider's id.
+    * `:provider`: the provider's id; the message names it by its label (`PayPal`).
     * `:operation`: the operation asked for, such as `:refund`.
   """
 
@@ -17,5 +17,9 @@ defmodule MishkaPay.Errors.Unsupported do
 
   @impl true
   def message(%{provider: provider, operation: operation}),
-    do: Messages.text(:unsupported, provider: provider, operation: operation)
+    do:
+      Messages.text(:unsupported,
+        provider: MishkaPay.Provider.label_of(provider),
+        operation: operation
+      )
 end

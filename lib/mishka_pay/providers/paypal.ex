@@ -4,8 +4,8 @@
 
 defmodule MishkaPay.Providers.PayPal do
   @moduledoc """
-  PayPal as a provider: one-time payments with PayPal Orders (v2), reading a payment, refunds and
-  webhooks. A mishka_installer plugin: supervise it to install it.
+  PayPal as a provider: one-time payments with PayPal Orders (v2), subscriptions with billing
+  plans, reading a payment, refunds and webhooks. A mishka_installer plugin: supervise it to install it.
 
       children = [MishkaPay.Providers.PayPal]
 
@@ -31,29 +31,40 @@ defmodule MishkaPay.Providers.PayPal do
       the return page, a webhook and a sync may all ask and it is captured once.
     * The payment's id is the Order's id. `refund/2` refunds its capture, in full or in part, as
       often as the site's refund rule allows (`MishkaPay.ProviderKit`).
+    * A checkout in `mode: :subscription` sells one recurring price: it makes a catalog product
+      and a billing plan for it (the price every interval, after a free trial of `:trial_days`),
+      then the subscription, with idempotency keys from the price and the reference. The buyer
+      approves it on PayPal's page and comes back to the return URL with its id (`I-...`) in
+      `subscription_id`; that id is also the checkout's id.
+    * A subscription's bills are its transactions (`list_invoices/2` by `:subscription_id`), and
+      its next bill is the plan's price on its next billing time. PayPal cancels a subscription at
+      once (`at: :now`): a cancel at the period's end, taking one back, a customer's bills and one
+      bill by id are refused.
     * `verify_webhook/3` asks PayPal to check the message (`verify-webhook-signature`) and answers
-      it as a `MishkaPay.Event` naming its Order.
+      it as a `MishkaPay.Event` naming its Order, or its subscription (a renewal's sale names it as
+      its billing agreement).
 
   ## What it refuses before any request
 
   A currency PayPal does not take, an amount with decimals in a currency PayPal takes whole (HUF,
   JPY, TWD), a price by a provider id (PayPal has no stored prices on this path), a subscription
-  checkout, and a checkout that asks PayPal to sell as the merchant of record. Metadata has no
+  checkout with more than one price, and a checkout that asks PayPal to sell as the merchant of
+  record. Metadata has no
   place on a PayPal Order and is left out.
 
   `config :mishka_pay, MishkaPay.Providers.PayPal, base_url: "http://localhost:..."` points it at
   another address, such as a test server.
 
-  Tested against a stand-in that answers in PayPal's shapes; the run against PayPal's own sandbox
-  is still to come (mishka_pay#17).
+  Tested against a stand-in that answers in PayPal's shapes, and against PayPal's own sandbox
+  (`mix test --only paypal_live`).
   """
 
   use MishkaPay.Provider,
     id: "paypal",
     label: "PayPal",
-    capabilities: [:checkout, :refund, :webhook]
+    capabilities: [:checkout, :refund, :subscription, :webhook]
 
-  alias MishkaPay.{Checkout, Client, Errors, Messages, ProviderKit, Refund}
+  alias MishkaPay.{Checkout, Client, Errors, Messages, Page, Price, ProviderKit, Refund}
   alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.PayPal.Mapper
 
@@ -66,8 +77,35 @@ defmodule MishkaPay.Providers.PayPal do
   @signature_headers ~w(paypal-auth-algo paypal-cert-url paypal-transmission-id paypal-transmission-sig paypal-transmission-time)
 
   @impl MishkaPay.Provider
+  def checkout(%Checkout{mode: :subscription} = checkout, keys) do
+    with :ok <- no_merchant(checkout),
+         :ok <- no_options(checkout),
+         :ok <- named_prices(checkout.items),
+         :ok <- currencies(checkout.items, :checkout),
+         {:ok, price} <- one_plan(checkout.items),
+         {:ok, product} <-
+           request(:post, "/v1/catalogs/products", Mapper.product_params(price), keys,
+             key: ProviderKit.idempotency_key("product", checkout.tenant, price.name)
+           ),
+         plan_params = Mapper.plan_params(product["id"], price, checkout),
+         {:ok, plan} <-
+           request(:post, "/v1/billing/plans", plan_params, keys,
+             key: ProviderKit.idempotency_key("plan", checkout.tenant, plan_params)
+           ),
+         {:ok, sub} <-
+           request(
+             :post,
+             "/v1/billing/subscriptions",
+             Mapper.subscription_params(plan["id"], price, checkout),
+             keys,
+             key: ProviderKit.idempotency_key("subscription", checkout.tenant, checkout.reference)
+           ) do
+      {:ok, Mapper.subscription_checkout(sub, checkout)}
+    end
+  end
+
   def checkout(%Checkout{} = checkout, keys) do
-    with :ok <- one_time(checkout),
+    with :ok <- no_merchant(checkout),
          :ok <- no_options(checkout),
          :ok <- named_prices(checkout.items),
          :ok <- currencies(checkout.items, :checkout),
@@ -79,11 +117,77 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
+  # A subscription's checkout is the subscription itself (`I-...`); any other is an Order.
   @impl MishkaPay.Provider
+  def fetch_checkout("I-" <> _rest = subscription_id, keys) do
+    with :ok <- subscription_id(subscription_id, :checkout_id),
+         {:ok, sub} <-
+           :get
+           |> request("/v1/billing/subscriptions/#{subscription_id}", %{}, keys)
+           |> unknown_id() do
+      {:ok, Mapper.subscription_checkout(sub)}
+    end
+  end
+
   def fetch_checkout(order_id, keys) do
     with :ok <- order_id(order_id, :checkout_id),
          {:ok, order} <- current_order(order_id, keys) do
       {:ok, Mapper.checkout(order)}
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_subscription(subscription_id, keys) do
+    with {:ok, sub} <- read_subscription(subscription_id, keys) do
+      Mapper.subscription(sub)
+    end
+  end
+
+  # PayPal ends a subscription at once: it has no cancel at the period's end to set or take back.
+  # One the buyer never approved cannot be canceled (PayPal answers that it is not found); it ends
+  # by itself, and the error says so.
+  @impl MishkaPay.Provider
+  def cancel_subscription(subscription_id, :now, keys) do
+    with :ok <- subscription_id(subscription_id, :subscription_id),
+         {:ok, _no_content} <- cancel_request(subscription_id, keys) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  def cancel_subscription(_subscription_id, :period_end, _keys),
+    do: unsupported("canceling a subscription at the period's end (cancel it now)")
+
+  @impl MishkaPay.Provider
+  def resume_subscription(_subscription_id, _keys),
+    do: unsupported("taking back a cancel at the period's end")
+
+  # A subscription's bills are its transactions, from when it was made until now; one not approved
+  # yet has none.
+  @impl MishkaPay.Provider
+  def list_invoices(opts, keys) do
+    case opts[:subscription_id] do
+      id when is_binary(id) -> transactions(id, opts[:limit], keys)
+      _by_customer -> unsupported("listing a customer's bills")
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_invoice(_invoice_id, _keys),
+    do: unsupported("reading one subscription bill by its id")
+
+  @impl MishkaPay.Provider
+  def upcoming_invoice(subscription_id, keys) do
+    with {:ok, sub} <- read_subscription(subscription_id, keys) do
+      case Mapper.upcoming_invoice(sub) do
+        nil ->
+          ProviderKit.invalid(
+            :subscription_id,
+            Messages.text(:no_upcoming_invoice, id: subscription_id)
+          )
+
+        answer ->
+          answer
+      end
     end
   end
 
@@ -125,7 +229,7 @@ defmodule MishkaPay.Providers.PayPal do
            request(
              :post,
              "/v1/notifications/verify-webhook-signature",
-             Map.merge(signature, %{"webhook_id" => webhook_id, "webhook_event" => event}),
+             {:json_text, verification(signature, webhook_id, payload)},
              keys
            ) do
       Mapper.event(event, keys.mode == :live)
@@ -158,12 +262,87 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
-  defp one_time(%Checkout{mode: :subscription}), do: unsupported("subscription checkout")
-
-  defp one_time(%Checkout{merchant_of_record: true}),
+  defp no_merchant(%Checkout{merchant_of_record: true}),
     do: unsupported("checkout as merchant of record")
 
-  defp one_time(_checkout), do: :ok
+  defp no_merchant(_checkout), do: :ok
+
+  # A PayPal subscription follows one plan: one recurring price.
+  defp one_plan([%Price{interval: interval} = price]) when not is_nil(interval), do: {:ok, price}
+  defp one_plan(_items), do: unsupported("subscription checkout with more than one price")
+
+  defp cancel_request(subscription_id, keys) do
+    case request(
+           :post,
+           "/v1/billing/subscriptions/#{subscription_id}/cancel",
+           %{"reason" => "Canceled by the site"},
+           keys
+         ) do
+      {:error, %Errors.Rejected{status: 404}} = error ->
+        not_approved(subscription_id, error, keys)
+
+      answer ->
+        answer
+    end
+  end
+
+  defp not_approved(subscription_id, error, keys) do
+    case read_subscription(subscription_id, keys) do
+      {:ok, %{"status" => status}} when status in ["APPROVAL_PENDING", "APPROVED"] ->
+        ProviderKit.invalid(:subscription_id, Messages.text(:paypal_not_approved))
+
+      _other ->
+        error
+    end
+  end
+
+  defp read_subscription(subscription_id, keys) do
+    with :ok <- subscription_id(subscription_id, :subscription_id) do
+      :get
+      |> request("/v1/billing/subscriptions/#{subscription_id}", %{"fields" => "plan"}, keys)
+      |> unknown_id()
+    end
+  end
+
+  # PayPal answers an id it never made, read by its path, as a bad parameter: it is one it has not.
+  defp unknown_id(
+         {:error, %Errors.Rejected{status: 400, code: "INVALID_PARAMETER_SYNTAX"} = error}
+       ),
+       do: {:error, %{error | code: "resource_missing"}}
+
+  defp unknown_id(answer), do: answer
+
+  defp transactions(subscription_id, limit, keys) do
+    with {:ok, sub} <- read_subscription(subscription_id, keys) do
+      case sub["status"] in ["APPROVAL_PENDING", "APPROVED"] do
+        true -> {:ok, %Page{items: []}}
+        false -> transactions_since(sub, limit, keys)
+      end
+    end
+  end
+
+  defp transactions_since(sub, limit, keys) do
+    window = %{
+      "start_time" => sub["create_time"],
+      "end_time" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    }
+
+    with {:ok, answer} <-
+           request(:get, "/v1/billing/subscriptions/#{sub["id"]}/transactions", window, keys),
+         {:ok, bills} <- bills(answer["transactions"] || [], sub["id"]) do
+      newest = Enum.sort_by(bills, & &1.created_at, {:desc, DateTime})
+      {:ok, %Page{items: Enum.take(newest, limit || length(newest)), has_more: false}}
+    end
+  end
+
+  defp bills(transactions, subscription_id) do
+    Enum.reduce_while(transactions, {:ok, []}, fn transaction, {:ok, bills} ->
+      case Mapper.invoice(transaction, subscription_id) do
+        {:ok, bill} -> {:cont, {:ok, [bill | bills]}}
+        error -> {:halt, error}
+      end
+    end)
+  end
 
   # Checkout options this adapter does not send yet are refused, never left out.
   @options [
@@ -226,6 +405,14 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
+  # A PayPal subscription id is `I-` and letters and digits; anything else never reaches a path.
+  defp subscription_id(id, field) do
+    case is_binary(id) and Regex.match?(~r/\AI-[A-Z0-9]{6,40}\z/, id) do
+      true -> :ok
+      false -> ProviderKit.invalid(field, Messages.text(:paypal_id, field: field))
+    end
+  end
+
   defp webhook_id(%{webhook_secret: id}) when is_binary(id) and id != "", do: {:ok, id}
   defp webhook_id(_keys), do: bad_signature(:no_secret)
 
@@ -281,8 +468,18 @@ defmodule MishkaPay.Providers.PayPal do
     |> Map.merge(body_of(method, body))
   end
 
-  defp body_of(:get, _body), do: %{}
+  defp body_of(:get, params) when map_size(params) == 0, do: %{}
+  defp body_of(:get, params), do: %{params: params}
+  defp body_of(_write, {:json_text, text}), do: %{json_text: text}
   defp body_of(_write, body), do: %{json: body}
+
+  # PayPal checks a message's signature against the exact bytes it sent, so the event goes back
+  # as it came (`payload`, already decoded once as one JSON object), never decoded and encoded
+  # again, which would reorder its keys and change the bytes.
+  defp verification(signature, webhook_id, payload) do
+    head = signature |> Map.put("webhook_id", webhook_id) |> JSON.encode!()
+    String.trim_trailing(head, "}") <> ~s(,"webhook_event":) <> payload <> "}"
+  end
 
   # The app's OAuth token for the site's keys, kept until shortly before it expires.
   defp token(keys) do
@@ -320,6 +517,8 @@ defmodule MishkaPay.Providers.PayPal do
        when status in 200..299,
        do: {:ok, body}
 
+  defp answer({:ok, %Req.Response{status: 204}}, _keys), do: {:ok, %{}}
+
   # A token PayPal no longer takes is dropped, so the next call gets a new one.
   defp answer({:ok, %Req.Response{status: 401, body: body}}, keys) do
     TokenCache.drop({:paypal, keys.publishable_key, keys.mode})
@@ -337,6 +536,17 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp answer({:ok, %Req.Response{status: status, body: body}}, _keys), do: rejected(status, body)
   defp answer({:error, _unreachable} = error, _keys), do: error
+
+  # PayPal's "not found" is Stripe's `resource_missing`: one code, one plain message.
+  defp rejected(404, body) do
+    {:error,
+     Errors.Rejected.exception(
+       provider: "paypal",
+       status: 404,
+       code: "resource_missing",
+       message: error_field(body, "message")
+     )}
+  end
 
   defp rejected(status, body) do
     {:error,

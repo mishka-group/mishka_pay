@@ -109,7 +109,19 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  # PayPal sends the buyer back with the Order id in `token`.
+  # PayPal sends the buyer back with the subscription id in `subscription_id` (its `token` is not
+  # the subscription), or for a payment with the Order id in `token`.
+  def handle_params(%{"provider" => "paypal", "subscription_id" => subscription_id}, _uri, socket) do
+    case connected?(socket) do
+      true ->
+        {:noreply,
+         socket |> back_from_checkout("paypal", subscription_id) |> push_patch(to: ~p"/")}
+
+      false ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_params(%{"provider" => "paypal", "token" => order_id}, _uri, socket) do
     case connected?(socket) do
       true ->
@@ -188,7 +200,10 @@ defmodule ShopWeb.ShopLive do
        |> put_payment(refunded)
        |> assign_last()
        |> select(refunded.id, refunded.__metadata__.refund)
-       |> flash(:info, "Refunded. Stripe gives the money back to the card.")}
+       |> flash(
+         :info,
+         "Refunded. #{MishkaPay.Provider.label_of(payment.provider)} gives the money back to the buyer."
+       )}
     else
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
@@ -202,7 +217,10 @@ defmodule ShopWeb.ShopLive do
        |> put_payment(payment)
        |> assign_last()
        |> select(payment.id)
-       |> flash(:info, "Payment read from Stripe and saved.")}
+       |> flash(
+         :info,
+         "Payment read from #{MishkaPay.Provider.label_of(payment.provider)} and saved."
+       )}
     else
       {:error, error} ->
         {:noreply,
@@ -347,6 +365,16 @@ defmodule ShopWeb.ShopLive do
 
   def handle_info(%Phoenix.Socket.Broadcast{topic: "pay:inbox", payload: notification}, socket),
     do: {:noreply, stream_insert(socket, :inbox, notification.data, at: 0)}
+
+  @impl true
+  def handle_async(:checkout_back, {:ok, {:ok, checkout, kept}}, socket),
+    do: {:noreply, socket |> assign(checkout_read: checkout) |> kept(kept)}
+
+  def handle_async(:checkout_back, {:ok, {:error, error}}, socket),
+    do: {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+
+  def handle_async(:checkout_back, {:exit, reason}, socket),
+    do: {:noreply, flash(socket, :error, "The payment could not be read: #{inspect(reason)}")}
 
   @impl true
   def render(assigns) do
@@ -668,64 +696,58 @@ defmodule ShopWeb.ShopLive do
   defp same_buyer(%{id: id}, %{id: id}), do: nil
   defp same_buyer(buyer, _other), do: buyer
 
-  # The buyer comes back from Stripe with the session id: read it, and when it made a payment, keep
-  # the payment at once rather than waiting for the webhook.
+  # The buyer comes back from the provider's page: the checkout is read (PayPal captures the Order
+  # here, which takes seconds) and its payment kept at once rather than waiting for the webhook. It
+  # runs in the background, so the page connects and says what it is doing meanwhile.
   defp back_from_checkout(socket, provider, checkout_id) do
-    case MishkaPay.fetch_checkout(provider, checkout_id, @tenant) do
-      {:ok, %{subscription_id: subscription_id} = checkout} when is_binary(subscription_id) ->
-        socket = assign(socket, checkout_read: checkout)
+    socket
+    |> flash(:info, "Confirming your payment with #{MishkaPay.Provider.label_of(provider)}...")
+    |> start_async(:checkout_back, fn -> checkout_back(provider, checkout_id) end)
+  end
 
-        case Ash.create(
-               Shop.Pay.Subscription,
-               %{provider: "stripe", subscription_id: subscription_id, tenant: @tenant},
-               action: :sync,
-               authorize?: false
-             ) do
-          {:ok, subscription} ->
-            send_update(ShopWeb.SubscriptionsComponent,
-              id: "subscriptions",
-              changed: subscription
-            )
-
-            send_update(ShopWeb.SubscriptionsComponent,
-              id: "subscriptions",
-              open: subscription.id
-            )
-
-            flash(socket, :info, "Thank you! Your subscription is below, with its invoices.")
-
-          {:error, error} ->
-            flash(socket, :error, MishkaPay.Ash.message(error))
-        end
-
-      {:ok, %{payment_id: payment_id} = checkout} when is_binary(payment_id) ->
-        socket = assign(socket, checkout_read: checkout)
-
-        case sync(payment_id) do
-          {:ok, payment} ->
-            socket
-            |> put_payment(payment)
-            |> assign_last()
-            |> select(payment.id)
-            |> flash(:info, "Thank you! Your payment is below, with its details.")
-
-          {:error, error} ->
-            flash(socket, :error, MishkaPay.Ash.message(error))
-        end
-
-      {:ok, %{setup_intent_id: setup_id} = checkout} when is_binary(setup_id) ->
-        socket
-        |> assign(checkout_read: checkout)
-        |> flash(:info, "Card saved. List the customer's cards under Saved cards.")
-
-      {:ok, checkout} ->
-        socket
-        |> assign(checkout_read: checkout)
-        |> flash(:info, "Thank you! The payment shows once Stripe confirms it.")
-
-      {:error, error} ->
-        flash(socket, :error, MishkaPay.Ash.message(error))
+  defp checkout_back(provider, checkout_id) do
+    with {:ok, checkout} <- MishkaPay.fetch_checkout(provider, checkout_id, @tenant) do
+      {:ok, checkout, keep(provider, checkout)}
     end
+  end
+
+  defp keep(provider, %{subscription_id: id}) when is_binary(id) do
+    {:subscription,
+     Ash.create(
+       Shop.Pay.Subscription,
+       %{provider: provider, subscription_id: id, tenant: @tenant},
+       action: :sync,
+       authorize?: false
+     )}
+  end
+
+  defp keep(_provider, %{payment_id: id}) when is_binary(id), do: {:payment, sync(id)}
+  defp keep(_provider, %{setup_intent_id: id}) when is_binary(id), do: :card_saved
+  defp keep(provider, _checkout), do: {:later, provider}
+
+  defp kept(socket, {:subscription, {:ok, subscription}}) do
+    send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", changed: subscription)
+    send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", open: subscription.id)
+    flash(socket, :info, "Thank you! Your subscription is below, with its invoices.")
+  end
+
+  defp kept(socket, {:payment, {:ok, payment}}) do
+    socket
+    |> put_payment(payment)
+    |> assign_last()
+    |> select(payment.id)
+    |> flash(:info, "Thank you! Your payment is below, with its details.")
+  end
+
+  defp kept(socket, {_kind, {:error, error}}),
+    do: flash(socket, :error, MishkaPay.Ash.message(error))
+
+  defp kept(socket, :card_saved),
+    do: flash(socket, :info, "Card saved. List the customer's cards under Saved cards.")
+
+  defp kept(socket, {:later, provider}) do
+    label = MishkaPay.Provider.label_of(provider)
+    flash(socket, :info, "Thank you! The payment shows once #{label} confirms it.")
   end
 
   # A changed payment: the table read again in its own order (newest made at Stripe first, so a

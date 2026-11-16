@@ -79,7 +79,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                ],
                success_url: "https://shop.test/thanks",
                cancel_url: "https://shop.test/cart",
-               reference: "live-#{System.unique_integer([:positive])}"
+               reference: "live-#{run_id()}"
              })
 
     assert {:ok, %Checkout{id: ^id, status: :open, reference: ^reference, payment_id: nil}} =
@@ -265,7 +265,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                ],
                success_url: "https://shop.test/thanks",
                cancel_url: "https://shop.test/cart",
-               reference: "live-sub-#{System.unique_integer([:positive])}"
+               reference: "live-sub-#{run_id()}"
              })
 
     assert {:ok, %Checkout{id: ^id, status: :open, subscription_id: nil}} =
@@ -570,7 +570,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a customer is made, changed, found by email and read on Stripe, and its portal opens" do
-    run = System.unique_integer([:positive])
+    run = run_id()
     email = "live-#{run}@example.com"
     reference = "user-live-#{run}"
 
@@ -598,7 +598,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a business buyer's VAT number is added to a new customer, listed and removed" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
       MishkaPay.create_customer(%{
@@ -637,7 +637,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "the tax on a sale outside Checkout is counted and recorded, or the account says Stripe Tax is off" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     calculation = %{
       provider: "stripe",
@@ -685,7 +685,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a shipping rate is made and listed, and a checkout that ships opens with it and an inline rate" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     assert {:ok, %MishkaPay.ShippingRate{id: "shr_" <> _ = rate_id, min_days: 1, max_days: 2}} =
              MishkaPay.create_shipping_rate(%{
@@ -725,7 +725,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a promotion code lowers a real checkout, and an expired checkout cannot be paid" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     {:ok, %MishkaPay.Coupon{id: coupon_id, valid: true}} =
       MishkaPay.create_coupon(%{provider: "stripe", name: "Live 20", percent_off: 20})
@@ -771,7 +771,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a product and its price live in Stripe's catalog, sell by price id, and lists page through" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     assert {:ok, %MishkaPay.Product{id: product_id}} =
              MishkaPay.create_product(%{
@@ -833,7 +833,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a one-off bill is made with its items, opened, sent, paid by hand, and another voided or given up" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
       MishkaPay.create_customer(%{
@@ -911,7 +911,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
-    url = "https://example.com/pay/webhooks/stripe/live-#{System.unique_integer([:positive])}"
+    url = "https://example.com/pay/webhooks/stripe/live-#{run_id()}"
 
     assert {:ok, %WebhookEndpoint{id: id, secret: "whsec_" <> _, api_version: version}} =
              WebhookEndpoint.ensure(nil, url)
@@ -925,7 +925,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     assert {:ok, %MishkaPay.Product{id: product_id}} =
              MishkaPay.create_product(%{provider: "stripe", name: "Live currencies #{run}"})
@@ -953,7 +953,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a one-time payment link, a checkout with its invoice, and prices that hold or add the tax" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     {:ok, %MishkaPay.Product{id: product_id}} =
       MishkaPay.create_product(%{
@@ -1087,7 +1087,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   test "a saved card is listed, read, made the default and taken off, and a setup checkout opens for one",
        %{key: key} do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
       MishkaPay.create_customer(%{
@@ -1159,7 +1159,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   test "a meter counts a customer's usage once per reference, a metered price bills it, and the meter is turned off",
        %{key: key} do
-    run = System.unique_integer([:positive])
+    run = run_id()
     event = "mishka_pay_live_#{run}"
 
     assert {:ok,
@@ -1257,7 +1257,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   test "a feature is attached to a product, and a customer who bought nothing has no entitlements",
        %{key: key} do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     assert {:ok, %MishkaPay.Feature{id: "feat_" <> _ = feature_id, active: true}} =
              MishkaPay.create_feature(%{
@@ -1316,7 +1316,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   test "a customer's balance takes credit once per reference, then a debit, and lists both" do
-    run = System.unique_integer([:positive])
+    run = run_id()
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
       MishkaPay.create_customer(%{provider: "stripe", email: "credit-#{run}@example.com"})
@@ -1369,4 +1369,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_payment("stripe", "pi_doesnotexist")
   end
+
+  # Stripe and PayPal keep codes, lookup keys and idempotency keys between runs; a counter alone
+  # starts again each run, so the run's time makes every name new.
+  defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

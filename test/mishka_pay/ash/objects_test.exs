@@ -134,4 +134,26 @@ defmodule MishkaPay.Ash.ObjectsTest do
 
     assert [_still_one] = Ash.read!(SiteProduct, tenant: "site-a", authorize?: false)
   end
+
+  test "an event about a product from a provider with no catalog is left alone, never retried" do
+    MishkaPay.Test.start_plugin!(MishkaPay.Providers.PayPal)
+    MishkaPay.Test.start_plugin!(SiteProduct.MishkaPayListener)
+
+    event = %MishkaPay.Event{
+      provider: "paypal",
+      tenant: "site-a",
+      id: "WH-1",
+      type: "CATALOG.PRODUCT.CREATED",
+      object_type: "product",
+      object_id: "PROD-1"
+    }
+
+    assert %{failed: nil} =
+             MishkaInstaller.Event.Hook.call(
+               MishkaPay.Events.event_process(),
+               %{event: event, failed: nil}
+             )
+
+    assert [] = Ash.read!(SiteProduct, tenant: "site-a", authorize?: false)
+  end
 end

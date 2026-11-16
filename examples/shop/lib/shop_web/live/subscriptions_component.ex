@@ -117,12 +117,12 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   def handle_event("read", %{"subscription_id" => value}, socket) do
     with {:ok, id} <- subscription_id(value),
-         {:ok, row} <- sync(id, socket.assigns.tenant) do
+         {:ok, row} <- sync(id, socket.assigns.tenant, provider_of(id)) do
       {:noreply,
        socket
        |> stream_insert(:subscriptions, row, at: 0)
        |> select(row.id)
-       |> say(:info, "Subscription read from Stripe and saved.")}
+       |> say(:info, "Subscription read from #{label(row)} and saved.")}
     else
       {:error, error} ->
         {:noreply, socket |> assign(selected: nil) |> say(:error, MishkaPay.Ash.message(error))}
@@ -218,6 +218,8 @@ defmodule ShopWeb.SubscriptionsComponent do
   attr :myself, :any, required: true
 
   defp details(assigns) do
+    assigns = assign(assigns, :at, label(assigns.selected))
+
     ~H"""
     <div
       class="card bg-base-200 border border-primary/40"
@@ -231,6 +233,7 @@ defmodule ShopWeb.SubscriptionsComponent do
             <code class="text-sm opacity-70 break-all">{@selected.provider_id}</code>
           </h3>
           <a
+            :if={@selected.provider == "stripe"}
             href={"https://dashboard.stripe.com/test/subscriptions/#{@selected.provider_id}"}
             target="_blank"
             class="btn btn-ghost btn-sm shrink-0"
@@ -289,11 +292,11 @@ defmodule ShopWeb.SubscriptionsComponent do
           </div>
 
           <div class="rounded-box bg-base-100 p-4" data-testid="subscription-live">
-            <h4 class="font-medium">Live from Stripe</h4>
+            <h4 class="font-medium">Live from {@at}</h4>
             <.hint>MishkaPay.fetch_subscription/3 and MishkaPay.list_invoices/3</.hint>
             <.async_result :let={live} assign={@live}>
               <:loading>
-                <span class="loading loading-dots loading-sm"></span> Asking Stripe...
+                <span class="loading loading-dots loading-sm"></span> Asking {@at}...
               </:loading>
               <:failed :let={{:error, reason}}>
                 <span class="text-error text-sm" data-testid="sub-live-error">{reason}</span>
@@ -406,7 +409,7 @@ defmodule ShopWeb.SubscriptionsComponent do
               do: ", resumes #{time(@selected.resumes_at)}"})
           </span>
           <.act id={@selected.id} action="sync" myself={@myself} class="">
-            <.icon name="hero-arrow-path" class="size-4" /> Sync from Stripe
+            <.icon name="hero-arrow-path" class="size-4" /> Sync from {@at}
           </.act>
           <p
             :if={not active?(@selected)}
@@ -418,7 +421,7 @@ defmodule ShopWeb.SubscriptionsComponent do
         </div>
 
         <.change_panel
-          :if={active?(@selected)}
+          :if={active?(@selected) and changes?(@selected)}
           selected={@selected}
           plans={@plans}
           preview={@preview}
@@ -699,7 +702,7 @@ defmodule ShopWeb.SubscriptionsComponent do
   defp perform(row, "cancel_period_end"), do: run(row, :cancel, %{at: :period_end})
   defp perform(row, "cancel_now"), do: run(row, :cancel, %{at: :now})
   defp perform(row, "resume"), do: run(row, :resume, %{})
-  defp perform(row, "sync"), do: sync(row.provider_id, row.tenant)
+  defp perform(row, "sync"), do: sync(row.provider_id, row.tenant, row.provider)
 
   defp run(row, action, args),
     do: row |> Ash.Changeset.for_update(action, args) |> Ash.update(authorize?: false)
@@ -709,18 +712,28 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   defp done("cancel_now"), do: "Canceled now."
   defp done("resume"), do: "It goes on: the cancel is taken back."
-  defp done("sync"), do: "Subscription read from Stripe and saved."
+  defp done("sync"), do: "Subscription read again and saved."
 
-  defp sync(subscription_id, tenant) do
+  defp label(%{provider: provider}), do: MishkaPay.Provider.label_of(provider)
+
+  # A plan or quantity change is offered only by a provider that can make one (Stripe; not PayPal).
+  defp changes?(%{provider: provider}),
+    do: match?({:ok, _provider}, MishkaPay.Provider.capable(provider, :subscription_change))
+
+  # A typed id names its provider: PayPal's subscriptions are `I-...`, Stripe's `sub_...`.
+  defp provider_of("I-" <> _paypal), do: "paypal"
+  defp provider_of(_stripe), do: "stripe"
+
+  defp sync(subscription_id, tenant, provider) do
     Ash.create(
       Subscription,
-      %{provider: "stripe", subscription_id: subscription_id, tenant: tenant},
+      %{provider: provider, subscription_id: subscription_id, tenant: tenant},
       action: :sync,
       authorize?: false
     )
   end
 
-  # The row now, and the subscription and its invoices from Stripe in the background.
+  # The row now, and the subscription and its invoices from its provider in the background.
   defp select(socket, id) do
     row = Ash.get!(Subscription, id, authorize?: false)
 
@@ -765,7 +778,7 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   defp subscription_id(value) do
     case String.trim(value || "") do
-      "" -> {:error, "Type a subscription id first, it starts with sub_."}
+      "" -> {:error, "Type a subscription id first: sub_... (Stripe) or I-... (PayPal)."}
       "pi_" <> _ -> {:error, ~s|That is a payment id (pi_). Use "Read payment" above.|}
       id -> {:ok, id}
     end

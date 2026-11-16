@@ -26,6 +26,16 @@ if Code.ensure_loaded?(Ash) do
     @spec object(atom()) :: String.t()
     def object(kind), do: Atom.to_string(kind)
 
+    @doc """
+    The provider capability that reads a kind's object: a provider without it cannot give one, so
+    an event about such an object is not for this kind.
+    """
+    @spec capability(atom()) :: MishkaPay.Provider.capability()
+    def capability(kind) when kind in [:product, :price], do: :catalog
+    def capability(kind) when kind in [:coupon, :promotion_code], do: :discount
+    def capability(:payment_link), do: :payment_link
+    def capability(:invoice), do: :subscription
+
     @doc "The `:sync` argument that names the object: `:product_id`, `:invoice_id`..."
     @spec id_argument(atom()) :: atom()
     def id_argument(:product), do: :product_id

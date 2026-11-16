@@ -5,10 +5,11 @@
 defmodule MishkaPay.Providers.PayPal.Mapper do
   @moduledoc """
   Mishka Pay's structs to PayPal's request bodies, and PayPal's answers (Orders v2, captures,
-  refunds, webhook events) back to Mishka Pay's structs. Pure: no request is made here.
+  refunds, catalog products, billing plans, subscriptions and their transactions, webhook events)
+  back to Mishka Pay's structs. Pure: no request is made here.
   """
 
-  alias MishkaPay.{Checkout, Event, Money, Payment, Price, Refund}
+  alias MishkaPay.{Checkout, Event, Invoice, Money, Payment, Price, Refund, Subscription}
 
   @checkout_statuses %{
     "CREATED" => :open,
@@ -18,6 +19,26 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
     "COMPLETED" => :complete,
     "VOIDED" => :expired
   }
+
+  @subscription_statuses %{
+    "APPROVAL_PENDING" => :incomplete,
+    "APPROVED" => :incomplete,
+    "ACTIVE" => :active,
+    "SUSPENDED" => :paused,
+    "CANCELLED" => :canceled,
+    "EXPIRED" => :canceled
+  }
+
+  @transaction_statuses %{
+    "COMPLETED" => :paid,
+    "PARTIALLY_REFUNDED" => :paid,
+    "REFUNDED" => :paid,
+    "PENDING" => :open,
+    "DECLINED" => :uncollectible
+  }
+
+  @units %{day: "DAY", week: "WEEK", month: "MONTH", year: "YEAR"}
+  @intervals Map.new(@units, fn {interval, unit} -> {unit, interval} end)
 
   @refund_statuses %{
     "COMPLETED" => :succeeded,
@@ -154,6 +175,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       provider: "paypal",
       id: order["id"],
       amount: amount,
+      amount_captured: captured(capture),
       amount_refunded: refunded,
       status: status(order, capture, refunded, amount),
       reference: unit(order)["custom_id"],
@@ -174,6 +196,13 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   @spec capture(map()) :: map() | nil
   def capture(order),
     do: order |> unit() |> get_in(["payments", "captures"]) |> List.wrap() |> List.first()
+
+  # What PayPal took: the capture's amount, once it is not declined, failed or still pending.
+  defp captured(%{"status" => status} = capture)
+       when status not in ["DECLINED", "FAILED", "PENDING"],
+       do: money_of(capture["amount"])
+
+  defp captured(_not_taken), do: nil
 
   defp status(%{"status" => "VOIDED"}, _capture, _refunded, _amount), do: :canceled
 
@@ -248,9 +277,244 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
      }}
   end
 
+  @doc "The body of `POST /v1/catalogs/products`: the product a subscription's plan sells."
+  @spec product_params(Price.t()) :: map()
+  def product_params(%Price{name: name}),
+    do: %{"name" => String.slice(name, 0, 127), "type" => "SERVICE"}
+
   @doc """
-  A PayPal webhook event as a `MishkaPay.Event`, naming the Order it concerns: the Order itself,
-  or the Order a capture or refund belongs to. `live?` says whose keys checked it.
+  The body of `POST /v1/billing/plans`: the price's amount charged every interval, with no end,
+  after a free trial of the checkout's `:trial_days` when it has one. A quantity is allowed, so
+  the plan charges the amount for each one.
+  """
+  @spec plan_params(String.t(), Price.t(), Checkout.t()) :: map()
+  def plan_params(product_id, %Price{} = price, %Checkout{trial_days: trial_days}) do
+    regular = %{
+      "tenure_type" => "REGULAR",
+      "total_cycles" => 0,
+      "frequency" => %{
+        "interval_unit" => Map.fetch!(@units, price.interval),
+        "interval_count" => price.interval_count || 1
+      },
+      "pricing_scheme" => %{
+        "fixed_price" => %{
+          "currency_code" => to_string(price.amount.currency),
+          "value" => value(price.amount.amount, price.amount.currency)
+        }
+      }
+    }
+
+    %{
+      "product_id" => product_id,
+      "name" => String.slice(price.name, 0, 127),
+      "quantity_supported" => true,
+      "billing_cycles" => cycles(trial_days, regular),
+      "payment_preferences" => %{
+        "auto_bill_outstanding" => true,
+        "payment_failure_threshold" => 3
+      }
+    }
+  end
+
+  defp cycles(nil, regular), do: [Map.put(regular, "sequence", 1)]
+
+  defp cycles(days, regular) do
+    trial = %{
+      "tenure_type" => "TRIAL",
+      "sequence" => 1,
+      "total_cycles" => 1,
+      "frequency" => %{"interval_unit" => "DAY", "interval_count" => days}
+    }
+
+    [trial, Map.put(regular, "sequence", 2)]
+  end
+
+  @doc """
+  The body of `POST /v1/billing/subscriptions`: the plan, the quantity, the reference as
+  `custom_id`, the buyer's email when known, and the return and cancel URLs.
+  """
+  @spec subscription_params(String.t(), Price.t(), Checkout.t()) :: map()
+  def subscription_params(plan_id, %Price{quantity: quantity}, %Checkout{} = checkout) do
+    %{
+      "plan_id" => plan_id,
+      "quantity" => Integer.to_string(quantity || 1),
+      "custom_id" => checkout.reference,
+      "application_context" => %{
+        "return_url" => checkout.success_url,
+        "cancel_url" => checkout.cancel_url,
+        "user_action" => "SUBSCRIBE_NOW",
+        "shipping_preference" => "NO_SHIPPING"
+      }
+    }
+    |> Map.merge(subscriber(checkout.customer))
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp subscriber(%{email: email}) when is_binary(email),
+    do: %{"subscriber" => %{"email_address" => email}}
+
+  defp subscriber(_none), do: %{}
+
+  @doc """
+  A subscription made or read back, as its checkout: the buyer approves it on PayPal's page and
+  comes back with its id in `subscription_id`; once approved the checkout is complete and names it.
+  """
+  @spec subscription_checkout(map(), Checkout.t() | nil) :: Checkout.t()
+  def subscription_checkout(sub, checkout \\ nil) do
+    status = sub_checkout_status(sub)
+
+    %{
+      (checkout ||
+         struct(Checkout,
+           provider: "paypal",
+           mode: :subscription,
+           items: [],
+           reference: sub["custom_id"],
+           customer: buyer(get_in(sub, ["subscriber", "email_address"]))
+         ))
+      | id: sub["id"],
+        url: link(sub, ["approve"]),
+        status: status,
+        subscription_id: if(status == :complete, do: sub["id"])
+    }
+  end
+
+  defp sub_checkout_status(%{"status" => "APPROVAL_PENDING"}), do: :open
+
+  defp sub_checkout_status(%{"status" => status} = sub) when status in ["CANCELLED", "EXPIRED"],
+    do: if(Map.has_key?(sub, "billing_info"), do: :complete, else: :expired)
+
+  defp sub_checkout_status(_approved), do: :complete
+
+  @doc """
+  A subscription read with its plan (`?fields=plan`) as a `MishkaPay.Subscription`: its one price
+  from the plan's regular cycle, the period from its last and next bill, and `:trialing` while
+  the plan's trial runs.
+  """
+  @spec subscription(map()) :: {:ok, Subscription.t()} | {:error, Splode.Error.t()}
+  def subscription(sub) do
+    billing = sub["billing_info"] || %{}
+    status = sub_status(sub, billing)
+    subscriber = sub["subscriber"] || %{}
+
+    %{
+      provider: "paypal",
+      id: sub["id"],
+      status: status,
+      items: plan_items(sub),
+      customer_id: subscriber["payer_id"],
+      customer_email: subscriber["email_address"],
+      customer_name: name(subscriber["name"]),
+      current_period_start: time(get_in(billing, ["last_payment", "time"]) || sub["start_time"]),
+      current_period_end: time(billing["next_billing_time"]),
+      canceled_at: if(status == :canceled, do: time(sub["status_update_time"])),
+      trial_end: if(status == :trialing, do: time(billing["next_billing_time"])),
+      reference: sub["custom_id"],
+      created_at: time(sub["create_time"])
+    }
+    |> Subscription.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp sub_status(%{"status" => "ACTIVE"}, billing) do
+    executions = billing["cycle_executions"] || []
+
+    case {cycle(executions, "TRIAL"), cycle(executions, "REGULAR")} do
+      {%{}, %{"cycles_completed" => 0}} -> :trialing
+      _paying -> :active
+    end
+  end
+
+  defp sub_status(%{"status" => status}, _billing), do: Map.get(@subscription_statuses, status)
+
+  defp cycle(cycles, tenure), do: Enum.find(cycles, &(&1["tenure_type"] == tenure))
+
+  defp plan_items(%{"plan" => %{"billing_cycles" => cycles} = plan} = sub) do
+    with %{"frequency" => frequency} = regular <- cycle(cycles, "REGULAR"),
+         %Elixir.Money{} = amount <- money_of(get_in(regular, ["pricing_scheme", "fixed_price"])) do
+      [
+        %{
+          provider: "paypal",
+          id: sub["plan_id"],
+          product_id: plan["product_id"],
+          name: plan["name"],
+          amount: amount,
+          quantity: quantity(sub["quantity"]),
+          interval: Map.get(@intervals, frequency["interval_unit"]),
+          interval_count: frequency["interval_count"]
+        }
+      ]
+    else
+      _no_price -> []
+    end
+  end
+
+  defp plan_items(_no_plan), do: []
+
+  defp quantity(text) when is_binary(text) do
+    case Integer.parse(text) do
+      {count, ""} when count > 0 -> count
+      _other -> 1
+    end
+  end
+
+  defp quantity(_none), do: 1
+
+  @doc """
+  One of a subscription's transactions (`GET /v1/billing/subscriptions/{id}/transactions`) as a
+  `MishkaPay.Invoice`: what one bill took, when.
+  """
+  @spec invoice(map(), String.t()) :: {:ok, Invoice.t()} | {:error, Splode.Error.t()}
+  def invoice(transaction, subscription_id) do
+    gross = money_of(get_in(transaction, ["amount_with_breakdown", "gross_amount"]))
+    status = Map.get(@transaction_statuses, transaction["status"])
+
+    %{
+      provider: "paypal",
+      id: transaction["id"],
+      subscription_id: subscription_id,
+      status: status,
+      total: gross,
+      amount_due: gross,
+      amount_paid: if(status == :paid, do: gross),
+      created_at: time(transaction["time"])
+    }
+    |> Invoice.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  The next bill of an active subscription read with its plan: the plan's price for each one of
+  its quantity, on its next billing time. Nil when PayPal will not bill it again.
+  """
+  @spec upcoming_invoice(map()) :: {:ok, Invoice.t()} | {:error, Splode.Error.t()} | nil
+  def upcoming_invoice(sub) do
+    with next when is_binary(next) <- get_in(sub, ["billing_info", "next_billing_time"]),
+         true <- sub["status"] == "ACTIVE",
+         [%{amount: amount, quantity: quantity}] <- plan_items(sub) do
+      due = Elixir.Money.mult!(amount, quantity)
+
+      %{
+        provider: "paypal",
+        id: "upcoming-" <> sub["id"],
+        subscription_id: sub["id"],
+        status: :draft,
+        total: due,
+        amount_due: due,
+        customer_id: get_in(sub, ["subscriber", "payer_id"]),
+        period_start: time(next),
+        created_at: time(next)
+      }
+      |> Invoice.builder()
+      |> MishkaPay.Errors.from_builder()
+    else
+      _not_billed_again -> nil
+    end
+  end
+
+  @doc """
+  A PayPal webhook event as a `MishkaPay.Event`, naming the Order it concerns (the Order itself,
+  or the Order a capture or refund belongs to) or the subscription. `live?` says whose keys checked it.
   """
   @spec event(map(), boolean()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
   def event(event, live?) do
@@ -263,6 +527,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       object_id: resource["id"],
       object_type: event["resource_type"],
       payment_id: order_of(event["resource_type"], resource),
+      subscription_id: subscription_of(event["resource_type"], resource),
       livemode: live?,
       created_at: time(event["create_time"])
     }
@@ -271,9 +536,15 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   end
 
   defp order_of("checkout-order", %{"id" => id}), do: id
+  defp order_of(type, _resource) when type in ["subscription", "sale"], do: nil
 
   defp order_of(_capture_or_refund, resource),
     do: get_in(resource, ["supplementary_data", "related_ids", "order_id"])
+
+  # A subscription's own events name it; a renewal's sale names it as its billing agreement.
+  defp subscription_of("subscription", %{"id" => id}), do: id
+  defp subscription_of("sale", %{"billing_agreement_id" => id}), do: id
+  defp subscription_of(_other, _resource), do: nil
 
   defp unit(order), do: order |> Map.get("purchase_units", []) |> List.first() || %{}
 

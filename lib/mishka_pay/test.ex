@@ -7,7 +7,8 @@ defmodule MishkaPay.Test do
   Helpers for a project's tests, the way `Igniter.Test` helps test a task: start a provider, give
   keys, answer HTTP calls, without a real provider and without sleeping.
 
-  For a provider's own contract tests, see `MishkaPay.ProviderCase`.
+  For a provider's own contract tests, see `MishkaPay.ProviderCase`. For PayPal with no keys and
+  no network, `MishkaPay.Test.PayPal` answers as PayPal does.
 
   ## Setup
 
@@ -58,13 +59,15 @@ defmodule MishkaPay.Test do
   alias MishkaPay.Test.Keys
 
   @doc """
-  Prepares a test run: mishka_installer's plugin registry (`start_registry!/0`) and the table
-  `put_keys/3` writes to. Call it in `test_helper.exs`.
+  Prepares a test run: mishka_installer's plugin registry (`start_registry!/0`), the table
+  `put_keys/3` writes to and the one PayPal's stand-in (`MishkaPay.Test.PayPal`) holds its Orders
+  and subscriptions in. Call it in `test_helper.exs`, whose process lives for the whole run.
   """
   @spec setup!() :: :ok
   def setup! do
     start_registry!()
     Keys.new_table()
+    MishkaPay.Test.PayPal.new_table()
     :ok
   end
 

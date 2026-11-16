@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Shop.Sandbox do
-  @shortdoc "Fills the Stripe sandbox and the shop with test payments in every status"
+  @shortdoc "Fills the Stripe and PayPal sandboxes and the shop with test payments"
 
   @moduledoc """
   Makes test payments on the Stripe sandbox, for many buyers and products, in every status the
@@ -8,13 +8,18 @@ defmodule Mix.Tasks.Shop.Sandbox do
   trial, ending at the period's end, and canceled. Each one is then synced into the shop's payments
   table through Mishka Pay (`:sync`), and refunds go through Mishka Pay's `:refund` action.
 
-      mix shop.sandbox                 # makes the payments, then the subscriptions
+      mix shop.sandbox                 # makes the payments, the subscriptions, and PayPal's
       mix shop.sandbox subscriptions   # makes only the subscriptions
-      mix shop.sandbox resync    # reads every stored payment from Stripe again
+      mix shop.sandbox paypal          # makes only the PayPal ones
+      mix shop.sandbox resync          # reads every stored payment from its provider again
 
   It only runs with a test key (`sk_test_...` in `.env`): Stripe's test cards move no money. A
   payment is made directly as a PaymentIntent with a test card, the way Stripe's own tests do,
   so no browser is needed.
+
+  With PayPal sandbox keys in `.env` (`PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`) it also makes
+  PayPal Orders and a PayPal subscription. A PayPal buyer approves on PayPal's page, so these wait
+  for the buyer: their approval links are printed, to pay them with a sandbox personal account.
   """
 
   use Mix.Task
@@ -54,6 +59,10 @@ defmodule Mix.Tasks.Shop.Sandbox do
     {"pro-monthly", "Linus Torvalds", :cancel_now}
   ]
 
+  # {product id, quantity} paid with PayPal, and the plan subscribed with PayPal.
+  @paypal_orders [{"ebook", 1}, {"course", 1}, {"stickers", 2}]
+  @paypal_plan "pro-monthly"
+
   @impl Mix.Task
   def run(args) do
     # Its own plugin registry, so it can run while `mix phx.server` holds the shop's one.
@@ -74,16 +83,17 @@ defmodule Mix.Tasks.Shop.Sandbox do
     case args do
       ["resync"] -> resync()
       ["subscriptions"] -> make_subscriptions(key)
+      ["paypal"] -> make_paypal()
       _make -> make(key)
     end
   end
 
   defp resync do
     payments = Ash.read!(Payment, authorize?: false)
-    Mix.shell().info("Reading #{length(payments)} payments from Stripe again...")
+    Mix.shell().info("Reading #{length(payments)} payments from their providers again...")
 
     for payment <- payments do
-      case sync(payment.provider_id) do
+      case sync(payment.provider_id, payment.provider) do
         {:ok, synced} ->
           Mix.shell().info("  #{synced.provider_id} #{synced.status}")
 
@@ -118,7 +128,63 @@ defmodule Mix.Tasks.Shop.Sandbox do
     end
 
     make_subscriptions(key)
+
+    case paypal?() do
+      true -> make_paypal()
+      false -> Mix.shell().info("\nNo PayPal sandbox keys in .env: no PayPal rows.")
+    end
+
     Mix.shell().info("\nDone. Open the shop to see them: http://localhost:4041")
+  end
+
+  defp paypal?, do: match?({:ok, _keys}, MishkaPay.Credentials.fetch("paypal", @tenant))
+
+  defp make_paypal do
+    unless paypal?(), do: Mix.raise("PayPal rows need PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET")
+    Mix.shell().info("\nMaking PayPal Orders and a subscription, waiting for the buyer...\n")
+
+    for {product_id, quantity} <- @paypal_orders do
+      product = Shop.Catalog.fetch(product_id) || Mix.raise("No product #{product_id}")
+
+      with {:ok, checkout} <- paypal_checkout(product, quantity, :payment),
+           {:ok, payment} <- sync(checkout.id, "paypal") do
+        Mix.shell().info(
+          "  #{String.pad_trailing(product.name, 24)} #{payment.status} #{checkout.url}"
+        )
+      else
+        {:error, error} -> Mix.shell().error("  #{product.name}: #{MishkaPay.Ash.message(error)}")
+      end
+    end
+
+    plan = Shop.Catalog.fetch(@paypal_plan) || Mix.raise("No plan #{@paypal_plan}")
+
+    with {:ok, checkout} <- paypal_checkout(plan, 1, :subscription),
+         {:ok, sub} <- sync_subscription(checkout.id, "paypal") do
+      Mix.shell().info("  #{String.pad_trailing(plan.name, 24)} #{sub.status} #{checkout.url}")
+    else
+      {:error, error} -> Mix.shell().error("  #{plan.name}: #{MishkaPay.Ash.message(error)}")
+    end
+  end
+
+  defp paypal_checkout(product, quantity, mode) do
+    MishkaPay.checkout(%{
+      provider: "paypal",
+      tenant: @tenant,
+      mode: mode,
+      trial_days: product.trial_days,
+      items: [
+        %{
+          name: product.name,
+          amount: %{amount: product.price, currency: "USD"},
+          quantity: quantity,
+          interval: product.interval,
+          interval_count: product.interval && product.interval_count
+        }
+      ],
+      success_url: "http://localhost:4041/?provider=paypal",
+      cancel_url: "http://localhost:4041/?canceled=1",
+      reference: Shop.Catalog.reference(product)
+    })
   end
 
   defp make_subscriptions(_key) do
@@ -151,10 +217,10 @@ defmodule Mix.Tasks.Shop.Sandbox do
     customer
   end
 
-  defp sync_subscription(subscription_id) do
+  defp sync_subscription(subscription_id, provider \\ "stripe") do
     Ash.create(
       Shop.Pay.Subscription,
-      %{provider: "stripe", subscription_id: subscription_id, tenant: @tenant},
+      %{provider: provider, subscription_id: subscription_id, tenant: @tenant},
       action: :sync,
       authorize?: false
     )
@@ -204,8 +270,8 @@ defmodule Mix.Tasks.Shop.Sandbox do
 
   defp follow_up(_key, _intent_id, _keep_or_refund), do: :ok
 
-  defp sync(intent_id) do
-    Ash.create(Payment, %{provider: "stripe", payment_id: intent_id, tenant: @tenant},
+  defp sync(payment_id, provider \\ "stripe") do
+    Ash.create(Payment, %{provider: provider, payment_id: payment_id, tenant: @tenant},
       action: :sync,
       authorize?: false
     )
