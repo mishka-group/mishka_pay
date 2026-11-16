@@ -358,6 +358,104 @@ defmodule MishkaPay.Providers.StripeTest do
     end
   end
 
+  test "a payment brings its buyer, card, receipt, failure and every refund, and keeps the reference out of metadata" do
+    intent = %{
+      "id" => "pi_full",
+      "amount" => 4900,
+      "currency" => "usd",
+      "status" => "succeeded",
+      "description" => "1 × LiveView course",
+      "metadata" => %{"mishka_pay_reference" => "course-1", "channel" => "web"},
+      "customer" => %{"id" => "cus_1", "email" => "ava@example.com", "name" => "Ava Martin"},
+      "latest_charge" => %{
+        "amount_refunded" => 1000,
+        "receipt_url" => "https://pay.stripe.com/receipts/r_1",
+        "billing_details" => %{"email" => "billing@example.com", "name" => "Billing Name"},
+        "payment_method_details" => %{
+          "type" => "card",
+          "card" => %{"brand" => "mastercard", "last4" => "4444"}
+        },
+        "refunds" => %{
+          "data" => [
+            %{
+              "id" => "re_1",
+              "amount" => 1000,
+              "currency" => "usd",
+              "status" => "succeeded",
+              "reason" => "requested_by_customer",
+              "created" => 1_794_000_000
+            },
+            %{
+              "id" => "re_odd",
+              "amount" => 1,
+              "currency" => "usd",
+              "reason" => "expired_uncaptured_charge"
+            }
+          ]
+        }
+      }
+    }
+
+    assert {:ok, payment} = Stripe.Mapper.payment(intent)
+    assert payment.status == :partially_refunded
+    assert {payment.customer_email, payment.customer_name} == {"ava@example.com", "Ava Martin"}
+
+    assert {payment.payment_method, payment.card_brand, payment.card_last4} ==
+             {"card", "mastercard", "4444"}
+
+    assert payment.receipt_url == "https://pay.stripe.com/receipts/r_1"
+    assert payment.metadata == %{"channel" => "web"}
+    assert payment.description == "1 × LiveView course"
+
+    assert [
+             %Refund{
+               id: "re_1",
+               reason: :requested_by_customer,
+               status: :succeeded,
+               payment_id: "pi_full"
+             },
+             %Refund{id: "re_odd", reason: nil}
+           ] = payment.refunds
+
+    declined = %{
+      "id" => "pi_declined",
+      "amount" => 1999,
+      "currency" => "usd",
+      "status" => "requires_payment_method",
+      "customer" => "cus_2",
+      "last_payment_error" => %{
+        "code" => "card_declined",
+        "decline_code" => "insufficient_funds",
+        "message" => "Your card has insufficient funds."
+      }
+    }
+
+    assert {:ok, failed} = Stripe.Mapper.payment(declined)
+    assert {failed.status, failed.customer_id, failed.refunds} == {:failed, "cus_2", []}
+
+    assert {failed.failure_code, failed.failure_message} ==
+             {"insufficient_funds", "Your card has insufficient funds."}
+  end
+
+  test "a checkout read back brings its totals and the buyer's email" do
+    checkout =
+      Stripe.Mapper.checkout(%{
+        "id" => "cs_1",
+        "status" => "complete",
+        "currency" => "usd",
+        "amount_total" => 2139,
+        "total_details" => %{"amount_tax" => 140},
+        "customer_details" => %{"email" => "ava@example.com"},
+        "payment_intent" => "pi_1",
+        "client_reference_id" => "ebook-1"
+      })
+
+    assert checkout.amount_total == Money.new(:USD, "21.39")
+    assert checkout.amount_tax == Money.new(:USD, "1.40")
+    assert checkout.customer.email == "ava@example.com"
+    assert {checkout.payment_id, checkout.reference} == {"pi_1", "ebook-1"}
+  end
+
   test "Stripe's form encoding nests maps and lists and leaves out nil" do
     assert Stripe.form(%{"a" => %{"b" => [%{"c" => 1}, %{"c" => 2}]}, "skip" => nil, "d" => "x"})
            |> Enum.sort() ==

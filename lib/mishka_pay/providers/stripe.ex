@@ -25,7 +25,8 @@ defmodule MishkaPay.Providers.Stripe do
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
     * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
-    * `fetch_payment/2` reads a PaymentIntent with its latest charge, which tells refunds apart.
+    * `fetch_payment/2` reads a PaymentIntent with its latest charge, the charge's refunds and the
+      customer, in one request: the buyer, the card, the receipt, why it failed and every refund.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
 
@@ -95,7 +96,11 @@ defmodule MishkaPay.Providers.Stripe do
            request(
              :get,
              "/v1/payment_intents/#{payment_id}",
-             [{"expand[]", "latest_charge"}],
+             [
+               {"expand[]", "latest_charge"},
+               {"expand[]", "latest_charge.refunds"},
+               {"expand[]", "customer"}
+             ],
              keys
            ) do
       Mapper.payment(intent)

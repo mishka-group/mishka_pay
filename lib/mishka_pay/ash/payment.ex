@@ -31,7 +31,9 @@ if Code.ensure_loaded?(Ash) do
 
     The provider and its payment id, the tenant, the `:status` (see `MishkaPay.Payment`), the
     `:amount`, `:amount_refunded` and `:currency`, the caller's `:reference` from the checkout, the
-    provider's `:customer_id`, when the provider made it and when it was last synced. An identity on
+    buyer (`:customer_id`, `:customer_email`, `:customer_name`), the card (`:card_brand`,
+    `:card_last4`), why the last try failed (`:failure_message`), when the provider made it and when
+    it was last synced. An identity on
     provider and payment id keeps one row per payment. The `:money` and `:money_refunded`
     calculations give them back as `Money`.
 
@@ -88,6 +90,11 @@ if Code.ensure_loaded?(Ash) do
       attribute :currency, :string, allow_nil?: false, public?: true
       attribute :reference, :string, public?: true
       attribute :customer_id, :string, public?: true
+      attribute :customer_email, :string, public?: true
+      attribute :customer_name, :string, public?: true
+      attribute :card_brand, :string, public?: true
+      attribute :card_last4, :string, public?: true
+      attribute :failure_message, :string, public?: true
       attribute :provider_created_at, :utc_datetime_usec, public?: true
       attribute :synced_at, :utc_datetime_usec, allow_nil?: false, public?: true
       create_timestamp :inserted_at
@@ -122,6 +129,11 @@ if Code.ensure_loaded?(Ash) do
           :currency,
           :reference,
           :customer_id,
+          :customer_email,
+          :customer_name,
+          :card_brand,
+          :card_last4,
+          :failure_message,
           :provider_created_at,
           :synced_at
         ]

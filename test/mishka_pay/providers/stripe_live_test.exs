@@ -97,7 +97,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
        %{key: key} do
     {200, %{"id" => id}} = pay(key, "pm_card_mastercard")
 
-    assert {:ok, %Payment{status: :paid}} = MishkaPay.fetch_payment("stripe", id)
+    assert {:ok,
+            %Payment{status: :paid, card_brand: "mastercard", card_last4: "4444", refunds: []}} =
+             MishkaPay.fetch_payment("stripe", id)
 
     assert {:ok, %Refund{status: :succeeded}} =
              MishkaPay.refund(%{
@@ -106,7 +108,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                amount: %{amount: "5", currency: "USD"}
              })
 
-    assert {:ok, %Payment{status: :partially_refunded}} = MishkaPay.fetch_payment("stripe", id)
+    assert {:ok, %Payment{status: :partially_refunded, refunds: [%Refund{status: :succeeded}]}} =
+             MishkaPay.fetch_payment("stripe", id)
 
     assert {:error, %MishkaPay.Errors.Invalid{errors: [%{field: :payment_id}]}} =
              MishkaPay.refund(%{provider: "stripe", payment_id: id})
