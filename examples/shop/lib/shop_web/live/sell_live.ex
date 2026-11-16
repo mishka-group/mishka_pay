@@ -42,6 +42,7 @@ defmodule ShopWeb.SellLive do
        currencies: @currencies,
        tax_codes: @tax_codes,
        params: %{"currency" => "USD", "interval" => "month"},
+       problem: nil,
        steps: [],
        undo_steps: [],
        made: %{},
@@ -55,16 +56,14 @@ defmodule ShopWeb.SellLive do
   def handle_event("change", params, socket), do: {:noreply, assign(socket, params: params)}
 
   def handle_event("sell", params, socket) do
-    me = self()
-    tenant = @tenant
-    success_url = url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}"
-
-    {:noreply,
-     socket
-     |> assign(params: params, steps: [], undo_steps: [], made: %{}, running?: true)
-     |> assign(link: nil, buyer_url: nil)
-     |> start_async(:sell, fn -> run(me, params, tenant, success_url) end)}
+    case mismatch(params) do
+      nil -> sell(params, socket)
+      problem -> {:noreply, assign(socket, params: params, problem: problem)}
+    end
   end
+
+  def handle_event("buyer_change", _params, socket),
+    do: {:noreply, assign(socket, buyer_url: nil)}
 
   def handle_event("undo", _params, %{assigns: %{made: made}} = socket) when made != %{} do
     me = self()
@@ -91,6 +90,18 @@ defmodule ShopWeb.SellLive do
     end
   end
 
+  defp sell(params, socket) do
+    me = self()
+    tenant = @tenant
+    success_url = url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}"
+
+    {:noreply,
+     socket
+     |> assign(params: params, problem: nil, steps: [], undo_steps: [], made: %{}, running?: true)
+     |> assign(link: nil, buyer_url: nil)
+     |> start_async(:sell, fn -> run(me, params, tenant, success_url) end)}
+  end
+
   @impl true
   def handle_info({:step, list, step}, socket) do
     steps = Enum.reject(socket.assigns[list], &(&1.n == step.n)) ++ [step]
@@ -115,6 +126,26 @@ defmodule ShopWeb.SellLive do
   def handle_async(_run, {:exit, reason}, socket) do
     {:noreply,
      socket |> assign(running?: false) |> put_flash(:error, "The run stopped: #{inspect(reason)}")}
+  end
+
+  # A price's kind decides what its link may ask for: Stripe would refuse the link only after the
+  # product and price were made, so the page says so first, in Mishka Pay's own words.
+  defp mismatch(%{"interval" => ""} = params) do
+    if present(params["trial_days"]),
+      do: MishkaPay.Messages.text(:recurring_only, param: "trial_days")
+  end
+
+  defp mismatch(params) do
+    cond do
+      params["invoice"] == "on" ->
+        MishkaPay.Messages.text(:one_time_only, param: "invoice")
+
+      params["customer_creation"] == "always" ->
+        MishkaPay.Messages.text(:one_time_only, param: "customer_creation")
+
+      true ->
+        nil
+    end
   end
 
   # The three calls, each reported to the page before and after it runs; what each made is kept
@@ -308,7 +339,7 @@ defmodule ShopWeb.SellLive do
                 >{@params["description"]}</textarea>
               </label>
               <div class="fieldset">
-                <span class="fieldset-legend">Metadata (optional)</span>
+                <span class="fieldset-legend">Metadata (optional, key and value)</span>
                 <div class="join">
                   <input
                     name="meta_key"
@@ -338,7 +369,7 @@ defmodule ShopWeb.SellLive do
               <.field
                 params={@params}
                 name="amount"
-                label="Amount"
+                label="Amount (0.50 or more)"
                 required
                 type="number"
                 step="0.01"
@@ -516,6 +547,10 @@ defmodule ShopWeb.SellLive do
           </div>
         </section>
 
+        <p :if={@problem} class="alert alert-error" data-testid="sell-problem">
+          <.icon name="hero-exclamation-triangle" class="size-5" /> {@problem}
+        </p>
+
         <button
           class="btn btn-primary btn-lg w-full sm:w-auto"
           disabled={@running?}
@@ -540,6 +575,10 @@ defmodule ShopWeb.SellLive do
             Takes back what this run made, newest first: the link is turned off, the price and the
             product archived. Stripe deletes none of them (it keeps them for its records), but
             nothing of it can be bought again.
+          </p>
+          <p :if={!@link} class="text-sm text-warning" data-testid="sell-undo-stopped">
+            The run stopped before its link was made: what it made is still on sale at Stripe until
+            you undo it.
           </p>
           <button
             type="button"
@@ -582,6 +621,7 @@ defmodule ShopWeb.SellLive do
           </div>
           <form
             phx-submit="buyer_url"
+            phx-change="buyer_change"
             class="flex flex-wrap items-end gap-2"
             data-testid="sell-buyer-form"
           >
