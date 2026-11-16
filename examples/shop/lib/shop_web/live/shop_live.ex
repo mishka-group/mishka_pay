@@ -496,7 +496,7 @@ defmodule ShopWeb.ShopLive do
       tenant: @tenant,
       mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
       trial_days: product.trial_days,
-      items: [item(product, count)],
+      items: [item(provider, product, count)],
       success_url: success_url(provider, params["buyer"]),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
@@ -507,12 +507,13 @@ defmodule ShopWeb.ShopLive do
     |> Map.merge(options(params))
   end
 
-  # A product published to Stripe's catalog sells its Stripe price by id; one not published yet
-  # sends its name, amount and schedule.
-  defp item(%{stripe_price_id: price_id}, count) when is_binary(price_id),
+  # A product published to Stripe's catalog sells its Stripe price by id with Stripe; one not
+  # published yet, or sold with PayPal (which has no Stripe catalog), sends its name, amount and
+  # schedule.
+  defp item("stripe", %{stripe_price_id: price_id}, count) when is_binary(price_id),
     do: %{id: price_id, quantity: count}
 
-  defp item(product, count) do
+  defp item(_provider, product, count) do
     %{
       name: product.name,
       amount: %{amount: product.price, currency: "USD"},
