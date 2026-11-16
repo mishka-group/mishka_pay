@@ -75,8 +75,22 @@ defmodule ShopWeb.ShopLive do
   @impl true
   def handle_params(%{"session_id" => session_id}, _uri, socket) do
     case connected?(socket) do
-      true -> {:noreply, socket |> back_from_checkout(session_id) |> push_patch(to: ~p"/")}
-      false -> {:noreply, socket}
+      true ->
+        {:noreply, socket |> back_from_checkout("stripe", session_id) |> push_patch(to: ~p"/")}
+
+      false ->
+        {:noreply, socket}
+    end
+  end
+
+  # PayPal sends the buyer back with the Order id in `token`.
+  def handle_params(%{"provider" => "paypal", "token" => order_id}, _uri, socket) do
+    case connected?(socket) do
+      true ->
+        {:noreply, socket |> back_from_checkout("paypal", order_id) |> push_patch(to: ~p"/")}
+
+      false ->
+        {:noreply, socket}
     end
   end
 
@@ -151,7 +165,8 @@ defmodule ShopWeb.ShopLive do
 
   def handle_event("read_checkout", %{"checkout_id" => checkout_id}, socket) do
     with {:ok, checkout_id} <- checkout_id(checkout_id),
-         {:ok, checkout} <- MishkaPay.fetch_checkout("stripe", checkout_id, @tenant) do
+         {:ok, checkout} <-
+           MishkaPay.fetch_checkout(provider_of(checkout_id), checkout_id, @tenant) do
       {:noreply, socket |> clear_flash() |> assign(checkout_read: checkout)}
     else
       {:error, error} ->
@@ -244,6 +259,7 @@ defmodule ShopWeb.ShopLive do
         tenant={@tenant}
         plugins={@plugins}
         local_webhook_secret?={@local_webhook_secret?}
+        paypal?={@paypal?}
       />
 
       <section data-testid="buy">
@@ -269,7 +285,7 @@ defmodule ShopWeb.ShopLive do
               open?={@setting.open}
             />
           </div>
-          <.checkout_options max_quantity={@max_quantity} />
+          <.checkout_options max_quantity={@max_quantity} paypal?={@paypal?} />
         </form>
         <.test_cards />
       </section>
@@ -352,8 +368,10 @@ defmodule ShopWeb.ShopLive do
   # A plan opens a subscription checkout, with its interval and trial; any other product is paid
   # once.
   defp checkout(product, count, params) do
+    provider = provider_choice(params["provider"])
+
     %{
-      provider: "stripe",
+      provider: provider,
       tenant: @tenant,
       mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
       trial_days: product.trial_days,
@@ -367,7 +385,7 @@ defmodule ShopWeb.ShopLive do
           interval_count: product.interval && product.interval_count
         }
       ],
-      success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
+      success_url: success_url(provider),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
       customer: blank_nil(params["email"]) && %{email: params["email"]},
@@ -378,8 +396,8 @@ defmodule ShopWeb.ShopLive do
 
   # The buyer comes back from Stripe with the session id: read it, and when it made a payment, keep
   # the payment at once rather than waiting for the webhook.
-  defp back_from_checkout(socket, session_id) do
-    case MishkaPay.fetch_checkout("stripe", session_id, @tenant) do
+  defp back_from_checkout(socket, provider, checkout_id) do
+    case MishkaPay.fetch_checkout(provider, checkout_id, @tenant) do
       {:ok, %{subscription_id: subscription_id} = checkout} when is_binary(subscription_id) ->
         socket = assign(socket, checkout_read: checkout)
 
@@ -482,7 +500,9 @@ defmodule ShopWeb.ShopLive do
   defp reselect(socket, _other_payment), do: socket
 
   defp sync(payment_id) do
-    Ash.create(Payment, %{provider: "stripe", payment_id: payment_id, tenant: @tenant},
+    Ash.create(
+      Payment,
+      %{provider: provider_of(payment_id), payment_id: payment_id, tenant: @tenant},
       action: :sync,
       authorize?: false
     )
@@ -512,6 +532,7 @@ defmodule ShopWeb.ShopLive do
           do: plugin
 
     assign(socket,
+      paypal?: match?({:ok, _keys}, MishkaPay.Credentials.fetch("paypal", @tenant)),
       providers: MishkaPay.Provider.all(),
       keys: keys,
       setting: setting(),
@@ -603,6 +624,18 @@ defmodule ShopWeb.ShopLive do
         {:error, "#{family} events need a #{prefix} id: Stripe never sends them about #{id}."}
     end
   end
+
+  defp provider_choice("paypal"), do: "paypal"
+  defp provider_choice(_stripe), do: "stripe"
+
+  # Stripe sends the buyer back with the session id in the URL; PayPal adds its own `token`.
+  defp success_url("stripe"), do: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}"
+  defp success_url("paypal"), do: url(~p"/?provider=paypal")
+
+  # Stripe ids carry their object's prefix; a PayPal Order id is letters and digits.
+  defp provider_of("pi_" <> _), do: "stripe"
+  defp provider_of("cs_" <> _), do: "stripe"
+  defp provider_of(_paypal_order), do: "paypal"
 
   # The simulator takes a payment or a subscription id.
   defp object_id(value) do

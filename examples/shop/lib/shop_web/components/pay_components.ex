@@ -37,6 +37,7 @@ defmodule ShopWeb.PayComponents do
   attr :tenant, :string, required: true
   attr :plugins, :list, required: true
   attr :local_webhook_secret?, :boolean, required: true
+  attr :paypal?, :boolean, default: false
 
   def status(assigns) do
     ~H"""
@@ -90,6 +91,12 @@ defmodule ShopWeb.PayComponents do
               <span class={["badge badge-sm", (@setting.open && "badge-success") || "badge-error"]}>
                 {if @setting.open, do: "open", else: "closed"}
               </span>
+            </dd>
+            <dt class="opacity-70">PayPal keys</dt>
+            <dd data-testid="site-paypal">
+              {if @paypal?,
+                do: "set (sandbox)",
+                else: "not set: PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in .env"}
             </dd>
           </dl>
         </div>
@@ -152,15 +159,27 @@ defmodule ShopWeb.PayComponents do
 
   @doc "The optional parts of a checkout, sent with whichever product is bought."
   attr :max_quantity, :integer, required: true
+  attr :paypal?, :boolean, default: false
 
   def checkout_options(assigns) do
     ~H"""
     <details class="collapse collapse-arrow bg-base-200" data-testid="checkout-options">
       <summary class="collapse-title font-medium">
         Checkout options
-        <span class="text-sm opacity-60">(quantity, buyer, merchant of record, metadata)</span>
+        <span class="text-sm opacity-60">
+          (provider, quantity, buyer, merchant of record, metadata)
+        </span>
       </summary>
       <div class="collapse-content grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="fieldset">
+          <span class="fieldset-legend">Pay with</span>
+          <select name="provider" class="select select-sm" data-testid="option-provider">
+            <option value="stripe">Stripe</option>
+            <option value="paypal" disabled={!@paypal?}>
+              PayPal{if !@paypal?, do: " (no keys in .env)"}
+            </option>
+          </select>
+        </label>
         <label class="fieldset">
           <span class="fieldset-legend">Quantity, 1 to {@max_quantity}</span>
           <input
@@ -407,6 +426,7 @@ defmodule ShopWeb.PayComponents do
             <code class="text-sm opacity-70 break-all">{@selected.payment.provider_id}</code>
           </h2>
           <a
+            :if={@selected.payment.provider == "stripe"}
             href={"https://dashboard.stripe.com/test/payments/#{@selected.payment.provider_id}"}
             target="_blank"
             class="btn btn-ghost btn-sm shrink-0"
@@ -696,7 +716,7 @@ defmodule ShopWeb.PayComponents do
       <.section_title icon="hero-paper-airplane" title="Webhook simulator" />
       <p class="text-sm opacity-70 mb-2">
         Sends a Stripe event about a payment to <code>/pay/webhooks/stripe/{@tenant}</code>,
-        signed as Stripe signs. It goes the whole way: signature check, inbox, job, payment sync.
+        signed as Stripe signs. It goes the whole way: signature check, inbox, job, payment sync. PayPal webhooks cannot be simulated here: PayPal checks each one itself, on its servers.
         <span :if={!@local_webhook_secret?}>
           Signed with your <code>STRIPE_WEBHOOK_SECRET</code>.
         </span>
