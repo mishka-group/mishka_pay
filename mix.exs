@@ -107,6 +107,7 @@ defmodule MishkaPay.MixProject do
       {:ash_oban, "~> 0.10.3", optional: true},
       # `mix igniter.install mishka_pay` sets a host up (`Mix.Tasks.MishkaPay.Install`).
       {:igniter, "~> 0.8", optional: true},
+      {:phx_new, "~> 1.8", only: :test, runtime: false},
       # The Ash layer's own tests keep their resources in Postgres, as a host does.
       {:ash_postgres, "~> 2.15", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
