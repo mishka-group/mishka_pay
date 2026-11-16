@@ -818,6 +818,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                items: [%{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}],
                trial_days: 7,
                card_required: false,
+               merchant_of_record: false,
                success_url: "https://shop.test/thanks",
                cancel_url: "https://shop.test/plans"
              })

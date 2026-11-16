@@ -98,7 +98,7 @@ if Code.ensure_loaded?(Ash) do
     defp merged(input, name) do
       {nested, rest} = Map.pop(input, name, %{})
 
-      case Enum.any?(Map.keys(nested), &is_binary/1) do
+      case Enum.any?(nested, fn {key, _value} -> is_binary(key) end) do
         true -> Map.merge(nested, Map.new(rest, fn {key, value} -> {to_string(key), value} end))
         false -> Map.merge(nested, rest)
       end
