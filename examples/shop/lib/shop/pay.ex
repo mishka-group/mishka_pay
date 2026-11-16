@@ -10,5 +10,6 @@ defmodule Shop.Pay do
     resource Shop.Pay.Payment
     resource Shop.Pay.WebhookEvent
     resource Shop.Pay.Setting
+    resource Shop.Catalog.Product
   end
 end

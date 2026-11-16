@@ -7,7 +7,8 @@ defmodule Mix.Tasks.Shop.Sandbox do
   3D Secure, waiting for a card, and canceled. Each one is then synced into the shop's payments
   table through Mishka Pay (`:sync`), and refunds go through Mishka Pay's `:refund` action.
 
-      mix shop.sandbox
+      mix shop.sandbox           # makes the payments
+      mix shop.sandbox resync    # reads every stored payment from Stripe again
 
   It only runs with a test key (`sk_test_...` in `.env`): Stripe's test cards move no money. A
   payment is made directly as a PaymentIntent with a test card, the way Stripe's own tests do,
@@ -46,7 +47,7 @@ defmodule Mix.Tasks.Shop.Sandbox do
   ]
 
   @impl Mix.Task
-  def run(_args) do
+  def run(args) do
     # Its own plugin registry, so it can run while `mix phx.server` holds the shop's one.
     Application.put_env(:mishka_installer, MishkaInstaller.MnesiaRepo,
       mnesia_dir:
@@ -62,10 +63,35 @@ defmodule Mix.Tasks.Shop.Sandbox do
     unless String.starts_with?(key, "sk_test_"),
       do: Mix.raise("shop.sandbox runs only with a Stripe test key (sk_test_...) in .env")
 
+    case args do
+      ["resync"] -> resync()
+      _make -> make(key)
+    end
+  end
+
+  defp resync do
+    payments = Ash.read!(Payment, authorize?: false)
+    Mix.shell().info("Reading #{length(payments)} payments from Stripe again...")
+
+    for payment <- payments do
+      case sync(payment.provider_id) do
+        {:ok, synced} ->
+          Mix.shell().info("  #{synced.provider_id} #{synced.status}")
+
+        {:error, error} ->
+          Mix.shell().error("  #{payment.provider_id}: #{MishkaPay.Ash.message(error)}")
+      end
+    end
+  end
+
+  defp make(key) do
     Mix.shell().info("Making #{length(@scenarios)} sandbox payments...\n")
 
     for {product_id, quantity, buyer, card, after_payment} <- @scenarios do
-      product = Shop.Catalog.fetch(product_id)
+      product =
+        Shop.Catalog.fetch(product_id) ||
+          Mix.raise("No product #{product_id}: run `mix run priv/repo/seeds.exs` first")
+
       customer = customer(key, buyer)
       intent_id = pay(key, product, quantity, customer, card)
       :ok = follow_up(key, intent_id, after_payment)
