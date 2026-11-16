@@ -22,12 +22,6 @@ defmodule ShopWeb.ShopLive do
 
   @tenant "demo"
 
-  @products [
-    %{id: "ebook", name: "Elixir ebook", price: "19.99", icon: "hero-book-open"},
-    %{id: "course", name: "LiveView course", price: "49.00", icon: "hero-play-circle"},
-    %{id: "stickers", name: "Sticker pack", price: "4.50", icon: "hero-sparkles"}
-  ]
-
   # Stripe's tax code for digital books. The sandbox sells with Stripe Managed Payments, which
   # needs a tax code on every price.
   @tax_code "txcd_10302000"
@@ -50,7 +44,7 @@ defmodule ShopWeb.ShopLive do
 
     {:ok,
      socket
-     |> assign(page_title: "Mishka Pay demo shop", products: @products, tenant: @tenant)
+     |> assign(page_title: "Mishka Pay demo shop", products: Shop.Catalog.all(), tenant: @tenant)
      |> assign(last: List.first(payments), selected: nil, checkout_read: nil)
      |> assign_status()
      |> stream(:payments, payments)
@@ -83,7 +77,7 @@ defmodule ShopWeb.ShopLive do
 
   @impl true
   def handle_event("buy", %{"product" => id} = params, socket) do
-    product = Enum.find(@products, &(&1.id == id))
+    product = Shop.Catalog.fetch(id)
 
     with {:ok, count} <- quantity(params["quantity"]),
          {:ok, %{url: url}} <- start_checkout(product, count, params) do
@@ -263,7 +257,7 @@ defmodule ShopWeb.ShopLive do
       ],
       success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: url(~p"/?canceled=1"),
-      reference: "#{product.id}-#{Ecto.UUID.generate()}",
+      reference: Shop.Catalog.reference(product),
       customer: blank_nil(params["email"]) && %{email: params["email"]},
       merchant_of_record: on_off(params["merchant_of_record"]),
       metadata: metadata(params["meta_key"], params["meta_value"])

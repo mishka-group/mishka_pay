@@ -523,18 +523,7 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
-  @products %{
-    "ebook" => "Elixir ebook",
-    "course" => "LiveView course",
-    "stickers" => "Sticker pack"
-  }
-
-  defp product_name(reference) when is_binary(reference) do
-    [id | _] = String.split(reference, "-", parts: 2)
-    Map.get(@products, id, "Sandbox payment")
-  end
-
-  defp product_name(_reference), do: "Sandbox payment"
+  defp product_name(reference), do: Shop.Catalog.name_of(reference)
 
   defp money(amount, currency), do: currency |> Money.new(amount) |> Money.to_string!()
 
