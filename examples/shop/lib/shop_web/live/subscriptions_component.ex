@@ -14,7 +14,8 @@ defmodule ShopWeb.SubscriptionsComponent do
   alias Shop.Pay.Subscription
 
   @impl true
-  def mount(socket), do: {:ok, assign(socket, selected: nil, loaded?: false)}
+  def mount(socket),
+    do: {:ok, assign(socket, selected: nil, loaded?: false, preview: nil, change: nil)}
 
   @impl true
   def update(%{changed: record}, socket) do
@@ -24,7 +25,7 @@ defmodule ShopWeb.SubscriptionsComponent do
   def update(%{open: id}, socket), do: {:ok, select(socket, id)}
 
   def update(assigns, socket) do
-    socket = assign(socket, tenant: assigns.tenant)
+    socket = assign(socket, tenant: assigns.tenant, plans: plans())
 
     case socket.assigns.loaded? do
       true -> {:ok, socket}
@@ -36,6 +37,59 @@ defmodule ShopWeb.SubscriptionsComponent do
   def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
 
   def handle_event("close", _params, socket), do: {:noreply, assign(socket, selected: nil)}
+
+  # The change the form describes, previewed first: the preview keeps its proration date, so
+  # applying it bills exactly what it showed.
+  def handle_event("preview_change", params, socket) do
+    row = socket.assigns.selected
+    change = change_attrs(params, row)
+
+    case MishkaPay.preview_subscription_change(change) do
+      {:ok, invoice} ->
+        {:noreply,
+         assign(socket,
+           preview: invoice,
+           change: Map.put_new(change, :proration_date, invoice_date(invoice))
+         )}
+
+      {:error, error} ->
+        {:noreply,
+         socket |> assign(preview: nil, change: nil) |> say(:error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  def handle_event("apply_change", _params, %{assigns: %{change: change}} = socket)
+      when is_map(change) do
+    args = Map.drop(change, [:provider, :tenant, :subscription_id])
+    row = Ash.get!(Subscription, socket.assigns.selected.id, authorize?: false)
+
+    case row |> Ash.Changeset.for_update(:change, args) |> Ash.update(authorize?: false) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> assign(preview: nil, change: nil)
+         |> stream_insert(:subscriptions, updated, at: 0)
+         |> select(updated.id)
+         |> say(:info, "Changed on Stripe, billed as the preview showed.")}
+
+      {:error, error} ->
+        {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  def handle_event("cancel_change", _params, socket),
+    do: {:noreply, assign(socket, preview: nil, change: nil)}
+
+  def handle_event("pause", %{"subscription" => id} = params, socket) do
+    args =
+      %{behavior: params["behavior"], resumes_at: date(params["resumes_at"])}
+      |> Map.reject(fn {_key, value} -> value in [nil, ""] end)
+
+    run_action(socket, id, :pause, args, "Collection paused: no charges until it resumes.")
+  end
+
+  def handle_event("resume_collection", %{"id" => id}, socket),
+    do: run_action(socket, id, :resume_collection, %{}, "Collection goes on again.")
 
   def handle_event("act", %{"id" => id, "action" => action}, socket) do
     row = Ash.get!(Subscription, id, authorize?: false)
@@ -137,13 +191,22 @@ defmodule ShopWeb.SubscriptionsComponent do
         </table>
       </div>
 
-      <.details :if={@selected} selected={@selected} live={@live} myself={@myself} />
+      <.details
+        :if={@selected}
+        selected={@selected}
+        live={@live}
+        plans={@plans}
+        preview={@preview}
+        myself={@myself}
+      />
     </section>
     """
   end
 
   attr :selected, :map, required: true
   attr :live, :any, required: true
+  attr :plans, :list, required: true
+  attr :preview, :any, required: true
   attr :myself, :any, required: true
 
   defp details(assigns) do
@@ -319,6 +382,21 @@ defmodule ShopWeb.SubscriptionsComponent do
           >
             Cancel now
           </.act>
+          <span
+            :if={@selected.quantity}
+            class="badge badge-ghost self-center"
+            data-testid="sub-quantity"
+          >
+            quantity {@selected.quantity}
+          </span>
+          <span
+            :if={@selected.pause_behavior}
+            class="badge badge-warning self-center"
+            data-testid="sub-paused"
+          >
+            collection paused ({@selected.pause_behavior}{if @selected.resumes_at,
+              do: ", resumes #{time(@selected.resumes_at)}"})
+          </span>
           <.act id={@selected.id} action="sync" myself={@myself} class="">
             <.icon name="hero-arrow-path" class="size-4" /> Sync from Stripe
           </.act>
@@ -330,6 +408,173 @@ defmodule ShopWeb.SubscriptionsComponent do
             This subscription has ended: nothing to cancel or keep.
           </p>
         </div>
+
+        <.change_panel
+          :if={active?(@selected)}
+          selected={@selected}
+          plans={@plans}
+          preview={@preview}
+          myself={@myself}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :selected, :map, required: true
+  attr :plans, :list, required: true
+  attr :preview, :any, required: true
+  attr :myself, :any, required: true
+
+  defp change_panel(assigns) do
+    ~H"""
+    <div class="grid gap-4 md:grid-cols-2">
+      <form
+        phx-submit="preview_change"
+        phx-target={@myself}
+        class="rounded-box bg-base-100 p-4"
+        data-testid="change-form"
+      >
+        <h4 class="font-medium">Change plan or quantity</h4>
+        <.hint>MishkaPay.preview_subscription_change/1, then :change</.hint>
+        <div class="grid gap-2 sm:grid-cols-2 mt-2">
+          <label class="fieldset">
+            <span class="fieldset-legend">Plan</span>
+            <select name="price_id" class="select select-sm" data-testid="change-plan">
+              <option value="">Keep the plan</option>
+              <option :for={plan <- @plans} value={plan.stripe_price_id}>
+                {plan.name} (${plan.price})
+              </option>
+            </select>
+          </label>
+          <label class="fieldset">
+            <span class="fieldset-legend">Quantity (seats)</span>
+            <input
+              name="quantity"
+              type="number"
+              min="1"
+              placeholder={"now #{@selected.quantity || 1}"}
+              class="input input-sm"
+              data-testid="change-quantity"
+            />
+          </label>
+          <label class="fieldset">
+            <span class="fieldset-legend">Bill the difference</span>
+            <select name="proration" class="select select-sm" data-testid="change-proration">
+              <option value="">Stripe's default (on the next invoice)</option>
+              <option value="always_invoice">Now, on its own invoice</option>
+              <option value="create_prorations">On the next invoice</option>
+              <option value="none">Not at all</option>
+            </select>
+          </label>
+          <label class="fieldset">
+            <span class="fieldset-legend">Billing period</span>
+            <select name="billing_cycle_anchor" class="select select-sm" data-testid="change-anchor">
+              <option value="">Keep the dates</option>
+              <option value="now">Start a new period now</option>
+            </select>
+          </label>
+          <label class="fieldset sm:col-span-2">
+            <span class="fieldset-legend">If charging the difference fails</span>
+            <select
+              name="payment_behavior"
+              class="select select-sm"
+              data-testid="change-payment-behavior"
+            >
+              <option value="">Stripe's default</option>
+              <option value="error_if_incomplete">Refuse the change</option>
+              <option value="allow_incomplete">Change it, and leave the invoice open</option>
+              <option value="pending_if_incomplete">Change it only once paid</option>
+            </select>
+          </label>
+        </div>
+        <button
+          class="btn btn-sm mt-3"
+          phx-disable-with="Asking Stripe..."
+          data-testid="change-preview"
+        >
+          Preview the bill
+        </button>
+      </form>
+
+      <div class="rounded-box bg-base-100 p-4 space-y-3">
+        <div :if={@preview} data-testid="change-preview-result">
+          <h4 class="font-medium">What it bills</h4>
+          <ul class="text-sm space-y-1 mt-2">
+            <li :for={line <- @preview.lines} class="flex gap-2" data-testid="change-line">
+              <span class="flex-1">{line.description}</span>
+              <span class={[
+                "font-mono",
+                line.amount && Decimal.negative?(line.amount.amount) && "text-success"
+              ]}>
+                {money(line.amount)}
+              </span>
+            </li>
+          </ul>
+          <p class="font-medium mt-2" data-testid="change-due">Due: {money(@preview.amount_due)}</p>
+          <div class="flex gap-2 mt-2">
+            <button
+              class="btn btn-sm btn-primary"
+              phx-click="apply_change"
+              phx-target={@myself}
+              phx-disable-with="Asking Stripe..."
+              data-testid="change-apply"
+            >
+              Apply this change
+            </button>
+            <button class="btn btn-sm btn-ghost" phx-click="cancel_change" phx-target={@myself}>
+              Not now
+            </button>
+          </div>
+        </div>
+
+        <form
+          phx-submit="pause"
+          phx-target={@myself}
+          data-testid="pause-form"
+          class={[@preview && "border-t border-base-300 pt-3"]}
+        >
+          <h4 class="font-medium">Pause collecting payments</h4>
+          <.hint>:pause and :resume_collection</.hint>
+          <input type="hidden" name="subscription" value={@selected.id} />
+          <div class="flex flex-wrap items-end gap-2">
+            <label class="fieldset">
+              <span class="fieldset-legend">Invoices meanwhile</span>
+              <select name="behavior" class="select select-sm" data-testid="pause-behavior">
+                <option value="void">Void them</option>
+                <option value="keep_as_draft">Keep as drafts</option>
+                <option value="mark_uncollectible">Mark uncollectible</option>
+              </select>
+            </label>
+            <label class="fieldset">
+              <span class="fieldset-legend">Resumes by itself on</span>
+              <input
+                name="resumes_at"
+                type="date"
+                class="input input-sm"
+                data-testid="pause-resumes-at"
+              />
+            </label>
+            <button
+              class="btn btn-sm btn-warning"
+              phx-disable-with="Asking Stripe..."
+              data-testid="pause-submit"
+            >
+              Pause
+            </button>
+            <button
+              :if={@selected.pause_behavior}
+              type="button"
+              class="btn btn-sm btn-success"
+              phx-click="resume_collection"
+              phx-value-id={@selected.id}
+              phx-target={@myself}
+              data-testid="resume-collection"
+            >
+              Collect again
+            </button>
+          </div>
+        </form>
       </div>
     </div>
     """
@@ -363,6 +608,65 @@ defmodule ShopWeb.SubscriptionsComponent do
     ~H"""
     <span class={["badge badge-sm", status_class(@status)]} data-testid="status-badge">{@status}</span>
     """
+  end
+
+  defp run_action(socket, id, action, args, message) do
+    row = Ash.get!(Subscription, id, authorize?: false)
+
+    case row |> Ash.Changeset.for_update(action, args) |> Ash.update(authorize?: false) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> stream_insert(:subscriptions, updated, at: 0)
+         |> select(updated.id)
+         |> say(:info, message)}
+
+      {:error, error} ->
+        {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  # Only what the form sets; the rest stays the provider's default.
+  defp change_attrs(params, row) do
+    %{
+      provider: row.provider,
+      tenant: row.tenant,
+      subscription_id: row.provider_id,
+      price_id: blank_nil(params["price_id"]),
+      quantity: integer(params["quantity"]),
+      proration: blank_nil(params["proration"]),
+      billing_cycle_anchor: blank_nil(params["billing_cycle_anchor"]),
+      payment_behavior: blank_nil(params["payment_behavior"])
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  # Stripe dates a preview's lines from the proration date; the first line's start is that moment.
+  defp invoice_date(%{lines: [%{period_start: %DateTime{} = at} | _]}), do: at
+  defp invoice_date(_invoice), do: DateTime.utc_now()
+
+  defp date(value) do
+    with text when is_binary(text) and text != "" <- value,
+         {:ok, day} <- Date.from_iso8601(text),
+         {:ok, at} <- DateTime.new(day, ~T[12:00:00], "Etc/UTC") do
+      at
+    else
+      _no_date -> nil
+    end
+  end
+
+  defp integer(value) do
+    case Integer.parse(String.trim(value || "")) do
+      {number, ""} -> number
+      _not_a_number -> nil
+    end
+  end
+
+  defp blank_nil(value) do
+    case String.trim(value || "") do
+      "" -> nil
+      text -> text
+    end
   end
 
   defp perform(row, "cancel_period_end"), do: run(row, :cancel, %{at: :period_end})
@@ -416,6 +720,9 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   defp reselect(%{assigns: %{selected: %{id: id}}} = socket, %{id: id}), do: select(socket, id)
   defp reselect(socket, _other), do: socket
+
+  # The shop's plans published to Stripe's catalog: a change swaps to one of their prices.
+  defp plans, do: Enum.filter(Shop.Catalog.all(), &(&1.interval && &1.stripe_price_id))
 
   defp newest do
     Subscription

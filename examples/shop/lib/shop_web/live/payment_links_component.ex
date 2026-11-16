@@ -297,14 +297,22 @@ defmodule ShopWeb.PaymentLinksComponent do
             </select>
           </label>
           <div class="fieldset gap-1 sm:col-span-2">
-            <label class="label gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="invoice"
-                value="true"
-                class="checkbox checkbox-sm"
-                data-testid="link-invoice"
-              /> Make an invoice (one-time prices)
+            <label class="fieldset">
+              <span class="fieldset-legend">Invoice</span>
+              <select name="invoice" class="select select-sm" data-testid="link-invoice">
+                <option value="">Stripe's default</option>
+                <option value="on">Make one</option>
+                <option value="off">Don't</option>
+              </select>
+              <span class="text-xs opacity-60">A merchant of record always makes one.</span>
+            </label>
+            <label class="fieldset">
+              <span class="fieldset-legend">Merchant of record</span>
+              <select name="merchant_of_record" class="select select-sm" data-testid="link-merchant">
+                <option value="">The site's setting</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
             </label>
             <label class="label gap-2 text-sm">
               <input
@@ -490,7 +498,8 @@ defmodule ShopWeb.PaymentLinksComponent do
       customer_creation: present(params["customer_creation"]),
       billing_address: present(params["billing_address"]),
       automatic_tax: on_off(params["automatic_tax"]),
-      invoice: checked(params["invoice"]),
+      invoice: on_off(params["invoice"]),
+      merchant_of_record: on_off(params["merchant_of_record"]),
       allow_promotion_codes: checked(params["allow_promotion_codes"]),
       tax_id_collection: checked(params["tax_id_collection"])
     }
@@ -503,6 +512,8 @@ defmodule ShopWeb.PaymentLinksComponent do
       !link.max_purchases && "no purchase limit",
       link.inactive_message && "once off: \"#{link.inactive_message}\"",
       link.invoice && "makes an invoice",
+      (link.quantity_min || link.quantity_max) &&
+        "buyer picks #{link.quantity_min || 1} to #{link.quantity_max || "any"}",
       link.allow_promotion_codes && "takes promotion codes",
       link.trial_days && "#{link.trial_days}-day trial",
       link.customer_creation && "customer: #{link.customer_creation}",
