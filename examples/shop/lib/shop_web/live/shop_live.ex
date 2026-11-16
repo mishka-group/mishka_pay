@@ -52,6 +52,9 @@ defmodule ShopWeb.ShopLive do
 
   @statuses ~w(paid partially_refunded refunded pending requires_action failed canceled)
 
+  # The kinds a site manages from its admin (`ShopWeb.AdminRowsComponent`).
+  @admin_kinds MishkaPay.Ash.Object.Spec.kinds()
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
@@ -310,6 +313,13 @@ defmodule ShopWeb.ShopLive do
     {:noreply, socket}
   end
 
+  # What the site manages from its admin: products, prices, coupons, codes, links and bills.
+  def handle_info({:mishka_pay, kind, %{record: record}}, socket)
+      when kind in @admin_kinds do
+    send_update(ShopWeb.AdminRowsComponent, id: "admin-rows", changed: {kind, record})
+    {:noreply, socket}
+  end
+
   def handle_info({:buyer, customer}, socket) do
     {:noreply,
      socket
@@ -434,6 +444,22 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.StripeListsComponent} id="stripe-lists" tenant={@tenant} />
 
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.AdminRowsComponent} id="admin-rows" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.FilesComponent} id="files" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.TaxComponent} id="tax" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.UsageComponent} id="usage" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.EntitlementsComponent} id="entitlements" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.BalanceComponent} id="balance" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.OperationsComponent} id="operations" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.CurrenciesComponent} id="currencies" tenant={@tenant} />
 
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
