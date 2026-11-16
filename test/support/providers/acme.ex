@@ -41,16 +41,14 @@ defmodule MishkaPay.Support.Acme do
   @impl MishkaPay.Provider
   def fetch_checkout("acme_cs_" <> reference = id, %{secret_key: "sk_acme"}) do
     {:ok,
-     %Checkout{
+     struct(Checkout,
        provider: "acme",
        items: [],
-       success_url: nil,
-       cancel_url: nil,
        id: id,
        reference: reference,
        status: :complete,
        payment_id: "acme_paid"
-     }}
+     )}
   end
 
   @impl MishkaPay.Provider

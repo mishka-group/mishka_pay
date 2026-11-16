@@ -15,14 +15,7 @@ defmodule MishkaPay.Support.CheckoutOnly do
   def fetch_checkout(id, _keys),
     do:
       {:ok,
-       %MishkaPay.Checkout{
-         provider: "checkout_only",
-         items: [],
-         success_url: nil,
-         cancel_url: nil,
-         id: id,
-         status: :complete
-       }}
+       struct(MishkaPay.Checkout, provider: "checkout_only", items: [], id: id, status: :complete)}
 
   @impl MishkaPay.Provider
   def fetch_payment(id, _keys),

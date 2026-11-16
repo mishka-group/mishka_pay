@@ -73,13 +73,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
   @spec checkout(map()) :: Checkout.t()
   def checkout(session) do
-    checkout(session, %Checkout{
-      provider: "stripe",
-      items: [],
-      success_url: nil,
-      cancel_url: nil,
-      reference: session["client_reference_id"]
-    })
+    read_back =
+      struct(Checkout, provider: "stripe", items: [], reference: session["client_reference_id"])
+
+    checkout(session, read_back)
   end
 
   @doc "The checkout with Stripe's answer: its session id, page, status and payment."
