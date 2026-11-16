@@ -37,6 +37,9 @@ defmodule ShopWeb.ShopLive do
 
   @settings_topic "pay:settings"
 
+  # Newest made at Stripe first: a payment synced again keeps its place.
+  @newest_first [provider_created_at: :desc_nils_last, inserted_at: :desc]
+
   @statuses ~w(paid partially_refunded refunded pending requires_action failed canceled)
 
   @impl true
@@ -45,6 +48,7 @@ defmodule ShopWeb.ShopLive do
       Phoenix.PubSub.subscribe(Shop.PubSub, LiveFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
+      Phoenix.PubSub.subscribe(Shop.PubSub, Shop.Pay.SubscriptionFeed.topic())
       ShopWeb.Endpoint.subscribe("pay:inbox")
     end
 
@@ -54,7 +58,7 @@ defmodule ShopWeb.ShopLive do
      socket
      |> assign(page_title: "Mishka Pay demo shop", tenant: @tenant, statuses: @statuses)
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
-     |> assign(last: List.first(payments), selected: nil, checkout_read: nil, simulated: nil)
+     |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{})
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -62,6 +66,7 @@ defmodule ShopWeb.ShopLive do
      )
      |> assign_status()
      |> assign_stats()
+     |> assign_last()
      |> stream(:payments, payments)
      |> stream(:inbox, newest_rows(WebhookEvent))
      |> stream(:telemetry, [], limit: 40)}
@@ -120,6 +125,7 @@ defmodule ShopWeb.ShopLive do
       {:noreply,
        socket
        |> put_payment(refunded)
+       |> assign_last()
        |> select(refunded.id, refunded.__metadata__.refund)
        |> flash(:info, "Refunded. Stripe gives the money back to the card.")}
     else
@@ -133,10 +139,13 @@ defmodule ShopWeb.ShopLive do
       {:noreply,
        socket
        |> put_payment(payment)
+       |> assign_last()
        |> select(payment.id)
        |> flash(:info, "Payment read from Stripe and saved.")}
     else
-      {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+      {:error, error} ->
+        {:noreply,
+         socket |> close_other(payment_id) |> flash(:error, MishkaPay.Ash.message(error))}
     end
   end
 
@@ -145,15 +154,24 @@ defmodule ShopWeb.ShopLive do
          {:ok, checkout} <- MishkaPay.fetch_checkout("stripe", checkout_id, @tenant) do
       {:noreply, socket |> clear_flash() |> assign(checkout_read: checkout)}
     else
-      {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+      {:error, error} ->
+        {:noreply,
+         socket |> assign(checkout_read: nil) |> flash(:error, MishkaPay.Ash.message(error))}
     end
   end
 
   def handle_event("simulate", %{"payment_id" => payment_id, "type" => type} = params, socket) do
     signature = if params["signature"] == "bad", do: :bad_signature, else: :good
 
-    with {:ok, payment_id} <- payment_id(payment_id),
-         true <- type in WebhookSimulator.types() do
+    socket =
+      assign(socket,
+        simulated: nil,
+        simulate_form: %{payment_id: payment_id, type: type, signature: params["signature"]}
+      )
+
+    with {:ok, payment_id} <- object_id(payment_id),
+         true <- type in WebhookSimulator.types(),
+         :ok <- id_matches_type(payment_id, type) do
       {status, event_id} = WebhookSimulator.send_event(payment_id, type, @tenant, signature)
 
       {:noreply,
@@ -195,11 +213,19 @@ defmodule ShopWeb.ShopLive do
     {:noreply,
      socket
      |> put_payment(record)
-     |> assign(last: newest(socket.assigns.last, record))
+     |> assign_last()
      |> reselect(record)}
   end
 
   def handle_info(:settings_changed, socket), do: {:noreply, assign_status(socket)}
+
+  def handle_info({:subscription_changed, record}, socket) do
+    send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", changed: record)
+    {:noreply, socket}
+  end
+
+  # A message from the subscriptions part, shown like the page's own.
+  def handle_info({:flash, kind, message}, socket), do: {:noreply, flash(socket, kind, message)}
 
   def handle_info({:telemetry, entry}, socket),
     do: {:noreply, stream_insert(socket, :telemetry, entry, at: 0)}
@@ -223,8 +249,25 @@ defmodule ShopWeb.ShopLive do
       <section data-testid="buy">
         <.section_title icon="hero-shopping-cart" title="Buy something" />
         <form id="buy" phx-submit="buy" class="space-y-4">
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <.product :for={product <- @products} product={product} open?={@setting.open} />
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="one-time-products">
+            <.product
+              :for={product <- @products}
+              :if={!Shop.Catalog.plan?(product)}
+              product={product}
+              open?={@setting.open}
+            />
+          </div>
+          <h3 class="font-medium flex items-center gap-2">
+            Plans
+            <span class="text-sm font-normal opacity-60">charged again on a schedule, as a subscription</span>
+          </h3>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="plans">
+            <.product
+              :for={product <- @products}
+              :if={Shop.Catalog.plan?(product)}
+              product={product}
+              open?={@setting.open}
+            />
           </div>
           <.checkout_options max_quantity={@max_quantity} />
         </form>
@@ -254,6 +297,8 @@ defmodule ShopWeb.ShopLive do
 
       <.payment_details :if={@selected} selected={@selected} live={@live} names={@names} />
 
+      <.live_component module={ShopWeb.SubscriptionsComponent} id="subscriptions" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
@@ -277,16 +322,17 @@ defmodule ShopWeb.ShopLive do
       <.webhook_simulator
         types={@simulator_types}
         simulated={@simulated}
+        form={@simulate_form}
         tenant={@tenant}
         local_webhook_secret?={@local_webhook_secret?}
       />
 
       <div class="grid gap-8 lg:grid-cols-2">
-        <section data-testid="inbox">
+        <section class="min-w-0" data-testid="inbox">
           <.section_title icon="hero-inbox-arrow-down" title="Webhook inbox" />
           <.inbox_table events={@streams.inbox} />
         </section>
-        <section data-testid="telemetry">
+        <section class="min-w-0" data-testid="telemetry">
           <.section_title icon="hero-signal" title="Telemetry, live" />
           <.telemetry_log entries={@streams.telemetry} />
         </section>
@@ -303,16 +349,22 @@ defmodule ShopWeb.ShopLive do
     |> Ash.run_action(authorize?: false)
   end
 
+  # A plan opens a subscription checkout, with its interval and trial; any other product is paid
+  # once.
   defp checkout(product, count, params) do
     %{
       provider: "stripe",
       tenant: @tenant,
+      mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
+      trial_days: product.trial_days,
       items: [
         %{
           name: product.name,
           amount: %{amount: product.price, currency: "USD"},
           tax_code: product.tax_code,
-          quantity: count
+          quantity: count,
+          interval: product.interval,
+          interval_count: product.interval && product.interval_count
         }
       ],
       success_url: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}",
@@ -328,6 +380,32 @@ defmodule ShopWeb.ShopLive do
   # the payment at once rather than waiting for the webhook.
   defp back_from_checkout(socket, session_id) do
     case MishkaPay.fetch_checkout("stripe", session_id, @tenant) do
+      {:ok, %{subscription_id: subscription_id} = checkout} when is_binary(subscription_id) ->
+        socket = assign(socket, checkout_read: checkout)
+
+        case Ash.create(
+               Shop.Pay.Subscription,
+               %{provider: "stripe", subscription_id: subscription_id, tenant: @tenant},
+               action: :sync,
+               authorize?: false
+             ) do
+          {:ok, subscription} ->
+            send_update(ShopWeb.SubscriptionsComponent,
+              id: "subscriptions",
+              changed: subscription
+            )
+
+            send_update(ShopWeb.SubscriptionsComponent,
+              id: "subscriptions",
+              open: subscription.id
+            )
+
+            flash(socket, :info, "Thank you! Your subscription is below, with its invoices.")
+
+          {:error, error} ->
+            flash(socket, :error, MishkaPay.Ash.message(error))
+        end
+
       {:ok, %{payment_id: payment_id} = checkout} when is_binary(payment_id) ->
         socket = assign(socket, checkout_read: checkout)
 
@@ -335,6 +413,7 @@ defmodule ShopWeb.ShopLive do
           {:ok, payment} ->
             socket
             |> put_payment(payment)
+            |> assign_last()
             |> select(payment.id)
             |> flash(:info, "Thank you! Your payment is below, with its details.")
 
@@ -352,17 +431,24 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  # A changed payment: in the table when it fits the filter, out of it when it no longer does, and
-  # the totals counted again.
+  # A changed payment: the table read again in its own order (newest made at Stripe first, so a
+  # payment synced again keeps its place) when it fits the filter, and the totals counted again.
+  # A payment the filter does not show leaves the table untouched.
   defp put_payment(socket, record) do
     socket =
       case socket.assigns.filter in ["all", to_string(record.status)] do
-        true -> stream_insert(socket, :payments, record, at: 0)
+        true -> stream(socket, :payments, payments(socket.assigns.filter), reset: true)
         false -> stream_delete(socket, :payments, record)
       end
 
     assign_stats(socket)
   end
+
+  # A failed read of another payment closes the panel: it must not look like the answer.
+  defp close_other(%{assigns: %{selected: %{payment: %{provider_id: id}}}} = socket, id),
+    do: socket
+
+  defp close_other(socket, _payment_id), do: assign(socket, selected: nil)
 
   # One payment in the details panel: its row and webhook events from the database now, and the
   # payment as Stripe has it, read in the background.
@@ -377,12 +463,16 @@ defmodule ShopWeb.ShopLive do
 
     socket
     |> assign(selected: %{payment: payment, events: events, refund: refund})
-    |> assign_async(:live, fn ->
-      case MishkaPay.fetch_payment(payment.provider, payment.provider_id, payment.tenant) do
-        {:ok, live} -> {:ok, %{live: live}}
-        {:error, error} -> {:error, MishkaPay.Ash.message(error)}
-      end
-    end)
+    |> assign_async(
+      :live,
+      fn ->
+        case MishkaPay.fetch_payment(payment.provider, payment.provider_id, payment.tenant) do
+          {:ok, live} -> {:ok, %{live: live}}
+          {:error, error} -> {:error, MishkaPay.Ash.message(error)}
+        end
+      end,
+      reset: true
+    )
   end
 
   # The open panel follows a change made elsewhere (another tab, a webhook), keeping its last refund.
@@ -432,10 +522,22 @@ defmodule ShopWeb.ShopLive do
 
   defp assign_stats(socket), do: assign(socket, stats: Stats.by_status())
 
+  # "Last bought" is the newest payment that took money, whatever the filter shows.
+  defp assign_last(socket) do
+    last =
+      Payment
+      |> Ash.Query.filter(status in [:paid, :partially_refunded, :refunded])
+      |> Ash.Query.sort(@newest_first)
+      |> Ash.Query.limit(1)
+      |> Ash.read_one!(authorize?: false)
+
+    assign(socket, last: last)
+  end
+
   defp payments(status) do
     Payment
     |> filter_status(status)
-    |> Ash.Query.sort(inserted_at: :desc)
+    |> Ash.Query.sort(@newest_first)
     |> Ash.Query.limit(50)
     |> Ash.read!(authorize?: false)
   end
@@ -464,15 +566,6 @@ defmodule ShopWeb.ShopLive do
   # One message at a time: a new answer replaces the last one, whatever its kind.
   defp flash(socket, kind, message), do: socket |> clear_flash() |> put_flash(kind, message)
 
-  defp newest(nil, record), do: record
-
-  defp newest(last, record) do
-    case last.id == record.id or DateTime.compare(record.inserted_at, last.inserted_at) == :gt do
-      true -> record
-      false -> last
-    end
-  end
-
   defp quantity(value) do
     case Integer.parse(String.trim(value || "")) do
       {count, ""} when count in 1..@max_quantity//1 -> {:ok, count}
@@ -484,6 +577,38 @@ defmodule ShopWeb.ShopLive do
     case blank_nil(value) do
       nil -> {:error, "Type a payment id first, it starts with pi_."}
       "cs_" <> _ -> {:error, ~s|That is a checkout id (cs_). Use "Read a checkout back" below.|}
+      id -> {:ok, id}
+    end
+  end
+
+  # Stripe sends payment_intent.* and charge.refunded about a pi_ id, subscription and invoice
+  # events about a sub_ id. A well-formed id that does not exist (pi_nope) still goes through: it
+  # shows the inbox retry path.
+  defp id_matches_type(id, "payment_intent." <> _),
+    do: expect_prefix(id, "pi_", "payment_intent.*")
+
+  defp id_matches_type(id, "charge.refunded"), do: expect_prefix(id, "pi_", "charge.refunded")
+
+  defp id_matches_type(id, "customer.subscription." <> _),
+    do: expect_prefix(id, "sub_", "customer.subscription.*")
+
+  defp id_matches_type(id, "invoice." <> _), do: expect_prefix(id, "sub_", "invoice.*")
+
+  defp expect_prefix(id, prefix, family) do
+    case String.starts_with?(id, prefix) do
+      true ->
+        :ok
+
+      false ->
+        {:error, "#{family} events need a #{prefix} id: Stripe never sends them about #{id}."}
+    end
+  end
+
+  # The simulator takes a payment or a subscription id.
+  defp object_id(value) do
+    case blank_nil(value) do
+      nil -> {:error, "Type a payment (pi_) or subscription (sub_) id first."}
+      "cs_" <> _ -> {:error, "That is a checkout id (cs_): the simulator takes a pi_ or sub_ id."}
       id -> {:ok, id}
     end
   end

@@ -23,6 +23,8 @@ defmodule Shop.Application do
       Shop.Pay.Inbox,
       Shop.Pay.PaymentSync,
       Shop.Pay.LiveFeed,
+      Shop.Pay.SubscriptionSync,
+      Shop.Pay.SubscriptionFeed,
       ShopWeb.Endpoint
     ]
 

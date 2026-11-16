@@ -19,6 +19,17 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
+  @doc "A small muted code hint under a heading: the Mishka Pay name behind what is shown."
+  slot :inner_block, required: true
+
+  def hint(assigns) do
+    ~H"""
+    <p class="text-xs opacity-60 mb-2" data-testid="code-hint">
+      <code>{render_slot(@inner_block)}</code>
+    </p>
+    """
+  end
+
   @doc "What Mishka Pay sees right now: providers, the site's keys and settings, and plugins."
   attr :providers, :list, required: true
   attr :keys, :any, required: true
@@ -53,8 +64,9 @@ defmodule ShopWeb.PayComponents do
       <div class="card bg-base-200" data-testid="site">
         <div class="card-body gap-2">
           <h2 class="card-title text-base">
-            <.icon name="hero-key" class="size-5" /> Site <code>{@tenant}</code>
+            <.icon name="hero-key" class="size-5" /> Site
           </h2>
+          <.hint>tenant {@tenant}</.hint>
           <div :if={!@keys} role="alert" class="alert alert-warning py-2" data-testid="site-no-keys">
             No keys: put <code>STRIPE_SECRET_KEY</code> in <code>examples/shop/.env</code>.
           </div>
@@ -88,6 +100,7 @@ defmodule ShopWeb.PayComponents do
           <h2 class="card-title text-base">
             <.icon name="hero-bolt" class="size-5" /> Plugins on Mishka Pay's events
           </h2>
+          <.hint>mishka_pay:* events</.hint>
           <ul class="text-xs space-y-1">
             <li :for={plugin <- @plugins} class="flex flex-wrap gap-1" data-testid="plugin">
               <code class="opacity-70">{plugin.event}</code>
@@ -111,8 +124,17 @@ defmodule ShopWeb.PayComponents do
         <.icon name={@product.icon} class="size-8 text-primary" />
         <h3 class="card-title">{@product.name}</h3>
         <p class="text-2xl font-semibold" data-testid="product-price">
-          ${@product.price} <span class="text-sm font-normal opacity-60">+ tax</span>
+          ${@product.price}
+          <span :if={@product.interval} class="text-base font-normal">
+            / {if @product.interval_count > 1,
+              do: "#{@product.interval_count} #{@product.interval}s",
+              else: @product.interval}
+          </span>
+          <span class="text-sm font-normal opacity-60">+ tax</span>
         </p>
+        <span :if={@product.trial_days} class="badge badge-info badge-sm" data-testid="product-trial">
+          {@product.trial_days}-day free trial
+        </span>
         <button
           name="product"
           value={@product.slug}
@@ -120,7 +142,7 @@ defmodule ShopWeb.PayComponents do
           phx-disable-with="Opening Stripe..."
           data-testid={"buy-#{@product.slug}"}
         >
-          Buy with Stripe
+          {if @product.interval, do: "Subscribe with Stripe", else: "Buy with Stripe"}
         </button>
         <p :if={!@open?} class="text-xs text-error">The shop is closed: the gate will refuse.</p>
       </div>
@@ -240,7 +262,7 @@ defmodule ShopWeb.PayComponents do
             {product_name(@payment.reference, @names)} · {money(@payment.amount, @payment.currency)}
           </p>
           <p class="text-xs opacity-60">
-            {@payment.customer_name || @payment.customer_email || "Buyer not known yet"} · what Stripe charged, with the tax it added at checkout
+            {bought_by(@payment)}
           </p>
         </div>
         <.status_badge status={@payment.status} />
@@ -255,6 +277,13 @@ defmodule ShopWeb.PayComponents do
       </div>
     </section>
     """
+  end
+
+  defp bought_by(payment) do
+    case payment.customer_name || payment.customer_email do
+      nil -> "Paid, tax included. The buyer is not known yet."
+      buyer -> "#{buyer} paid this, tax included."
+    end
   end
 
   @doc "How many payments each status has, and their money; a status filters the table."
@@ -397,9 +426,8 @@ defmodule ShopWeb.PayComponents do
 
         <div class="grid gap-4 md:grid-cols-2">
           <div class="rounded-box bg-base-100 p-4" data-testid="details-stored">
-            <h3 class="font-medium mb-2">
-              In the shop's database <span class="badge badge-ghost badge-sm">Shop.Pay.Payment</span>
-            </h3>
+            <h3 class="font-medium">In the shop's database</h3>
+            <.hint>Shop.Pay.Payment</.hint>
             <dl class="grid grid-cols-2 gap-y-1 text-sm">
               <dt class="opacity-70">Status</dt>
               <dd data-testid="stored-status"><.status_badge status={@selected.payment.status} /></dd>
@@ -424,7 +452,7 @@ defmodule ShopWeb.PayComponents do
                 class="text-error"
                 data-testid="stored-failure"
               >
-                {@selected.payment.failure_message}
+                <.failure message={@selected.payment.failure_message} />
               </dd>
               <dt class="opacity-70">Reference</dt>
               <dd class="font-mono text-xs break-all">{@selected.payment.reference}</dd>
@@ -448,10 +476,8 @@ defmodule ShopWeb.PayComponents do
           </div>
 
           <div class="rounded-box bg-base-100 p-4" data-testid="details-live">
-            <h3 class="font-medium mb-2">
-              Live from Stripe
-              <span class="badge badge-ghost badge-sm">MishkaPay.fetch_payment/3</span>
-            </h3>
+            <h3 class="font-medium">Live from Stripe</h3>
+            <.hint>MishkaPay.fetch_payment/3</.hint>
             <.async_result :let={live} assign={@live}>
               <:loading>
                 <span class="loading loading-dots loading-sm"></span> Asking Stripe...
@@ -473,11 +499,11 @@ defmodule ShopWeb.PayComponents do
                 </dd>
                 <dt class="opacity-70">Paid with</dt>
                 <dd data-testid="live-card">
-                  {live.payment_method || "–"} {card(live.card_brand, live.card_last4)}
+                  {paid_with(live.payment_method, live.card_brand, live.card_last4)}
                 </dd>
                 <dt :if={live.failure_message} class="opacity-70">Failed because</dt>
                 <dd :if={live.failure_message} class="text-error" data-testid="live-failure">
-                  {live.failure_message} <code class="text-xs">{live.failure_code}</code>
+                  <.failure message={live.failure_message} code={live.failure_code} />
                 </dd>
                 <dt class="opacity-70">Description</dt>
                 <dd>{live.description || "–"}</dd>
@@ -525,14 +551,29 @@ defmodule ShopWeb.PayComponents do
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
+          <div
+            :if={@selected.payment.status not in [:paid, :partially_refunded]}
+            class="rounded-box bg-base-100 p-4"
+            data-testid="refund-unavailable"
+          >
+            <h3 class="font-medium">Refund</h3>
+            <.hint>:refund action</.hint>
+            <p class="text-sm opacity-70">{no_refund(@selected.payment.status)}</p>
+            <div :if={@selected.refund} class="text-sm mt-2" data-testid="last-refund">
+              <span class="opacity-70">Last refund:</span>
+              <code>{@selected.refund.id}</code>
+              · {Money.to_string!(@selected.refund.amount)} · {@selected.refund.status}
+            </div>
+          </div>
           <form
+            :if={@selected.payment.status in [:paid, :partially_refunded]}
             phx-submit="refund"
+            novalidate
             class="rounded-box bg-base-100 p-4 space-y-2"
             data-testid="refund-form"
           >
-            <h3 class="font-medium">
-              Refund <span class="badge badge-ghost badge-sm">:refund action</span>
-            </h3>
+            <h3 class="font-medium">Refund</h3>
+            <.hint>:refund action</.hint>
             <input type="hidden" name="payment" value={@selected.payment.id} />
             <div class="flex flex-wrap gap-2">
               <input
@@ -588,6 +629,28 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
+  attr :message, :string, required: true
+  attr :code, :string, default: nil
+
+  defp failure(assigns) do
+    ~H"""
+    {@message} <code :if={@code} class="text-xs opacity-60">{@code}</code>
+    """
+  end
+
+  defp no_refund(:refunded), do: "Nothing to refund: the payment is refunded in full."
+  defp no_refund(:pending), do: "Nothing to refund yet: the payment is not paid."
+
+  defp no_refund(:requires_action),
+    do: "Nothing to refund yet: the buyer has not finished paying."
+
+  defp no_refund(:failed), do: "Nothing to refund: the payment failed, no money was taken."
+
+  defp no_refund(:canceled),
+    do: "Nothing to refund: the payment was canceled, no money was taken."
+
+  defp no_refund(_other), do: "Nothing to refund on this payment."
+
   attr :checkout, :map, required: true
 
   def checkout_card(assigns) do
@@ -623,6 +686,7 @@ defmodule ShopWeb.PayComponents do
   @doc "Sends a signed Stripe webhook about a payment to the shop's own endpoint."
   attr :types, :list, required: true
   attr :simulated, :any, required: true
+  attr :form, :map, default: %{}
   attr :tenant, :string, required: true
   attr :local_webhook_secret?, :boolean, required: true
 
@@ -636,20 +700,24 @@ defmodule ShopWeb.PayComponents do
         <span :if={!@local_webhook_secret?}>
           Signed with your <code>STRIPE_WEBHOOK_SECRET</code>.
         </span>
+        A refused webhook (bad signature) is never stored: it is only counted in telemetry.
       </p>
       <form phx-submit="simulate" class="flex flex-wrap gap-2 items-end">
         <input
           name="payment_id"
-          placeholder="pi_... (pick a row, then copy its id)"
+          placeholder="pi_... or sub_... (copy it from a row)"
           class="input input-sm w-72"
+          value={@form[:payment_id]}
           data-testid="simulate-payment"
         />
         <select name="type" class="select select-sm" data-testid="simulate-type">
-          <option :for={type <- @types} value={type}>{type}</option>
+          <option :for={type <- @types} value={type} selected={type == @form[:type]}>
+            {type}
+          </option>
         </select>
         <select name="signature" class="select select-sm" data-testid="simulate-signature">
-          <option value="good">Good signature</option>
-          <option value="bad">Bad signature</option>
+          <option value="good" selected={@form[:signature] != "bad"}>Good signature</option>
+          <option value="bad" selected={@form[:signature] == "bad"}>Bad signature</option>
         </select>
         <button class="btn btn-sm" data-testid="simulate-submit">Send webhook</button>
       </form>
@@ -668,7 +736,10 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
-  defp simulated_meaning(200), do: "accepted: it shows in the inbox and the payment syncs"
+  defp simulated_meaning(200),
+    do:
+      "accepted: the inbox works it as a job; the row shows processed, or the error once its tries run out"
+
   defp simulated_meaning(400), do: "refused: the signature does not match"
   defp simulated_meaning(500), do: "a listener could not take it, Stripe would send it again"
   defp simulated_meaning(_other), do: ""
@@ -685,7 +756,7 @@ defmodule ShopWeb.PayComponents do
         <thead>
           <tr>
             <th>Type</th>
-            <th>Payment</th>
+            <th>About</th>
             <th>Status</th>
             <th>Error</th>
           </tr>
@@ -702,7 +773,7 @@ defmodule ShopWeb.PayComponents do
             data-status={event.status}
           >
             <td><code class="text-xs">{event.type}</code></td>
-            <td class="font-mono text-xs break-all">{event.payment_id}</td>
+            <td class="font-mono text-xs break-all">{event.payment_id || event.subscription_id}</td>
             <td><span class="badge badge-sm">{event.status}</span></td>
             <td class="text-xs text-error">{event.last_error}</td>
           </tr>
@@ -843,6 +914,13 @@ defmodule ShopWeb.PayComponents do
   defp product_name(reference, names), do: Shop.Catalog.name_of(reference, names)
 
   defp money(amount, currency), do: currency |> Money.new(amount || 0) |> Money.to_string!()
+
+  defp paid_with(method, brand, last4) do
+    case Enum.reject([method, brand && card(brand, last4)], &is_nil/1) do
+      [] -> "–"
+      parts -> Enum.join(parts, " ")
+    end
+  end
 
   defp card(nil, _last4), do: "–"
   defp card(brand, last4), do: "#{brand} •••• #{last4}"

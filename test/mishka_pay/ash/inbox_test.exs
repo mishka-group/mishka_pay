@@ -81,6 +81,16 @@ defmodule MishkaPay.Ash.InboxTest do
     assert last_error == "the event was not processed: the store is down"
   end
 
+  test "a failed try keeps its reason on the row while the event is still tried again" do
+    MishkaPay.Test.start_plugin!(EventWorker)
+    deliver(%{"id" => "evt_retry", "type" => "work.fails"})
+
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    assert [%{status: :pending, last_error: "the event was not processed: the store is down"}] =
+             stored()
+  end
+
   test "with no host listener the event is still worked and marked processed" do
     deliver(%{"id" => "evt_nobody"})
     work()

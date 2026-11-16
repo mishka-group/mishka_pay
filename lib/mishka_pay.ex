@@ -4,7 +4,9 @@
 
 defmodule MishkaPay do
   @moduledoc """
-  The calls a project makes to take money: open a checkout, read a payment, refund one.
+  The calls a project makes to take money: open a checkout, read a payment, refund one, and for a
+  subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
+  back and list its invoices.
 
       {:ok, checkout} =
         MishkaPay.checkout(%{
@@ -36,8 +38,9 @@ defmodule MishkaPay do
 
   ## Telemetry
 
-  Each call is a span, `[:mishka_pay, :checkout | :checkout_read | :payment | :refund, :start |
-  :stop]`, with
+  Each call is a span, `[:mishka_pay, operation, :start | :stop]`, the operation being
+  `:checkout`, `:checkout_read`, `:payment`, `:refund`, `:subscription`, `:subscription_cancel`,
+  `:subscription_resume` or `:invoices`, with
   `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
   `:provider`, `:unknown`). Never a key or a buyer's details.
   """
@@ -51,6 +54,7 @@ defmodule MishkaPay do
     span(:checkout, attrs, fn ->
       with {:ok, checkout} <- Errors.from_builder(Checkout.builder(attrs)),
            {:ok, provider} <- Provider.capable(checkout.provider, :checkout),
+           :ok <- mode_capable(checkout),
            {:ok, checkout} <- before_checkout(checkout),
            {:ok, keys} <- Credentials.fetch(checkout.provider, checkout.tenant) do
         provider.checkout(checkout, keys)
@@ -99,6 +103,75 @@ defmodule MishkaPay do
       end
     end)
   end
+
+  @doc "Reads subscription `subscription_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_subscription(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def fetch_subscription(provider, subscription_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(subscription_id) do
+    subscription(:subscription, provider, tenant, & &1.fetch_subscription(subscription_id, &2))
+  end
+
+  @doc """
+  Cancels subscription `subscription_id`. With `at: :period_end` (the default) the buyer keeps
+  what they paid for until the period ends, and `resume_subscription/3` can still take it back;
+  with `at: :now` it ends at once.
+  """
+  @spec cancel_subscription(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def cancel_subscription(provider, subscription_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(subscription_id) do
+    case Keyword.get(opts, :at, :period_end) do
+      at when at in [:now, :period_end] ->
+        subscription(
+          :subscription_cancel,
+          provider,
+          tenant,
+          & &1.cancel_subscription(subscription_id, at, &2)
+        )
+
+      other ->
+        raise ArgumentError,
+              "cancel_subscription at: must be :now or :period_end, got #{inspect(other)}"
+    end
+  end
+
+  @doc "Takes back a cancel set for the period's end, so subscription `subscription_id` goes on."
+  @spec resume_subscription(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+  def resume_subscription(provider, subscription_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(subscription_id) do
+    subscription(
+      :subscription_resume,
+      provider,
+      tenant,
+      & &1.resume_subscription(subscription_id, &2)
+    )
+  end
+
+  @doc "Lists the invoices of subscription `subscription_id`, newest first."
+  @spec invoices(String.t(), String.t(), term()) ::
+          {:ok, [MishkaPay.Invoice.t()]} | {:error, Splode.Error.t()}
+  def invoices(provider, subscription_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(subscription_id) do
+    subscription(:invoices, provider, tenant, & &1.list_invoices(subscription_id, &2))
+  end
+
+  defp subscription(operation, provider, tenant, call) do
+    span(operation, %{provider: provider, tenant: tenant}, fn ->
+      with {:ok, module} <- Provider.capable(provider, :subscription),
+           {:ok, keys} <- Credentials.fetch(provider, tenant) do
+        call.(module, keys)
+      end
+    end)
+  end
+
+  # A subscription checkout needs a provider that runs subscriptions.
+  defp mode_capable(%Checkout{mode: :subscription, provider: provider}) do
+    with {:ok, _module} <- Provider.capable(provider, :subscription), do: :ok
+  end
+
+  defp mode_capable(_one_time), do: :ok
 
   defp before_checkout(checkout) do
     timeout = Application.get_env(:mishka_pay, :checkout_gate_timeout, 5_000)

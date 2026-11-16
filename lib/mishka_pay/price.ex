@@ -16,6 +16,9 @@ defmodule MishkaPay.Price do
       its own tax code there, so this one is not sent with it.
     * `:id`: the provider's own id of a price it already knows (`price_...` at Stripe). With it,
       the provider's price is used and `:name` and `:amount` may be left out.
+    * `:interval`, `:interval_count`: a price charged again on a schedule, for a subscription:
+      every `:interval_count` (1 by default) `:day`, `:week`, `:month` or `:year`. Left out, the
+      price is paid once.
   """
 
   use GuardedStruct
@@ -28,10 +31,23 @@ defmodule MishkaPay.Price do
     field :tax_code, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=100)"
 
+    field :interval, :day | :week | :month | :year,
+      derives: "validate(enum=Atom[day::week::month::year])",
+      validator: {__MODULE__, :interval}
+
+    field :interval_count, pos_integer(), derives: "validate(integer, min_len=1)"
+
     field :quantity, pos_integer(),
       default: 1,
       derives: "validate(not_nil_value, integer, min_len=1)"
   end
+
+  # An interval from JSON or a form comes as a string.
+  @doc false
+  def interval(:interval, interval) when interval in ["day", "week", "month", "year"],
+    do: {:ok, :interval, String.to_existing_atom(interval)}
+
+  def interval(:interval, interval), do: {:ok, :interval, interval}
 
   @doc false
   def named_or_known(%{id: id} = attrs) when is_binary(id), do: {:ok, attrs}

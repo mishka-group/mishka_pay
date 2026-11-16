@@ -45,6 +45,7 @@ if Code.ensure_loaded?(Ash) do
         object_id: event.object_id,
         object_type: event.object_type,
         payment_id: event.payment_id,
+        subscription_id: event.subscription_id,
         livemode: event.livemode,
         account: event.account,
         provider_created_at: event.created_at

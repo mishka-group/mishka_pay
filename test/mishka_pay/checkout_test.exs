@@ -31,6 +31,49 @@ defmodule MishkaPay.CheckoutTest do
     assert customer.email == "a@shop.test"
   end
 
+  describe "mode" do
+    @monthly %{"name" => "Pro plan", "amount" => %{"amount" => "9", "currency" => "USD"}}
+
+    test "a subscription checkout from JSON takes recurring prices and a trial" do
+      assert {:ok, %Checkout{mode: :subscription, trial_days: 14, items: [%Price{} = price]}} =
+               build(%{
+                 "mode" => "subscription",
+                 "trial_days" => 14,
+                 "items" => [Map.merge(@monthly, %{"interval" => "month", "interval_count" => 3})]
+               })
+
+      assert {price.interval, price.interval_count} == {:month, 3}
+    end
+
+    test "a subscription needs a recurring or known price on every item" do
+      assert {:ok, _known} =
+               build(%{"mode" => "subscription", "items" => [%{"id" => "price_monthly"}]})
+
+      assert [:items] = fields(build(%{"mode" => "subscription", "items" => [@monthly]}))
+    end
+
+    test "a one-time checkout refuses a recurring price and a trial" do
+      assert {:ok, %Checkout{mode: :payment}} = build(%{})
+
+      assert [:items] =
+               fields(build(%{"items" => [Map.put(@monthly, "interval", "month")]}))
+
+      assert [:trial_days] = fields(build(%{"trial_days" => 7}))
+    end
+
+    test "an unknown mode or interval is refused on its field" do
+      assert [:mode] = fields(build(%{"mode" => "forever"}))
+
+      assert [:items] =
+               fields(
+                 build(%{
+                   "mode" => "subscription",
+                   "items" => [Map.put(@monthly, "interval", "fortnight")]
+                 })
+               )
+    end
+  end
+
   test "a price the provider already knows needs only its id" do
     assert {:ok, %Checkout{items: [%Price{id: "price_1", name: nil}]}} =
              build(%{"items" => [%{"id" => "price_1", "quantity" => 2}]})

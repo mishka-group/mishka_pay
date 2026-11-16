@@ -8,13 +8,16 @@ defmodule Shop.Catalog do
 
   alias Shop.Catalog.Product
 
-  @doc "The products on sale, in their order."
+  @doc "Everything on sale, in its order: products paid once, then plans."
   def all do
     Product
     |> Ash.Query.filter(active == true)
     |> Ash.Query.sort(position: :asc)
     |> Ash.read!(authorize?: false)
   end
+
+  @doc "Whether `product` is a plan, sold as a subscription."
+  def plan?(%{interval: interval}), do: not is_nil(interval)
 
   @doc "The product with `slug`, or nil."
   def fetch(slug) do

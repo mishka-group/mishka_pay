@@ -1,6 +1,6 @@
 defmodule Shop.Pay.WebhookSimulator do
   @moduledoc """
-  Sends the shop a Stripe webhook about one payment, signed the way Stripe signs, to its own
+  Sends the shop a Stripe webhook about one payment (`pi_...`) or subscription (`sub_...`), signed the way Stripe signs, to its own
   `MishkaPay.Webhook` endpoint over HTTP. The event then goes the whole way a real one goes:
   signature check, the inbox, an Oban job, the payment sync and `mishka_pay:payment:changed`.
   With `:bad_signature` it signs with the wrong secret, to show the endpoint refuse it.
@@ -12,7 +12,11 @@ defmodule Shop.Pay.WebhookSimulator do
     "payment_intent.succeeded",
     "payment_intent.payment_failed",
     "payment_intent.canceled",
-    "charge.refunded"
+    "charge.refunded",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "invoice.paid",
+    "invoice.payment_failed"
   ]
 
   @doc "The event types the simulator sends."
@@ -52,6 +56,16 @@ defmodule Shop.Pay.WebhookSimulator do
 
     {status, event_id}
   end
+
+  defp object("customer.subscription." <> _change, subscription_id),
+    do: %{"id" => subscription_id, "object" => "subscription"}
+
+  defp object("invoice." <> _change, subscription_id),
+    do: %{
+      "id" => "in_sim",
+      "object" => "invoice",
+      "parent" => %{"subscription_details" => %{"subscription" => subscription_id}}
+    }
 
   defp object("charge.refunded", payment_id),
     do: %{"id" => "ch_sim", "object" => "charge", "payment_intent" => payment_id}

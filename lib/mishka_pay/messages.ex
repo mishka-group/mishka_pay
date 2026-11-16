@@ -34,6 +34,9 @@ defmodule MishkaPay.Messages do
           | :metadata_strings
           | :items_empty
           | :items_currency
+          | :items_recurring
+          | :items_one_time
+          | :trial_mode
           | :price_needs
           | :customer_one_of
           | :keys_answer
@@ -138,6 +141,23 @@ defmodule MishkaPay.Messages do
   defp msgid(:items_currency),
     do: dgettext_noop("mishka_pay", "All items must be in one currency")
 
+  defp msgid(:items_recurring),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The items field needs a recurring price on every item for a subscription: an interval or a provider price id"
+      )
+
+  defp msgid(:items_one_time),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The items field has a recurring price: a one-time checkout sells once, use mode subscription"
+      )
+
+  defp msgid(:trial_mode),
+    do: dgettext_noop("mishka_pay", "The trial_days field needs a subscription checkout")
+
   defp msgid(:price_needs),
     do: dgettext_noop("mishka_pay", "A price needs a name and an amount, or a provider id")
 
@@ -172,7 +192,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment"
+        "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment."
       )
 
   defp msgid(:refund_nothing_left),

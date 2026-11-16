@@ -6,7 +6,7 @@ defmodule MishkaPay.Providers.StripeTest do
   # Starts the Stripe plugin, which changes the providers event every test sees.
   use ExUnit.Case, async: false
 
-  alias MishkaPay.{Checkout, Errors, Payment, Refund}
+  alias MishkaPay.{Checkout, Errors, Invoice, Payment, Refund, Subscription}
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.Support.StripeMock
 
@@ -37,6 +37,60 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok,
               %Checkout{id: "cs_" <> _, url: "https://checkout.stripe.com/" <> _, status: :open}} =
                MishkaPay.checkout(@checkout)
+    end
+
+    test "a subscription checkout sends recurring prices and its trial as Stripe's spec accepts" do
+      monthly = %{name: "Pro plan", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      assert {:ok, %Checkout{id: "cs_" <> _, mode: :subscription}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{mode: :subscription, items: [monthly], trial_days: 14})
+               )
+
+      params =
+        Stripe.Mapper.checkout_params(%Checkout{
+          provider: "stripe",
+          mode: :subscription,
+          trial_days: 14,
+          reference: "sub-1",
+          items: [
+            %MishkaPay.Price{
+              name: "Pro plan",
+              amount: Money.new(:USD, "9"),
+              interval: :year,
+              interval_count: 1,
+              quantity: 1
+            }
+          ],
+          success_url: "https://shop.test/ok",
+          cancel_url: "https://shop.test/no"
+        })
+
+      assert params["mode"] == "subscription"
+      assert params["subscription_data"]["trial_period_days"] == 14
+      assert params["subscription_data"]["metadata"] == %{"mishka_pay_reference" => "sub-1"}
+      refute Map.has_key?(params, "payment_intent_data")
+
+      assert [%{"price_data" => %{"recurring" => %{"interval" => "year", "interval_count" => 1}}}] =
+               params["line_items"]
+    end
+
+    test "a subscription is read, cancelled at the period's end or now, resumed, and its invoices listed" do
+      assert {:ok, %Subscription{id: "sub_" <> _, provider: "stripe"}} =
+               MishkaPay.fetch_subscription("stripe", "sub_123", "site-a")
+
+      assert {:ok, %Subscription{}} = MishkaPay.cancel_subscription("stripe", "sub_123", "site-a")
+
+      assert {:ok, %Subscription{}} =
+               MishkaPay.cancel_subscription("stripe", "sub_123", "site-a", at: :now)
+
+      assert {:ok, %Subscription{}} = MishkaPay.resume_subscription("stripe", "sub_123", "site-a")
+
+      assert {:ok, [%Invoice{id: "in_" <> _} | _]} =
+               MishkaPay.invoices("stripe", "sub_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
+               MishkaPay.fetch_subscription("stripe", "pi_123", "site-a")
     end
 
     test "a checkout is read back by its session id, and a bad id never reaches a path" do
@@ -435,6 +489,94 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert {failed.failure_code, failed.failure_message} ==
              {"insufficient_funds", "Your card has insufficient funds."}
+  end
+
+  test "a subscription brings its status, items, period, cancel, trial, buyer and reference" do
+    sub = %{
+      "id" => "sub_1",
+      "status" => "trialing",
+      "customer" => %{"id" => "cus_1", "email" => "ava@example.com", "name" => "Ava Martin"},
+      "cancel_at_period_end" => true,
+      "cancel_at" => 1_796_000_000,
+      "trial_end" => 1_795_000_000,
+      "latest_invoice" => "in_1",
+      "metadata" => %{"mishka_pay_reference" => "pro-1", "plan" => "pro"},
+      "created" => 1_794_000_000,
+      "items" => %{
+        "data" => [
+          %{
+            "quantity" => 2,
+            "current_period_start" => 1_794_000_000,
+            "current_period_end" => 1_796_000_000,
+            "price" => %{
+              "id" => "price_1",
+              "unit_amount" => 900,
+              "currency" => "usd",
+              "recurring" => %{"interval" => "month", "interval_count" => 1},
+              "product" => %{"id" => "prod_1", "name" => "Pro plan"}
+            }
+          }
+        ]
+      }
+    }
+
+    assert {:ok, %Subscription{} = subscription} = Stripe.Mapper.subscription(sub)
+    assert {subscription.status, subscription.cancel_at_period_end} == {:trialing, true}
+    assert {subscription.customer_email, subscription.reference} == {"ava@example.com", "pro-1"}
+    assert subscription.metadata == %{"plan" => "pro"}
+    assert subscription.current_period_end == DateTime.from_unix!(1_796_000_000)
+    assert subscription.trial_end == DateTime.from_unix!(1_795_000_000)
+
+    assert [
+             %MishkaPay.Price{id: "price_1", name: "Pro plan", interval: :month, quantity: 2} =
+               item
+           ] =
+             subscription.items
+
+    assert item.amount == Money.new(:USD, "9.00")
+
+    assert {:error, %Errors.Invalid{}} =
+             Stripe.Mapper.subscription(%{sub | "status" => "something_new"})
+  end
+
+  test "an invoice brings its subscription from either place Stripe puts it" do
+    invoice = %{
+      "id" => "in_1",
+      "status" => "paid",
+      "currency" => "usd",
+      "amount_due" => 900,
+      "amount_paid" => 900,
+      "period_start" => 1_794_000_000,
+      "period_end" => 1_796_000_000,
+      "hosted_invoice_url" => "https://invoice.stripe.com/i/1",
+      "invoice_pdf" => "https://pay.stripe.com/invoice/1/pdf",
+      "parent" => %{"subscription_details" => %{"subscription" => "sub_1"}}
+    }
+
+    assert {:ok, %Invoice{status: :paid, subscription_id: "sub_1"} = mapped} =
+             Stripe.Mapper.invoice(invoice)
+
+    assert mapped.amount_paid == Money.new(:USD, "9.00")
+
+    assert {:ok, %Invoice{subscription_id: "sub_2"}} =
+             invoice
+             |> Map.delete("parent")
+             |> Map.put("subscription", "sub_2")
+             |> Stripe.Mapper.invoice()
+
+    assert {:ok, %MishkaPay.Event{subscription_id: "sub_1", payment_id: nil}} =
+             Stripe.Mapper.event(%{
+               "id" => "evt_1",
+               "type" => "invoice.paid",
+               "data" => %{"object" => Map.put(invoice, "object", "invoice")}
+             })
+
+    assert {:ok, %MishkaPay.Event{subscription_id: "sub_9"}} =
+             Stripe.Mapper.event(%{
+               "id" => "evt_2",
+               "type" => "customer.subscription.updated",
+               "data" => %{"object" => %{"id" => "sub_9", "object" => "subscription"}}
+             })
   end
 
   test "a checkout read back brings its totals and the buyer's email" do
