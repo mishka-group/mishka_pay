@@ -44,6 +44,17 @@ defmodule MishkaPay.Support.StripeMock do
     |> Plug.Conn.send_resp(answer.status, answer.body)
   end
 
+  @doc """
+  A `MishkaPay.Test.stub_http/1` plug for the tests against a real test account: it forwards an
+  upload to `https://files.stripe.com`, the host it was made for, and anything else to
+  `https://api.stripe.com`.
+  """
+  @spec forward_live(Plug.Conn.t()) :: Plug.Conn.t()
+  def forward_live(%Plug.Conn{host: "files.stripe.com"} = conn),
+    do: forward(conn, "https://files.stripe.com")
+
+  def forward_live(conn), do: forward(conn, "https://api.stripe.com")
+
   defp query(""), do: ""
   defp query(query), do: "?" <> query
 end

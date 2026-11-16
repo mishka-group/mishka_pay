@@ -830,6 +830,65 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  # The dispute evidence fields that take the id of an uploaded file, not text.
+  @evidence_files ~w(cancellation_policy customer_communication customer_signature duplicate_charge_documentation receipt refund_policy service_documentation shipping_documentation uncategorized_file)
+
+  @doc "The dispute evidence fields that take a file id (`file_...`) instead of text."
+  @spec evidence_files() :: [String.t()]
+  def evidence_files, do: @evidence_files
+
+  @doc """
+  Params of `POST /v1/files`, as multipart parts: the purpose, and the file with its name and
+  content type.
+  """
+  @spec file_params(MishkaPay.FileUpload.t()) :: [{String.t(), term()}]
+  def file_params(%MishkaPay.FileUpload{} = upload) do
+    [
+      {"purpose", Atom.to_string(upload.purpose)},
+      {"file", {upload.content, filename: upload.filename, content_type: upload.content_type}}
+    ]
+  end
+
+  @doc "A Stripe file as a `MishkaPay.File`."
+  @spec file(map()) :: {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
+  def file(file) do
+    %{
+      provider: "stripe",
+      id: file["id"],
+      purpose: known(file["purpose"], ~w(dispute_evidence)) || :other,
+      filename: file["filename"],
+      size: file["size"],
+      type: file["type"],
+      url: file["url"],
+      expires_at: time(file["expires_at"]),
+      created_at: time(file["created"])
+    }
+    |> MishkaPay.File.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "Params of `POST /v1/file_links`: the file, and when the link ends."
+  @spec file_link_params(String.t(), keyword()) :: map()
+  def file_link_params(file_id, opts) do
+    %{"file" => file_id, "expires_at" => opts[:expires_at] && DateTime.to_unix(opts[:expires_at])}
+  end
+
+  @doc "A Stripe file link as a `MishkaPay.FileLink`."
+  @spec file_link(map()) :: {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+  def file_link(link) do
+    %{
+      provider: "stripe",
+      id: link["id"],
+      file_id: id_of(link["file"]),
+      url: link["url"],
+      expires_at: time(link["expires_at"]),
+      expired: link["expired"] == true,
+      created_at: time(link["created"])
+    }
+    |> MishkaPay.FileLink.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   defp object_of(%{"data" => %{"object" => %{} = object}}), do: object
   defp object_of(_no_object), do: %{}
 

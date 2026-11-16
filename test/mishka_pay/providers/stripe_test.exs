@@ -20,6 +20,15 @@ defmodule MishkaPay.Providers.StripeTest do
     customer: %{email: "buyer@shop.test"}
   }
 
+  @upload %{
+    provider: "stripe",
+    tenant: "site-a",
+    purpose: :dispute_evidence,
+    filename: "receipt.pdf",
+    content_type: "application/pdf",
+    content: "%PDF-1.4\nreceipt of order 9\n%%EOF\n"
+  }
+
   setup do
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123"})
@@ -474,6 +483,31 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:error, %Errors.Invalid{errors: [%{field: :dispute_id}]}} =
                MishkaPay.fetch_dispute("stripe", "pi_123")
+    end
+
+    test "a file is uploaded as multipart, read, linked and put in a dispute's evidence, as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.File{id: "file_" <> _ = id, purpose: :dispute_evidence} = file} =
+               MishkaPay.upload_file(@upload)
+
+      assert is_integer(file.size)
+      assert %DateTime{} = file.created_at
+
+      assert {:ok, %MishkaPay.File{id: "file_" <> _}} =
+               MishkaPay.fetch_file("stripe", "file_123", "site-a")
+
+      at = DateTime.add(DateTime.utc_now(), 3600)
+
+      assert {:ok, %MishkaPay.FileLink{id: "link_" <> _, url: "https://" <> _, expired: false}} =
+               MishkaPay.file_link("stripe", id, "site-a", expires_at: at)
+
+      assert {:ok, %MishkaPay.Dispute{}} =
+               MishkaPay.update_dispute(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 dispute_id: "dp_123",
+                 evidence: %{"uncategorized_file" => id, "receipt" => "file_456"},
+                 submit: false
+               })
     end
 
     test "a subscription change, its preview, a pause and an invoice read go as Stripe's spec accepts" do
@@ -1183,6 +1217,177 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:error, %Errors.Declined{provider: "stripe", reason: "insufficient_funds"}} =
                MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+    end
+
+    test "a file Stripe would not take, or a file field that holds no file id, is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      big = <<0x89, "PNG">> <> :binary.copy(<<0>>, 5_000_000)
+
+      for {attrs, field} <- [
+            {%{@upload | content: ""}, :content},
+            {%{@upload | content: nil}, :content},
+            {%{@upload | content_type: "text/plain", content: "notes"}, :content_type},
+            {%{@upload | content_type: "image/gif", content: "GIF89a"}, :content_type},
+            {%{@upload | content_type: "image/png", content: big}, :content},
+            {%{@upload | content_type: "image/png"}, :content},
+            {%{@upload | filename: "../etc/passwd"}, :filename},
+            {%{@upload | filename: "a\r\nb.pdf"}, :filename},
+            {%{@upload | purpose: :business_logo}, :purpose}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.upload_file(attrs)
+        assert Enum.any?(errors, &(&1.field == field)), inspect({field, errors})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :file_id}]}} =
+               MishkaPay.fetch_file("stripe", "file_1/../../v1/charges", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :file_id}]}} =
+               MishkaPay.file_link("stripe", "link_1", "site-a")
+
+      for at <- [DateTime.add(DateTime.utc_now(), -60), "tomorrow"] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :expires_at}]}} =
+                 MishkaPay.file_link("stripe", "file_1", "site-a", expires_at: at)
+      end
+
+      for evidence <- [%{"receipt" => "a receipt in words"}, %{"uncategorized_file" => "cus_1"}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :evidence}]}} =
+                 MishkaPay.update_dispute(%{
+                   provider: "stripe",
+                   dispute_id: "dp_123",
+                   evidence: evidence
+                 })
+      end
+    end
+  end
+
+  describe "files" do
+    test "an upload goes to Stripe's files host as multipart, with its purpose, name and type" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:sent, conn.host, conn.request_path, Map.new(conn.req_headers), body})
+
+        Req.Test.json(conn, %{
+          "id" => "file_1",
+          "object" => "file",
+          "purpose" => "dispute_evidence",
+          "filename" => "receipt.pdf",
+          "size" => byte_size(@upload.content),
+          "type" => "pdf",
+          "url" => "https://files.stripe.com/v1/files/file_1/contents",
+          "created" => 1_780_000_000,
+          "expires_at" => 1_803_000_000
+        })
+      end)
+
+      assert {:ok,
+              %MishkaPay.File{
+                id: "file_1",
+                purpose: :dispute_evidence,
+                filename: "receipt.pdf",
+                type: "pdf",
+                size: size,
+                expires_at: %DateTime{}
+              }} = MishkaPay.upload_file(@upload)
+
+      assert size == byte_size(@upload.content)
+      assert_received {:sent, "files.stripe.com", "/v1/files", headers, body}
+      assert "multipart/form-data; boundary=" <> boundary = headers["content-type"]
+      assert headers["authorization"] == "Bearer sk_test_123"
+      assert headers["stripe-version"] == Stripe.version()
+      assert "mp_" <> _ = headers["idempotency-key"]
+
+      assert body ==
+               "--#{boundary}\r\ncontent-disposition: form-data; name=\"purpose\"\r\n\r\n" <>
+                 "dispute_evidence\r\n" <>
+                 "--#{boundary}\r\ncontent-disposition: form-data; name=\"file\"; " <>
+                 "filename=\"receipt.pdf\"\r\ncontent-type: application/pdf\r\n\r\n" <>
+                 @upload.content <> "\r\n--#{boundary}--\r\n"
+
+      refute inspect(MishkaPay.FileUpload.builder(@upload)) =~ "%PDF"
+    end
+
+    test "an upload follows files_url, else base_url, while the API follows base_url only" do
+      test_pid = self()
+      on_exit(fn -> Application.delete_env(:mishka_pay, Stripe) end)
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test_pid, {:host, conn.host, conn.port, conn.request_path})
+        Req.Test.json(conn, %{"id" => "file_1", "object" => "file", "purpose" => "other"})
+      end)
+
+      for {config, files, api} <- [
+            {[base_url: "http://localhost:12111"], {"localhost", 12_111}, {"localhost", 12_111}},
+            {[base_url: "http://localhost:12111", files_url: "http://files.test:4000"],
+             {"files.test", 4000}, {"localhost", 12_111}}
+          ] do
+        Application.put_env(:mishka_pay, Stripe, config)
+
+        assert {:ok, %MishkaPay.File{purpose: :other}} = MishkaPay.upload_file(@upload)
+        assert {:ok, %MishkaPay.File{}} = MishkaPay.fetch_file("stripe", "file_1", "site-a")
+
+        {host, port} = files
+        assert_received {:host, ^host, ^port, "/v1/files"}
+        {host, port} = api
+        assert_received {:host, ^host, ^port, "/v1/files/file_1"}
+      end
+    end
+
+    test "a link goes to the API with the file and its end, and a dispute takes the file id" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:sent, conn.host, conn.request_path, URI.decode_query(body)})
+
+        case conn.request_path do
+          "/v1/file_links" ->
+            Req.Test.json(conn, %{
+              "id" => "link_1",
+              "object" => "file_link",
+              "file" => "file_1",
+              "url" => "https://files.stripe.com/links/abc",
+              "expired" => false,
+              "expires_at" => 1_790_000_000,
+              "created" => 1_780_000_000
+            })
+
+          "/v1/disputes/dp_123" ->
+            Req.Test.json(conn, %{"id" => "dp_123", "object" => "dispute", "status" => "won"})
+        end
+      end)
+
+      at = DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:second)
+      unix = Integer.to_string(DateTime.to_unix(at))
+
+      assert {:ok,
+              %MishkaPay.FileLink{
+                id: "link_1",
+                file_id: "file_1",
+                url: "https://files.stripe.com/links/abc"
+              }} = MishkaPay.file_link("stripe", "file_1", "site-a", expires_at: at)
+
+      assert_received {:sent, "api.stripe.com", "/v1/file_links",
+                       %{"file" => "file_1", "expires_at" => ^unix}}
+
+      assert {:ok, %MishkaPay.Dispute{id: "dp_123"}} =
+               MishkaPay.update_dispute(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 dispute_id: "dp_123",
+                 evidence: %{
+                   "uncategorized_file" => "file_1",
+                   "uncategorized_text" => "The buyer downloaded the file twice."
+                 },
+                 submit: false
+               })
+
+      assert_received {:sent, "api.stripe.com", "/v1/disputes/dp_123",
+                       %{
+                         "evidence[uncategorized_file]" => "file_1",
+                         "evidence[uncategorized_text]" => "The buyer downloaded the file twice."
+                       }}
     end
   end
 

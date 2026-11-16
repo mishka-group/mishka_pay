@@ -39,6 +39,8 @@ end
     `update_payment_link/2`;
   - `:catalog`: `create_product/2`, `fetch_product/2`, `update_product/2`, `list_products/2`,
     `create_price/2`, `fetch_price/2`, `update_price/2`, `list_prices/2`;
+  - `:file`: `upload_file/2` (checks the provider's types and size first), `fetch_file/2`,
+    `file_link/3`; an upload is `MishkaPay.Client`'s `multipart` body;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

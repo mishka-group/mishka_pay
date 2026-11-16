@@ -54,7 +54,23 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - `pm_card_createDispute` (card 4000 0000 0000 0259) pays and opens a dispute a moment later;
   evidence text `"winning_evidence"` wins it and `"losing_evidence"` loses it in test mode.
 - `update_dispute/1`'s `evidence` uses Stripe's own field names (`"product_description"`,
-  `"customer_email_address"`, `"uncategorized_text"`...); files need their upload id.
+  `"customer_email_address"`, `"uncategorized_text"`...). The file fields (`"receipt"`,
+  `"customer_communication"`, `"customer_signature"`, `"service_documentation"`,
+  `"shipping_documentation"`, `"duplicate_charge_documentation"`, `"refund_policy"`,
+  `"cancellation_policy"`, `"uncategorized_file"`) take only a `file_...` id; anything else is
+  `Errors.Invalid` before any request.
+
+## Files
+
+- `upload_file/1` posts to `https://files.stripe.com/v1/files` as `multipart/form-data`, not to
+  `api.stripe.com`. `config :mishka_pay, MishkaPay.Providers.Stripe, files_url: ...` points it
+  elsewhere; with only `base_url` set (stripe-mock), uploads go there too.
+- Dispute evidence is PDF, JPEG or PNG, up to 5 MB, and its first bytes must match its
+  `content_type`; anything else is `Errors.Invalid` before any request. Stripe keeps it 9 months.
+- Stripe takes all of a dispute's files together up to 4.5 MB (and 19 pages for Mastercard).
+- A file id works in one request only: upload again for another dispute.
+- `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
+  `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
 
 ## Subscription changes
 

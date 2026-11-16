@@ -30,7 +30,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.put_keys("stripe", %{secret_key: key})
-    MishkaPay.Test.stub_http(&StripeMock.forward(&1, "https://api.stripe.com"))
+    MishkaPay.Test.stub_http(&StripeMock.forward_live/1)
     %{key: key}
   end
 
@@ -375,15 +375,76 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert {:ok, %Payment{disputed: true}} = MishkaPay.fetch_payment("stripe", payment_id)
 
+    assert {:ok, %MishkaPay.File{id: file_id}} = MishkaPay.upload_file(upload("download-log.png"))
+
     assert {:ok, %MishkaPay.Dispute{has_evidence: true}} =
              MishkaPay.update_dispute(%{
                provider: "stripe",
                dispute_id: id,
-               evidence: %{"uncategorized_text" => "winning_evidence"},
+               evidence: %{
+                 "uncategorized_text" => "winning_evidence",
+                 "uncategorized_file" => file_id
+               },
                submit: false
              })
 
     assert {:ok, %MishkaPay.Dispute{id: ^id}} = MishkaPay.fetch_dispute("stripe", id)
+  end
+
+  test "a dispute evidence file is uploaded to Stripe's files host, read back and linked" do
+    assert {:ok,
+            %MishkaPay.File{
+              id: "file_" <> _ = id,
+              purpose: :dispute_evidence,
+              type: "png",
+              size: size,
+              expires_at: %DateTime{}
+            }} = MishkaPay.upload_file(upload("screenshot.png"))
+
+    # Stripe stores an image as it encodes it again, so its size is Stripe's, not the upload's.
+    assert size > 0
+
+    assert {:ok, %MishkaPay.File{id: ^id, filename: filename, purpose: :dispute_evidence}} =
+             MishkaPay.fetch_file("stripe", id)
+
+    assert filename =~ "screenshot"
+
+    at = DateTime.add(DateTime.utc_now(), 3600)
+
+    assert {:ok,
+            %MishkaPay.FileLink{
+              id: "link_" <> _,
+              file_id: ^id,
+              url: "https://files.stripe.com/links/" <> _,
+              expired: false,
+              expires_at: %DateTime{} = ends
+            }} = MishkaPay.file_link("stripe", id, nil, expires_at: at)
+
+    assert DateTime.to_unix(ends) == DateTime.to_unix(at)
+
+    assert {:error, %Errors.Rejected{status: 404}} =
+             MishkaPay.fetch_file("stripe", "file_doesnotexist")
+  end
+
+  defp upload(filename),
+    do: %{
+      provider: "stripe",
+      purpose: :dispute_evidence,
+      filename: filename,
+      content_type: "image/png",
+      content: png()
+    }
+
+  # A one-pixel PNG, made here: its header, one compressed row and its end, each chunk with its
+  # CRC.
+  defp png do
+    chunk = fn type, data ->
+      <<byte_size(data)::32, type::binary, data::binary, :erlang.crc32(type <> data)::32>>
+    end
+
+    <<0x89, "PNG\r\n", 0x1A, "\n">> <>
+      chunk.("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      chunk.("IDAT", :zlib.compress(<<0, 255, 0, 0>>)) <> chunk.("IEND", "")
   end
 
   # Stripe opens the test card's dispute a moment after the payment; ask until it is there.
