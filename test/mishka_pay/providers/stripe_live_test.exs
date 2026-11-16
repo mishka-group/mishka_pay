@@ -14,7 +14,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   use ExUnit.Case, async: false
 
-  alias MishkaPay.{Checkout, Client, Errors, Payment, Refund}
+  alias MishkaPay.{Checkout, Client, Errors, Invoice, Payment, Refund, Subscription}
   alias MishkaPay.Providers.Stripe
   alias MishkaPay.Support.StripeMock
 
@@ -160,6 +160,138 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert id == event["id"]
     assert type == event["type"]
+  end
+
+  test "a subscription checkout opens on Stripe with a trial and reads back as a subscription" do
+    assert {:ok, %Checkout{id: "cs_test_" <> _ = id, mode: :subscription, status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               mode: :subscription,
+               trial_days: 7,
+               items: [
+                 %{
+                   name: "Pro plan",
+                   amount: %{amount: "9", currency: "USD"},
+                   interval: :month,
+                   tax_code: "txcd_10103001"
+                 }
+               ],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-sub-#{System.unique_integer([:positive])}"
+             })
+
+    assert {:ok, %Checkout{id: ^id, status: :open, subscription_id: nil}} =
+             MishkaPay.fetch_checkout("stripe", id)
+  end
+
+  # A subscription the way Stripe's own tests make one: a customer on a test clock, a card on file
+  # and a monthly price. The clock is Stripe's: it moves on its own servers, so the test asks it
+  # until it says it is done, as Stripe's docs do.
+  test "a subscription renews on Stripe's test clock, then is cancelled at the period's end, resumed and cancelled now",
+       %{key: key} do
+    now = System.system_time(:second)
+
+    {200, %{"id" => clock}} =
+      stripe(key, :post, "/v1/test_helpers/test_clocks", %{"frozen_time" => now})
+
+    try do
+      {200, %{"id" => customer}} =
+        stripe(key, :post, "/v1/customers", %{
+          "test_clock" => clock,
+          "email" => "renew@example.com"
+        })
+
+      {200, %{"id" => card}} =
+        stripe(key, :post, "/v1/payment_methods/pm_card_mastercard/attach", %{
+          "customer" => customer
+        })
+
+      {200, _customer} =
+        stripe(key, :post, "/v1/customers/#{customer}", %{
+          "invoice_settings" => %{"default_payment_method" => card}
+        })
+
+      {200, %{"id" => product}} = stripe(key, :post, "/v1/products", %{"name" => "Pro plan"})
+
+      {200, %{"id" => id}} =
+        stripe(key, :post, "/v1/subscriptions", %{
+          "customer" => customer,
+          "metadata" => %{"mishka_pay_reference" => "pro-live"},
+          "items" => [
+            %{
+              "price_data" => %{
+                "currency" => "usd",
+                "product" => product,
+                "unit_amount" => 900,
+                "recurring" => %{"interval" => "month"}
+              }
+            }
+          ]
+        })
+
+      assert {:ok, %Subscription{status: :active, reference: "pro-live", items: [plan]}} =
+               MishkaPay.fetch_subscription("stripe", id)
+
+      assert {plan.name, plan.interval, plan.amount} ==
+               {"Pro plan", :month, Money.new(:USD, "9.00")}
+
+      {200, _advancing} =
+        stripe(key, :post, "/v1/test_helpers/test_clocks/#{clock}/advance", %{
+          "frozen_time" => now + 32 * 24 * 3600
+        })
+
+      :ready = clock_ready(key, clock, 60)
+
+      assert {:ok, [%Invoice{status: :paid}, %Invoice{status: :paid} | _]} =
+               MishkaPay.invoices("stripe", id)
+
+      assert {:ok, %Subscription{status: :active, cancel_at_period_end: true}} =
+               MishkaPay.cancel_subscription("stripe", id)
+
+      assert {:ok, %Subscription{cancel_at_period_end: false}} =
+               MishkaPay.resume_subscription("stripe", id)
+
+      assert {:ok, %Subscription{status: :canceled}} =
+               MishkaPay.cancel_subscription("stripe", id, nil, at: :now)
+    after
+      stripe(key, :delete, "/v1/test_helpers/test_clocks/#{clock}", %{})
+    end
+  end
+
+  defp clock_ready(_key, _clock, 0), do: :timeout
+
+  defp clock_ready(key, clock, tries) do
+    case stripe(key, :get, "/v1/test_helpers/test_clocks/#{clock}", %{}) do
+      {200, %{"status" => "ready"}} ->
+        :ready
+
+      _advancing ->
+        Process.sleep(1_000)
+        clock_ready(key, clock, tries - 1)
+    end
+  end
+
+  defp stripe(key, method, path, params) do
+    body = if method == :get, do: :params, else: :form
+
+    {:ok, %{status: status, body: answer}} =
+      Client.request(
+        Map.put(
+          %{
+            provider: "stripe",
+            method: method,
+            base_url: "https://api.stripe.com",
+            path: path,
+            auth: {:bearer, key},
+            headers: %{"stripe-version" => Stripe.version()}
+          },
+          body,
+          Stripe.form(params)
+        )
+      )
+
+    {status, answer}
   end
 
   test "a payment that does not exist is a rejection" do

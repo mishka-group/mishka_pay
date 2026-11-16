@@ -27,6 +27,11 @@ defmodule MishkaPay.Providers.Stripe do
     * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, the charge's refunds and the
       customer, in one request: the buyer, the card, the receipt, why it failed and every refund.
+    * `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
+      `list_invoices/2` read a Subscription with its customer and products, cancel it at once
+      (`DELETE`) or at the period's end (`cancel_at_period_end`), take that back, and list its
+      Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
+      on the subscription.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
 
@@ -55,7 +60,7 @@ defmodule MishkaPay.Providers.Stripe do
   use MishkaPay.Provider,
     id: "stripe",
     label: "Stripe",
-    capabilities: [:checkout, :refund, :webhook]
+    capabilities: [:checkout, :refund, :subscription, :webhook]
 
   alias MishkaPay.{Checkout, Client, Errors, Messages, Refund}
   alias MishkaPay.Providers.Stripe.Mapper
@@ -118,6 +123,70 @@ defmodule MishkaPay.Providers.Stripe do
       Mapper.refund(answer, refund)
     end
   end
+
+  @impl MishkaPay.Provider
+  def fetch_subscription(subscription_id, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, sub} <-
+           request(:get, "/v1/subscriptions/#{subscription_id}", subscription_expand(), keys) do
+      Mapper.subscription(sub)
+    end
+  end
+
+  # Now ends it at once; at the period's end it runs until the period paid for is over, and can
+  # still be taken back.
+  @impl MishkaPay.Provider
+  def cancel_subscription(subscription_id, :now, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, _canceled} <- request(:delete, "/v1/subscriptions/#{subscription_id}", %{}, keys) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  def cancel_subscription(subscription_id, :period_end, keys),
+    do: cancel_at_period_end(subscription_id, true, keys)
+
+  @impl MishkaPay.Provider
+  def resume_subscription(subscription_id, keys),
+    do: cancel_at_period_end(subscription_id, false, keys)
+
+  @impl MishkaPay.Provider
+  def list_invoices(subscription_id, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, %{"data" => invoices}} <-
+           request(
+             :get,
+             "/v1/invoices",
+             [{"subscription", subscription_id}, {"limit", "100"}],
+             keys
+           ) do
+      invoices |> Enum.map(&Mapper.invoice/1) |> all_ok()
+    end
+  end
+
+  # Every mapped item, or the first one that failed.
+  defp all_ok(results) do
+    case Enum.find(results, &match?({:error, _}, &1)) do
+      nil -> {:ok, Enum.map(results, fn {:ok, item} -> item end)}
+      error -> error
+    end
+  end
+
+  defp cancel_at_period_end(subscription_id, cancel?, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, _updated} <-
+           request(
+             :post,
+             "/v1/subscriptions/#{subscription_id}",
+             %{"cancel_at_period_end" => to_string(cancel?)},
+             keys
+           ) do
+      fetch_subscription(subscription_id, keys)
+    end
+  end
+
+  defp subscription_expand,
+    do: [{"expand[]", "customer"}, {"expand[]", "items.data.price.product"}]
 
   @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do
