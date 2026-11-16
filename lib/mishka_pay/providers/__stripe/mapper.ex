@@ -17,6 +17,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Money,
     Payment,
     PaymentLink,
+    PaymentMethod,
     Price,
     Product,
     PromotionCode,
@@ -77,9 +78,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   }
 
   @doc """
-  Params of `POST /v1/checkout/sessions`: a one-time payment, or a subscription with its trial.
-  The reference and the owner go on the payment or the subscription too, so they come back on
-  either.
+  Params of `POST /v1/checkout/sessions`: a one-time payment, a subscription with its trial, or
+  a setup that saves a payment method. The reference and the owner go on the payment, the
+  subscription or the setup too, so they come back on each.
   """
   @spec checkout_params(Checkout.t(), map()) :: map()
   def checkout_params(%Checkout{} = checkout, settings \\ %{}) do
@@ -90,7 +91,6 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
     %{
       "mode" => Atom.to_string(checkout.mode),
-      "line_items" => Enum.map(checkout.items, &line_item/1),
       "success_url" => checkout.success_url,
       "cancel_url" => checkout.cancel_url,
       "client_reference_id" => checkout.reference,
@@ -98,10 +98,31 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
     |> Map.merge(mode_data(checkout, reference))
     |> Map.merge(buyer_params(checkout.customer))
-    |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(options(checkout))
+    |> Map.merge(sale_params(checkout, settings))
+  end
+
+  # A setup sells nothing: no items or tax, only the currency that picks the payment methods
+  # offered. Managed Payments takes no setup mode, so it is off even on an account where it is on
+  # by default. Without a known customer Stripe makes one, so the card is kept.
+  defp sale_params(%Checkout{mode: :setup} = checkout, _settings) do
+    %{"currency" => checkout.currency |> Atom.to_string() |> String.downcase()}
+    |> Map.merge(managed_payments(false))
+    |> Map.merge(setup_customer(checkout))
+  end
+
+  defp sale_params(checkout, settings) do
+    %{"line_items" => Enum.map(checkout.items, &line_item/1)}
+    |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(automatic_tax(checkout, settings))
   end
+
+  defp setup_customer(%Checkout{customer: %{id: id}}) when is_binary(id), do: %{}
+
+  defp setup_customer(%Checkout{customer_creation: nil}),
+    do: %{"customer_creation" => "always"}
+
+  defp setup_customer(_chosen), do: %{}
 
   # The checkout's own choice, else the tenant's default, else the Stripe account's (not sent).
   defp automatic_tax(%{automatic_tax: choice}, _settings) when is_boolean(choice),
@@ -151,6 +172,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           "trial_period_days" => days,
           "description" => checkout.description
         })
+    }
+
+  defp mode_data(%Checkout{mode: :setup} = checkout, reference),
+    do: %{
+      "setup_intent_data" =>
+        reject_nil(%{"metadata" => reference, "description" => checkout.description})
     }
 
   defp mode_data(checkout, reference),
@@ -275,7 +302,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         provider: "stripe",
         items: sold(session["line_items"]),
         reference: session["client_reference_id"],
-        customer: buyer(get_in(session, ["customer_details", "email"]))
+        customer: buyer(session)
       )
 
     checkout(session, read_back)
@@ -290,6 +317,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         url: session["url"],
         status: Map.get(@checkout_statuses, session["status"]),
         payment_id: id_of(session["payment_intent"]),
+        setup_intent_id: id_of(session["setup_intent"]),
+        payment_method_id: id_of(expanded(session["setup_intent"])["payment_method"]),
         subscription_id: id_of(session["subscription"]),
         amount_total: money(session["amount_total"], session["currency"]),
         amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"]),
@@ -306,8 +335,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
   end
 
-  defp buyer(email) when is_binary(email), do: struct(MishkaPay.Customer, email: email)
-  defp buyer(_none), do: nil
+  # The buyer as Stripe has them after the checkout: the customer it sold to or made, and the
+  # email they typed.
+  defp buyer(session) do
+    case {id_of(session["customer"]), get_in(session, ["customer_details", "email"])} do
+      {nil, nil} -> nil
+      {id, email} -> struct(MishkaPay.Customer, id: id, email: email)
+    end
+  end
 
   defp money(minor, currency) when is_integer(minor) and is_binary(currency) do
     case from_stripe(minor, currency) do
@@ -759,17 +794,22 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     end
   end
 
-  @doc "A Stripe event (`object: \"event\"`) as a `MishkaPay.Event`, with what it is about."
+  @doc """
+  A Stripe event (`object: "event"`) as a `MishkaPay.Event`, with what it is about. A saved
+  payment method's or a setup's event is about the customer it names (a detached payment method
+  names it in `previous_attributes`), since that customer is what changes.
+  """
   @spec event(map()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
   def event(event) do
     object = object_of(event)
+    {object_type, object_id} = about(event, object)
 
     %{
       provider: "stripe",
       id: event["id"],
       type: event["type"],
-      object_id: object["id"],
-      object_type: object["object"],
+      object_id: object_id,
+      object_type: object_type,
       payment_id: payment_of(object),
       subscription_id: subscription_of(object),
       dispute_id: dispute_of(object),
@@ -780,6 +820,20 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Event.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  defp about(event, %{"object" => type} = object)
+       when type in ["payment_method", "setup_intent"] do
+    customer =
+      id_of(object["customer"]) ||
+        id_of(get_in(event, ["data", "previous_attributes", "customer"]))
+
+    case customer do
+      nil -> {type, object["id"]}
+      customer -> {"customer", customer}
+    end
+  end
+
+  defp about(_event, object), do: {object["object"], object["id"]}
 
   # A PaymentIntent is the payment; a session, charge, refund or dispute points at its own.
   defp payment_of(%{"object" => "payment_intent", "id" => id}) when is_binary(id), do: id
@@ -805,6 +859,26 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp dispute_of(_other), do: nil
 
   @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)
+
+  @doc "A Stripe PaymentMethod as a `MishkaPay.PaymentMethod`, with its card when it is one."
+  @spec payment_method(map()) :: {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+  def payment_method(method) do
+    card = method["card"] || %{}
+
+    %{
+      provider: "stripe",
+      id: method["id"],
+      customer_id: id_of(method["customer"]),
+      type: method["type"],
+      card_brand: card["brand"],
+      card_last4: card["last4"],
+      card_exp_month: card["exp_month"],
+      card_exp_year: card["exp_year"],
+      created_at: time(method["created"])
+    }
+    |> PaymentMethod.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
 
   @doc "A Stripe dispute as a `MishkaPay.Dispute`."
   @spec dispute(map()) :: {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}

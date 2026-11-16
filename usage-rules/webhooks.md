@@ -44,6 +44,7 @@ webhook endpoint to these:
 | `invoice_payment.paid` | the payment |
 | `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`, `.trial_will_end` | the subscription |
 | `customer.created`, `.updated`, `.deleted` | the customer |
+| `setup_intent.succeeded`, `.setup_failed`; `payment_method.attached`, `.detached`, `.updated`, `.automatically_updated` | the customer it names |
 
 Any other event is verified and stored, and changes nothing.
 

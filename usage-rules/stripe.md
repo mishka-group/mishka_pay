@@ -96,6 +96,23 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - A `reference` reused within 24 hours with other details is `Errors.Rejected` with code
   `"idempotency_error"` and a plain message.
 
+## Saved cards
+
+- A checkout in `mode: :setup` opens a Checkout Session in Stripe's `setup` mode with the
+  `currency` given. Without `customer: %{id: ...}` it sets `customer_creation: always`, so Stripe
+  makes a customer and the card is kept on it. It turns Managed Payments off for itself, since
+  Stripe takes no setup mode with it. The reference goes on the SetupIntent's metadata.
+- `fetch_checkout/3` expands the SetupIntent: `:setup_intent_id` (`seti_`), `:payment_method_id`
+  (`pm_`) once the buyer is done, and the customer's id under `:customer`.
+- `list_payment_methods/3` reads `GET /v1/customers/:id/payment_methods`; `customer_id:` is
+  required.
+- `set_default_payment_method/4` sets the customer's `invoice_settings.default_payment_method`,
+  which invoices and subscriptions charge.
+- `detach_payment_method/3` is for good: Stripe never attaches that payment method again.
+- Payment method ids are checked by prefix: `pm_`, or `card_` for a card saved before them.
+- `setup_intent.*` and `payment_method.*` events are about the customer they name (a detached
+  payment method names it in `previous_attributes`), so the Ash customer row syncs on each.
+
 ## Sandbox
 
 - Test cards: `4242 4242 4242 4242` (Visa), `5555 5555 5555 4444` (Mastercard), `4000 0025 0000

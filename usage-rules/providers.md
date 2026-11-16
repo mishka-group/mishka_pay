@@ -32,6 +32,9 @@ end
   - `:event_list`: `list_events/2`; optional `check_keys/1` (one read that changes nothing);
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
   - `:portal`: `portal_session/2`;
+  - `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
+    `detach_payment_method/2`, `set_default_payment_method/3`; a checkout in `mode: :setup` needs
+    it too;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
     `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,
     `update_promotion_code/2`;

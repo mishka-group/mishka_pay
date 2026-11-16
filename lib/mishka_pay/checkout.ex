@@ -14,7 +14,7 @@ defmodule MishkaPay.Checkout do
   What the caller gives:
 
     * `:provider` and `:tenant`: which provider, with whose keys (`MishkaPay.Credentials`).
-    * `:items`: one or more `MishkaPay.Price`, all in one currency.
+    * `:items`: one or more `MishkaPay.Price`, all in one currency; none in `mode: :setup`.
     * `:success_url`, `:cancel_url`: where the buyer is sent after paying or giving up; `https`, or
       `http` on `localhost`.
     * `:customer`: an optional buyer: `%{id: "cus_..."}` for a customer the provider keeps, or
@@ -33,7 +33,8 @@ defmodule MishkaPay.Checkout do
       has its own limits on how many and how long.
     * `:mode`: `:payment` (the default) sells once; `:subscription` starts a subscription, so
       every item needs a recurring price (`:interval`, or a provider price `:id`) and the provider
-      needs `:subscription`. A one-time checkout refuses a recurring price.
+      needs `:subscription`. A one-time checkout refuses a recurring price. `:setup` saves a
+      payment method without charging (below).
     * `:trial_days`: with `:subscription`, how many days the buyer uses it before the first
       charge.
     * `:discounts`: coupons or promotion codes the checkout applies by itself
@@ -41,8 +42,8 @@ defmodule MishkaPay.Checkout do
       or the other.
     * `:automatic_tax`: `true` has the provider count the tax from the buyer's address (Stripe
       Tax); each price then needs its `:tax_code`.
-    * `:customer_creation`: in a one-time checkout, `:always` makes a provider customer for the
-      buyer, `:if_required` only when the provider needs one.
+    * `:customer_creation`: in a one-time or setup checkout, `:always` makes a provider customer
+      for the buyer, `:if_required` only when the provider needs one.
     * `:locale`: the language of the provider's page (`"de"`, `"auto"`).
     * `:terms`: `true` makes the buyer accept the site's terms of service before paying (the
       terms page is set in the provider's account). It helps when a buyer later disputes a sale.
@@ -51,7 +52,8 @@ defmodule MishkaPay.Checkout do
       answers come back in `:field_values`.
     * `:card_required`: with `:subscription` and a trial, `false` starts the trial without a card;
       the provider asks for one before the first charge.
-    * `:description`: the payment's or the subscription's description at the provider.
+    * `:description`: the payment's, the subscription's or the setup's description at the
+      provider.
     * `:statement_suffix`: up to 22 letters, digits or spaces added to the line on the buyer's
       card statement, such as an order number.
     * `:submit_type`: the word on the pay button of a one-time checkout: `:pay`, `:book`,
@@ -63,6 +65,15 @@ defmodule MishkaPay.Checkout do
     * `:invoice`: in a one-time checkout, `true` makes an invoice for the payment, which the
       provider can email with the receipt; a subscription makes its own invoices.
 
+  `mode: :setup` saves a payment method for later and charges nothing; the provider needs
+  `:payment_method`. It takes no `:items`, and needs a `:currency` (`"usd"`), which decides the
+  payment methods the page offers. A buyer given by `customer: %{id: ...}` keeps the card;
+  without one the provider makes a customer for it. Read back, the checkout brings
+  `:setup_intent_id`, `:payment_method_id` and the customer's id under `:customer`. The options
+  of a sale (`:trial_days`, `:discounts`, `:allow_promotion_codes`, `:automatic_tax`,
+  `:merchant_of_record`, `:invoice`, `:submit_type`, `:statement_suffix`, `:card_required`) are
+  refused in setup mode.
+
   A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
   leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
 
@@ -72,6 +83,8 @@ defmodule MishkaPay.Checkout do
     * `:url`: the page to send the buyer to.
     * `:status`: `:open`, `:complete` or `:expired`.
     * `:payment_id`: the payment it made, once there is one (a one-time checkout).
+    * `:setup_intent_id`, `:payment_method_id`: in setup mode, the setup it made and the payment
+      method it saved, once the buyer is done (`MishkaPay.fetch_payment_method/3`).
     * `:subscription_id`: the subscription it started, once there is one.
     * `:invoice_id`: the invoice it made, with `invoice: true`, once paid.
     * `:payment_link_id`: the payment link the buyer came from (`MishkaPay.PaymentLink`).
@@ -93,7 +106,6 @@ defmodule MishkaPay.Checkout do
     field :tenant, term()
 
     field :items, list(),
-      enforce: true,
       structs: MishkaPay.Price,
       derives: "validate(not_nil_value, list)"
 
@@ -123,10 +135,12 @@ defmodule MishkaPay.Checkout do
     field :status, :open | :complete | :expired,
       derives: "validate(enum=Atom[open::complete::expired])"
 
-    field :mode, :payment | :subscription,
+    field :mode, :payment | :subscription | :setup,
       default: :payment,
-      derives: "validate(not_nil_value, enum=Atom[payment::subscription])",
+      derives: "validate(not_nil_value, enum=Atom[payment::subscription::setup])",
       validator: {__MODULE__, :mode}
+
+    field :currency, atom(), validator: {MishkaPay.Money, :currency_field}
 
     field :trial_days, pos_integer(), derives: "validate(integer, min_len=1)"
 
@@ -172,6 +186,8 @@ defmodule MishkaPay.Checkout do
     field :payment_link_id, String.t(), derives: "validate(string)"
 
     field :payment_id, String.t(), derives: "validate(string)"
+    field :setup_intent_id, String.t(), derives: "validate(string)"
+    field :payment_method_id, String.t(), derives: "validate(string)"
     field :subscription_id, String.t(), derives: "validate(string)"
     field :amount_total, Money.t(), validator: {MishkaPay.Money, :field}
     field :amount_tax, Money.t(), validator: {MishkaPay.Money, :field}
@@ -228,7 +244,7 @@ defmodule MishkaPay.Checkout do
 
   # A mode from JSON or a form comes as a string.
   @doc false
-  def mode(:mode, mode) when mode in ["payment", "subscription"],
+  def mode(:mode, mode) when mode in ["payment", "subscription", "setup"],
     do: {:ok, :mode, String.to_existing_atom(mode)}
 
   def mode(:mode, mode), do: {:ok, :mode, mode}
@@ -239,13 +255,55 @@ defmodule MishkaPay.Checkout do
   # reported on its own.
   @doc false
   def consistent(attrs) do
-    with {:ok, attrs} <- one_currency(attrs),
+    with {:ok, attrs} <- for_mode(attrs),
          {:ok, attrs} <- one_buyer(attrs),
          {:ok, attrs} <- one_discount_way(attrs),
          {:ok, attrs} <- customer_creation_mode(attrs),
          {:ok, attrs} <- invoice_mode(attrs),
          {:ok, attrs} <- options_mode(attrs),
          do: fits_mode(attrs)
+  end
+
+  # A sale has items in one currency; a setup checkout has none (an empty list), and a currency
+  # of its own.
+  defp for_mode(attrs) do
+    case {key(attrs, :mode) in [:setup, "setup"], key(attrs, :currency)} do
+      {true, _currency} ->
+        setup(attrs)
+
+      {false, nil} ->
+        one_currency(attrs)
+
+      {false, _currency} ->
+        {:error, %{field: :currency, action: :mode, message: Messages.text(:currency_setup_only)}}
+    end
+  end
+
+  @sale_only [
+    :items,
+    :trial_days,
+    :discounts,
+    :allow_promotion_codes,
+    :automatic_tax,
+    :merchant_of_record,
+    :invoice,
+    :submit_type,
+    :statement_suffix,
+    :card_required
+  ]
+
+  defp setup(attrs) do
+    case {Enum.find(@sale_only, &(given(attrs, &1) not in [nil, []])), key(attrs, :currency)} do
+      {nil, nil} ->
+        {:error, %{field: :currency, action: :mode, message: Messages.text(:setup_currency)}}
+
+      {nil, _currency} ->
+        {:ok, Map.put(attrs, :items, [])}
+
+      {field, _currency} ->
+        {:error,
+         %{field: field, action: :mode, message: Messages.text(:setup_takes_no, param: field)}}
+    end
   end
 
   # Discounts the checkout applies, or codes the buyer types: providers take one or the other.

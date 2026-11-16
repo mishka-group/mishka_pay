@@ -110,6 +110,10 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.update_customer(attrs)` | the customer after (`attrs` has `:provider` and `:id`) |
 | `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
 | `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | a `MishkaPay.Page` of `%MishkaPay.Customer{}` |
+| `MishkaPay.checkout(%{mode: :setup, currency: "usd", customer: %{id: id}, ...})` | a page that saves a card without a charge; read back, `:setup_intent_id` and `:payment_method_id` |
+| `MishkaPay.list_payment_methods(provider, tenant, customer_id: id)`, `fetch_payment_method/3` | a `MishkaPay.Page` of `%MishkaPay.PaymentMethod{}` (type, card brand, last4, expiry); one read again |
+| `MishkaPay.set_default_payment_method(provider, customer_id, payment_method_id, tenant)` | the `%MishkaPay.Customer{}` after, with its `:default_payment_method` |
+| `MishkaPay.detach_payment_method(provider, payment_method_id, tenant)` | the `%MishkaPay.PaymentMethod{}` taken off its customer for good |
 | `MishkaPay.list_events(provider, tenant, since: dt, types: [...])` | a `MishkaPay.Page` of `%MishkaPay.Event{}` |
 | `MishkaPay.replay_events(provider, tenant, since: dt)` | `%{delivered: n, failed: [{id, reason}]}`: missed events handed to the listeners again |
 | `MishkaPay.Check.run(tenant: t, webhook_url: url, domain: MyApp.Pay)` | `[{check, :ok \| {:error, reason}}]`: the site's setup |
@@ -157,6 +161,9 @@ redirect(conn, external: checkout.url)
   `nil` and answer the same keys for every tenant.
 - A **subscription** is a checkout with `mode: :subscription`, items with `interval:` and an
   optional `trial_days:`. See `usage-rules/subscriptions.md`.
+- A **saved card** is a checkout with `mode: :setup` and a `currency:`, without items. It needs a
+  provider with `:payment_method`. Name the customer with `customer: %{id: id}`, or the provider
+  makes one. Options of a sale (discounts, tax, trial, invoice) are refused in setup mode.
 - A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
 - A checkout's `customer:` names the buyer by `id` (a customer made with `create_customer/1`) or by
   `email`, never both.

@@ -58,6 +58,9 @@ defmodule MishkaPay.Provider do
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
       `search_customers/2`;
     * `:portal`: `portal_session/2`;
+    * `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
+      `detach_payment_method/2`, `set_default_payment_method/3` (a checkout in `mode: :setup`
+      saves one);
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
     * `:catalog`: products and prices (`create_product/2` and the rest);
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
@@ -90,6 +93,7 @@ defmodule MishkaPay.Provider do
     :invoice,
     :customer,
     :portal,
+    :payment_method,
     :discount,
     :catalog,
     :payment_link,
@@ -113,6 +117,8 @@ defmodule MishkaPay.Provider do
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:customer`: keeps buyers (create, read, update, list).
     * `:portal`: has a hosted page where a customer manages their own billing.
+    * `:payment_method`: keeps a customer's saved payment methods (read, list, take off, make
+      the default), and saves one with a checkout in `mode: :setup`.
     * `:discount`: keeps coupons and the promotion codes buyers type.
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
@@ -132,6 +138,7 @@ defmodule MishkaPay.Provider do
           | :invoice
           | :customer
           | :portal
+          | :payment_method
           | :discount
           | :catalog
           | :payment_link
@@ -320,6 +327,31 @@ defmodule MishkaPay.Provider do
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PortalSession.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:payment_method`. One page of a customer's saved payment methods (`:customer_id`)."
+  @callback list_payment_methods(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payment_method`. Reads one saved payment method again."
+  @callback fetch_payment_method(payment_method_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentMethod.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:payment_method`. Takes a payment method off its customer for good, and answers it
+  after, with no `:customer_id`.
+  """
+  @callback detach_payment_method(payment_method_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentMethod.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:payment_method`. Makes a saved payment method the one a customer's invoices and
+  subscriptions charge, and answers the customer after (`:default_payment_method`).
+  """
+  @callback set_default_payment_method(
+              customer_id :: String.t(),
+              payment_method_id :: String.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:discount`. Makes a coupon and answers it with its `:id`."
   @callback create_coupon(MishkaPay.Coupon.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Coupon.t()} | {:error, Splode.Error.t()}
@@ -473,6 +505,10 @@ defmodule MishkaPay.Provider do
                       update_customer: 2,
                       list_customers: 2,
                       portal_session: 2,
+                      list_payment_methods: 2,
+                      fetch_payment_method: 2,
+                      detach_payment_method: 2,
+                      set_default_payment_method: 3,
                       create_coupon: 2,
                       fetch_coupon: 2,
                       list_coupons: 2,
@@ -537,6 +573,12 @@ defmodule MishkaPay.Provider do
       search_customers: 2
     ],
     portal: [portal_session: 2],
+    payment_method: [
+      list_payment_methods: 2,
+      fetch_payment_method: 2,
+      detach_payment_method: 2,
+      set_default_payment_method: 3
+    ],
     discount: [
       create_coupon: 2,
       fetch_coupon: 2,

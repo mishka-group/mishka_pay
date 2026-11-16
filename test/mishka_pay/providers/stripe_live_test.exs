@@ -822,6 +822,68 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              })
   end
 
+  test "a saved card is listed, read, made the default and taken off, and a setup checkout opens for one",
+       %{key: key} do
+    run = System.unique_integer([:positive])
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        email: "cards-#{run}@example.com",
+        reference: "cards-live-#{run}"
+      })
+
+    {200, %{"id" => "pm_" <> _ = card}} =
+      stripe(key, :post, "/v1/payment_methods/pm_card_visa/attach", %{"customer" => customer_id})
+
+    assert {:ok,
+            %MishkaPay.Page{
+              items: [
+                %MishkaPay.PaymentMethod{
+                  id: ^card,
+                  customer_id: ^customer_id,
+                  type: "card",
+                  card_brand: "visa",
+                  card_last4: "4242"
+                }
+              ]
+            }} = MishkaPay.list_payment_methods("stripe", nil, customer_id: customer_id)
+
+    assert {:ok, %MishkaPay.PaymentMethod{id: ^card, card_exp_year: year}} =
+             MishkaPay.fetch_payment_method("stripe", card)
+
+    assert year > 2000
+
+    assert {:ok, %MishkaPay.Customer{id: ^customer_id, default_payment_method: ^card}} =
+             MishkaPay.set_default_payment_method("stripe", customer_id, card)
+
+    assert {:ok, %MishkaPay.PaymentMethod{id: ^card, customer_id: nil}} =
+             MishkaPay.detach_payment_method("stripe", card)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_payment_methods("stripe", nil, customer_id: customer_id)
+
+    setup = %{
+      provider: "stripe",
+      mode: :setup,
+      currency: "usd",
+      success_url: "https://shop.test/saved",
+      cancel_url: "https://shop.test/account",
+      reference: "card-live-#{run}"
+    }
+
+    assert {:ok, %Checkout{id: "cs_test_" <> _ = id, status: :open, url: "https://" <> _}} =
+             MishkaPay.checkout(Map.put(setup, :customer, %{id: customer_id}))
+
+    assert {:ok, %Checkout{id: ^id, status: :open, reference: "card-live-" <> _} = read} =
+             MishkaPay.fetch_checkout("stripe", id)
+
+    assert {read.customer.id, read.payment_method_id} == {customer_id, nil}
+
+    assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+             MishkaPay.checkout(%{setup | reference: "card-live-new-#{run}"})
+  end
+
   test "the setup check takes the sandbox keys" do
     assert {:keys_accepted, :ok} = List.keyfind(MishkaPay.Check.run([]), :keys_accepted, 0)
   end

@@ -828,6 +828,107 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a setup checkout saves a card without a charge, as Stripe's spec accepts" do
+      setup = %{
+        provider: "stripe",
+        tenant: "site-a",
+        mode: :setup,
+        currency: "eur",
+        success_url: "https://shop.test/saved",
+        cancel_url: "https://shop.test/account",
+        reference: "card-1",
+        description: "Card for renewals"
+      }
+
+      assert {:ok, %Checkout{id: "cs_" <> _, mode: :setup}} =
+               MishkaPay.checkout(Map.put(setup, :customer, %{id: "cus_123"}))
+
+      assert {:ok, %Checkout{id: "cs_" <> _}} = MishkaPay.checkout(setup)
+
+      assert {:ok, %Checkout{id: "cs_" <> _}} =
+               MishkaPay.fetch_checkout("stripe", "cs_123", "site-a")
+
+      {:ok, known} = Checkout.builder(Map.put(setup, :customer, %{id: "cus_123"}))
+
+      params =
+        Stripe.Mapper.checkout_params(known, %{automatic_tax: true, merchant_of_record: true})
+
+      assert {params["mode"], params["currency"], params["customer"]} ==
+               {"setup", "eur", "cus_123"}
+
+      assert params["setup_intent_data"] == %{
+               "metadata" => %{"mishka_pay_reference" => "card-1"},
+               "description" => "Card for renewals"
+             }
+
+      assert params["managed_payments"] == %{"enabled" => false}
+
+      for sold <- ~w(line_items customer_creation automatic_tax payment_intent_data) do
+        refute Map.has_key?(params, sold), sold
+      end
+
+      {:ok, new_buyer} = Checkout.builder(setup)
+      assert Stripe.Mapper.checkout_params(new_buyer)["customer_creation"] == "always"
+    end
+
+    test "saved payment methods are listed, read, made the default and taken off, as Stripe's spec answers" do
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: "pm_" <> _} | _]}} =
+               MishkaPay.list_payment_methods("stripe", "site-a",
+                 customer_id: "cus_123",
+                 limit: 3
+               )
+
+      assert {:ok, %MishkaPay.PaymentMethod{provider: "stripe", id: "pm_" <> _, type: "card"}} =
+               MishkaPay.fetch_payment_method("stripe", "pm_123", "site-a")
+
+      assert {:ok, %MishkaPay.Customer{id: "cus_" <> _}} =
+               MishkaPay.set_default_payment_method("stripe", "cus_123", "pm_123", "site-a")
+
+      assert {:ok, %MishkaPay.PaymentMethod{id: "pm_" <> _}} =
+               MishkaPay.detach_payment_method("stripe", "pm_123", "site-a")
+    end
+
+    test "a setup checkout or a payment method call that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      setup =
+        @checkout
+        |> Map.drop([:items, :customer])
+        |> Map.merge(%{mode: :setup, currency: "usd"})
+
+      for {attrs, field} <- [
+            {Map.delete(setup, :currency), :currency},
+            {Map.put(setup, :currency, "dollars"), :currency},
+            {Map.put(setup, :items, @checkout.items), :items},
+            {Map.put(setup, :trial_days, 7), :trial_days},
+            {Map.put(setup, :allow_promotion_codes, true), :allow_promotion_codes},
+            {Map.put(setup, :automatic_tax, false), :automatic_tax},
+            {Map.put(setup, :submit_type, :pay), :submit_type},
+            {Map.put(@checkout, :currency, "usd"), :currency}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.checkout(attrs)
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.list_payment_methods("stripe", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.list_payment_methods("stripe", "site-a", customer_id: "pm_1")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_method_id}]}} =
+               MishkaPay.fetch_payment_method("stripe", "pm_1/../../v1/charges", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_method_id}]}} =
+               MishkaPay.detach_payment_method("stripe", "cus_1", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.set_default_payment_method("stripe", "pm_1", "pm_1", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :payment_method_id}]}} =
+               MishkaPay.set_default_payment_method("stripe", "cus_1", "seti_1", "site-a")
+    end
+
     test "a portal session opens on one task, as Stripe's spec accepts, and a subscription task needs its subscription" do
       base = %{
         provider: "stripe",
@@ -1444,6 +1545,98 @@ defmodule MishkaPay.Providers.StripeTest do
     assert {checkout.payment_id, checkout.reference} == {"pi_1", "ebook-1"}
   end
 
+  test "a setup checkout read back brings its setup, the saved payment method and the customer" do
+    checkout =
+      Stripe.Mapper.checkout(%{
+        "id" => "cs_1",
+        "object" => "checkout.session",
+        "mode" => "setup",
+        "status" => "complete",
+        "currency" => "usd",
+        "amount_total" => nil,
+        "customer" => "cus_1",
+        "customer_details" => %{"email" => "ava@example.com"},
+        "payment_intent" => nil,
+        "client_reference_id" => "card-1",
+        "setup_intent" => %{
+          "id" => "seti_1",
+          "object" => "setup_intent",
+          "customer" => "cus_1",
+          "payment_method" => "pm_1",
+          "status" => "succeeded"
+        }
+      })
+
+    assert {checkout.setup_intent_id, checkout.payment_method_id, checkout.payment_id} ==
+             {"seti_1", "pm_1", nil}
+
+    assert {checkout.customer.id, checkout.customer.email} == {"cus_1", "ava@example.com"}
+
+    open = Stripe.Mapper.checkout(%{"id" => "cs_2", "status" => "open", "setup_intent" => nil})
+    assert {open.setup_intent_id, open.payment_method_id, open.customer} == {nil, nil, nil}
+  end
+
+  test "a payment method maps with its card, and one of another kind without" do
+    assert {:ok,
+            %MishkaPay.PaymentMethod{
+              provider: "stripe",
+              id: "pm_1",
+              customer_id: "cus_1",
+              type: "card",
+              card_brand: "visa",
+              card_last4: "4242",
+              card_exp_month: 12,
+              card_exp_year: 2034,
+              created_at: %DateTime{}
+            }} =
+             Stripe.Mapper.payment_method(%{
+               "id" => "pm_1",
+               "object" => "payment_method",
+               "type" => "card",
+               "customer" => "cus_1",
+               "created" => 1_689_682_128,
+               "card" => %{
+                 "brand" => "visa",
+                 "last4" => "4242",
+                 "exp_month" => 12,
+                 "exp_year" => 2034,
+                 "funding" => "credit"
+               }
+             })
+
+    assert {:ok, %MishkaPay.PaymentMethod{type: "sepa_debit", customer_id: nil, card_last4: nil}} =
+             Stripe.Mapper.payment_method(%{
+               "id" => "pm_2",
+               "object" => "payment_method",
+               "type" => "sepa_debit",
+               "customer" => nil,
+               "sepa_debit" => %{"last4" => "3000"}
+             })
+  end
+
+  test "a detached payment method names the customer it left, and one with no customer itself" do
+    detached = %{
+      "id" => "evt_1",
+      "type" => "payment_method.detached",
+      "data" => %{
+        "object" => %{"id" => "pm_1", "object" => "payment_method", "customer" => nil},
+        "previous_attributes" => %{"customer" => "cus_1"}
+      }
+    }
+
+    assert {:ok, %MishkaPay.Event{object_type: "customer", object_id: "cus_1"}} =
+             Stripe.Mapper.event(detached)
+
+    alone = %{
+      "id" => "evt_2",
+      "type" => "setup_intent.setup_failed",
+      "data" => %{"object" => %{"id" => "seti_1", "object" => "setup_intent", "customer" => nil}}
+    }
+
+    assert {:ok, %MishkaPay.Event{object_type: "setup_intent", object_id: "seti_1"}} =
+             Stripe.Mapper.event(alone)
+  end
+
   test "a coupon and a promotion code map from Stripe's objects, the code's coupon from its promotion" do
     assert {:ok,
             %MishkaPay.Coupon{
@@ -1533,7 +1726,9 @@ defmodule MishkaPay.Providers.StripeTest do
       "payment" => %{"type" => "payment_intent", "payment_intent" => "pi_1"}
     },
     "customer.subscription" => %{"object" => "subscription", "id" => "sub_1"},
-    "customer" => %{"object" => "customer", "id" => "cus_1"}
+    "customer" => %{"object" => "customer", "id" => "cus_1"},
+    "payment_method" => %{"object" => "payment_method", "id" => "pm_1", "customer" => "cus_1"},
+    "setup_intent" => %{"object" => "setup_intent", "id" => "seti_1", "customer" => "cus_1"}
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do

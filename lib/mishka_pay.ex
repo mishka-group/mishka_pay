@@ -7,7 +7,8 @@ defmodule MishkaPay do
   The calls a project makes to take money: open a checkout, read a payment, refund one; for a
   subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
   back and list its invoices; keep customers (create, read, update, list) and open their billing
-  portal; keep coupons and promotion codes; keep a catalog of products and prices; make payment
+  portal; save a customer's card with a checkout in `mode: :setup` and keep their saved payment
+  methods; keep coupons and promotion codes; keep a catalog of products and prices; make payment
   links that sell them; end an open
   checkout; list payments, invoices, customers, coupons, codes, products and prices page by page
   (`MishkaPay.Page`).
@@ -55,6 +56,8 @@ defmodule MishkaPay do
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
       `:customer_search`, `:portal`;
+    * saved payment methods: `:payment_method_list`, `:payment_method`,
+      `:payment_method_detach`, `:payment_method_default`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
       `:promotion_code_update`;
@@ -76,6 +79,7 @@ defmodule MishkaPay do
     Messages,
     Page,
     PaymentLink,
+    PaymentMethod,
     PortalSession,
     Price,
     Product,
@@ -219,6 +223,76 @@ defmodule MishkaPay do
         module.portal_session(session, keys)
       end
     end)
+  end
+
+  @doc """
+  One page of the payment methods customer `customer_id:` saved at `provider`
+  (`MishkaPay.Page` of `MishkaPay.PaymentMethod`), plus `limit:` and `after:`. A checkout in
+  `mode: :setup` saves one.
+  """
+  @spec list_payment_methods(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_payment_methods(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:payment_method, :payment_method_list, provider, tenant, fn module, keys ->
+      case opts[:customer_id] do
+        nil ->
+          MishkaPay.ProviderKit.invalid(
+            :customer_id,
+            Messages.text(:customer_needs, field: :customer_id)
+          )
+
+        _customer_id ->
+          module.list_payment_methods(limited(opts), keys)
+      end
+    end)
+  end
+
+  @doc "Reads saved payment method `payment_method_id` again from `provider`, with its card."
+  @spec fetch_payment_method(String.t(), String.t(), term()) ::
+          {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+  def fetch_payment_method(provider, payment_method_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_method_id) do
+    capable(
+      :payment_method,
+      :payment_method,
+      provider,
+      tenant,
+      & &1.fetch_payment_method(payment_method_id, &2)
+    )
+  end
+
+  @doc """
+  Takes saved payment method `payment_method_id` off its customer at `provider`, for good: it
+  can no longer be charged or saved again. Answers it after, with no `:customer_id`.
+  """
+  @spec detach_payment_method(String.t(), String.t(), term()) ::
+          {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+  def detach_payment_method(provider, payment_method_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_method_id) do
+    capable(
+      :payment_method,
+      :payment_method_detach,
+      provider,
+      tenant,
+      & &1.detach_payment_method(payment_method_id, &2)
+    )
+  end
+
+  @doc """
+  Makes saved payment method `payment_method_id` the one customer `customer_id`'s invoices and
+  subscriptions charge, and answers the customer after, with its `:default_payment_method`.
+  """
+  @spec set_default_payment_method(String.t(), String.t(), String.t(), term()) ::
+          {:ok, Customer.t()} | {:error, Splode.Error.t()}
+  def set_default_payment_method(provider, customer_id, payment_method_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(customer_id) and is_binary(payment_method_id) do
+    capable(
+      :payment_method,
+      :payment_method_default,
+      provider,
+      tenant,
+      & &1.set_default_payment_method(customer_id, payment_method_id, &2)
+    )
   end
 
   @doc """
@@ -872,6 +946,11 @@ defmodule MishkaPay do
   # A subscription checkout needs a provider that runs subscriptions.
   defp mode_capable(%Checkout{mode: :subscription, provider: provider}) do
     with {:ok, _module} <- Provider.capable(provider, :subscription), do: :ok
+  end
+
+  # A setup checkout saves a payment method, so the provider keeps them.
+  defp mode_capable(%Checkout{mode: :setup, provider: provider}) do
+    with {:ok, _module} <- Provider.capable(provider, :payment_method), do: :ok
   end
 
   defp mode_capable(_one_time), do: :ok
