@@ -123,7 +123,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "billing_address_collection" =>
         checkout.billing_address && to_string(checkout.billing_address),
       "tax_id_collection" => enabled(checkout.tax_id_collection),
-      "invoice_creation" => enabled(checkout.invoice)
+      "invoice_creation" => enabled(checkout.invoice),
+      "consent_collection" => checkout.terms && %{"terms_of_service" => "required"},
+      "phone_number_collection" => enabled(checkout.phone),
+      "custom_fields" => custom_fields(checkout.fields),
+      "submit_type" => checkout.submit_type && Atom.to_string(checkout.submit_type),
+      "payment_method_collection" => (checkout.card_required == false && "if_required") || nil
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -138,12 +143,66 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
-  defp mode_data(%Checkout{mode: :subscription, trial_days: days}, reference),
+  defp mode_data(%Checkout{mode: :subscription, trial_days: days} = checkout, reference),
     do: %{
-      "subscription_data" => %{"metadata" => reference, "trial_period_days" => days}
+      "subscription_data" =>
+        reject_nil(%{
+          "metadata" => reference,
+          "trial_period_days" => days,
+          "description" => checkout.description
+        })
     }
 
-  defp mode_data(_payment, reference), do: %{"payment_intent_data" => %{"metadata" => reference}}
+  defp mode_data(checkout, reference),
+    do: %{
+      "payment_intent_data" =>
+        reject_nil(%{
+          "metadata" => reference,
+          "description" => checkout.description,
+          "statement_descriptor_suffix" => checkout.statement_suffix
+        })
+    }
+
+  defp reject_nil(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
+
+  defp custom_fields(nil), do: nil
+  defp custom_fields([]), do: nil
+
+  defp custom_fields(fields) do
+    for field <- fields do
+      reject_nil(%{
+        "key" => field.key,
+        "label" => %{"type" => "custom", "custom" => field.label},
+        "type" => Atom.to_string(field.type),
+        "optional" => field.optional,
+        "dropdown" =>
+          (field.type == :dropdown &&
+             %{
+               "options" =>
+                 Enum.map(
+                   field.options,
+                   &%{"value" => opt(&1, :value), "label" => opt(&1, :label)}
+                 )
+             }) ||
+            nil
+      })
+    end
+  end
+
+  defp opt(option, name), do: Map.get(option, name) || Map.get(option, Atom.to_string(name))
+
+  # The buyer's answers: each field's key to its value, whatever its type.
+  defp field_values(fields) when is_list(fields) do
+    Map.new(fields, fn field ->
+      value =
+        get_in(field, ["text", "value"]) || get_in(field, ["numeric", "value"]) ||
+          get_in(field, ["dropdown", "value"])
+
+      {field["key"], value}
+    end)
+  end
+
+  defp field_values(_none), do: nil
 
   # The checkout's own choice, else the tenant's setting, else nil: the Stripe account's default.
   defp merchant_of_record(%{merchant_of_record: choice}, _settings)
@@ -186,6 +245,28 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp buyer_params(%{email: email}) when is_binary(email), do: %{"customer_email" => email}
   defp buyer_params(_none), do: %{}
 
+  @doc "The `flow_data` of a portal session: the one task it opens on, then back to the site."
+  @spec portal_flow(MishkaPay.PortalSession.t()) :: map() | nil
+  def portal_flow(%{flow: nil}), do: nil
+
+  def portal_flow(%{flow: flow} = session) do
+    type = Atom.to_string(flow)
+
+    %{
+      "type" => type,
+      "after_completion" => %{
+        "type" => "redirect",
+        "redirect" => %{"return_url" => session.return_url}
+      }
+    }
+    |> Map.merge(flow_target(flow, session.subscription_id))
+  end
+
+  defp flow_target(:payment_method_update, _subscription_id), do: %{}
+
+  defp flow_target(flow, subscription_id),
+    do: %{Atom.to_string(flow) => %{"subscription" => subscription_id}}
+
   @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
   @spec checkout(map()) :: Checkout.t()
   def checkout(session) do
@@ -216,7 +297,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           money(get_in(session, ["total_details", "amount_discount"]), session["currency"]),
         expires_at: time(session["expires_at"]),
         invoice_id: id_of(session["invoice"]),
-        payment_link_id: id_of(session["payment_link"])
+        payment_link_id: id_of(session["payment_link"]),
+        phone_number: get_in(session, ["customer_details", "phone"]),
+        field_values: field_values(session["custom_fields"]),
+        terms_accepted:
+          (is_map(session["consent"]) && session["consent"]["terms_of_service"] == "accepted") ||
+            nil
     }
   end
 

@@ -103,6 +103,7 @@ defmodule MishkaPay.Providers.Stripe do
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
+  @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
   @three_decimal ~w(BHD JOD KWD OMR TND)a
 
@@ -567,9 +568,53 @@ defmodule MishkaPay.Providers.Stripe do
   def list_customers(opts, keys),
     do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
 
+  # Stripe's search language: each filter quoted, a quote inside escaped; the reference is kept
+  # in the customer's metadata. Search pages on its own `next_page` cursor.
+  @impl MishkaPay.Provider
+  def search_customers(opts, keys) do
+    clauses =
+      for {field, key} <- [email: "email", name: "name", reference: "metadata['#{@reference}']"],
+          value = opts[field],
+          is_binary(value),
+          do: "#{key}:'#{String.replace(value, ~S('), ~S(\'))}'"
+
+    case clauses do
+      [] ->
+        invalid(:query, Messages.text(:search_needs))
+
+      clauses ->
+        params =
+          [query: Enum.join(clauses, " AND "), limit: opts[:limit], page: opts[:after]]
+          |> Enum.reject(fn {_name, value} -> is_nil(value) end)
+          |> Enum.map(fn {name, value} -> {Atom.to_string(name), to_string(value)} end)
+
+        with {:ok, %{"data" => data} = answer} <-
+               request(:get, "/v1/customers/search", params, keys),
+             {:ok, items} <- data |> Enum.map(&Mapper.customer/1) |> all_ok() do
+          next = answer["has_more"] == true && answer["next_page"]
+          {:ok, struct(Page, items: items, has_more: is_binary(next), next: next || nil)}
+        end
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def upcoming_invoice(subscription_id, keys) do
+    with :ok <- stripe_id(subscription_id, "sub_", :subscription_id),
+         {:ok, invoice} <-
+           request(
+             :post,
+             "/v1/invoices/create_preview",
+             %{"subscription" => subscription_id},
+             keys
+           ) do
+      Mapper.invoice(invoice)
+    end
+  end
+
   @impl MishkaPay.Provider
   def portal_session(%MishkaPay.PortalSession{} = session, keys) do
     with :ok <- stripe_id(session.customer_id, "cus_", :customer_id),
+         :ok <- maybe_id(session.subscription_id, "sub_", :subscription_id),
          {:ok, answer} <-
            request(
              :post,
@@ -577,7 +622,8 @@ defmodule MishkaPay.Providers.Stripe do
              %{
                "customer" => session.customer_id,
                "return_url" => session.return_url,
-               "configuration" => session.configuration
+               "configuration" => session.configuration,
+               "flow_data" => Mapper.portal_flow(session)
              },
              keys
            ) do

@@ -247,6 +247,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       assert {plan.name, plan.interval, plan.amount} ==
                {"Pro plan", :month, Money.new(:USD, "9.00")}
 
+      assert {:ok, %Invoice{total: next_total}} = MishkaPay.upcoming_invoice("stripe", id)
+      assert Money.equal?(next_total, Money.new(:USD, "9.00"))
+
       {:ok, %TestClock{}} = TestClock.advance(nil, clock, DateTime.add(now, 32, :day))
       :ready = clock_ready(clock, 60)
 
@@ -578,6 +581,10 @@ defmodule MishkaPay.Providers.StripeLiveTest do
         reference: "bill-#{run}"
       })
 
+    # Stripe's search index takes up to a minute; an older customer is found at once.
+    assert {:ok, %MishkaPay.Page{}} =
+             MishkaPay.search_customers("stripe", nil, email: "bill-#{run}@example.com")
+
     {:ok, %MishkaPay.Product{id: product_id}} =
       MishkaPay.create_product(%{provider: "stripe", name: "Live bill #{run}"})
 
@@ -776,6 +783,43 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              })
 
     MishkaPay.archive_price("stripe", price_id)
+  end
+
+  test "a checkout asks for a phone and questions, with a description and statement suffix, and a trial may start without a card" do
+    assert {:ok, %Checkout{id: id, status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Workshop seat", amount: %{amount: "30", currency: "USD"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               phone: true,
+               description: "Workshop order",
+               statement_suffix: "WORKSHOP",
+               submit_type: :book,
+               fields: [
+                 %{key: "certname", label: "Name on the certificate"},
+                 %{
+                   key: "seat",
+                   label: "Seat",
+                   type: :dropdown,
+                   options: [%{value: "front", label: "Front"}, %{value: "back", label: "Back"}]
+                 }
+               ]
+             })
+
+    assert {:ok, %Checkout{field_values: %{"certname" => nil, "seat" => nil}}} =
+             MishkaPay.fetch_checkout("stripe", id)
+
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               mode: :subscription,
+               items: [%{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}],
+               trial_days: 7,
+               card_required: false,
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/plans"
+             })
   end
 
   test "the setup check takes the sandbox keys" do

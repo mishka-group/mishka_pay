@@ -225,6 +225,12 @@ defmodule MishkaPay.Support.Acme do
   def update_customer(%Customer{} = customer, %{secret_key: "sk_acme"}), do: {:ok, customer}
 
   @impl MishkaPay.Provider
+  def search_customers(opts, keys), do: list_customers(opts, keys)
+
+  @impl MishkaPay.Provider
+  def upcoming_invoice(_subscription_id, keys), do: fetch_invoice("acme_in_next", keys)
+
+  @impl MishkaPay.Provider
   def list_customers(opts, %{secret_key: "sk_acme"}) do
     {:ok, customer} = fetch_customer("acme_cus_1", %{secret_key: "sk_acme"})
     page(List.duplicate(customer, 3), opts)

@@ -50,10 +50,11 @@ defmodule MishkaPay do
       `:payment_list`, `:refund`, `:refund_read`, `:refund_list`;
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
-      `:subscription_unpause`, `:invoices`, `:invoice`;
+      `:subscription_unpause`, `:invoices`, `:invoice`, `:invoice_upcoming`;
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
-    * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`, `:portal`;
+    * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
+      `:customer_search`, `:portal`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
       `:promotion_code_update`;
@@ -554,6 +555,31 @@ defmodule MishkaPay do
           MishkaPay.ProviderKit.invalid(field, Messages.text(:customer_needs, field: field))
       end
     end
+  end
+
+  @doc """
+  One page of `provider`'s customers that match every filter given (`MishkaPay.Page`): `email:`,
+  `name:`, `reference:` (the host's own id given when the customer was made), plus `limit:` and
+  `after:`. A customer just made may take a minute to be found.
+  """
+  @spec search_customers(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def search_customers(provider, tenant \\ nil, opts) when is_binary(provider) do
+    capable(
+      :customer,
+      :customer_search,
+      provider,
+      tenant,
+      & &1.search_customers(limited(opts), &2)
+    )
+  end
+
+  @doc "The bill subscription `subscription_id` will make next, as the provider counts it now."
+  @spec upcoming_invoice(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
+  def upcoming_invoice(provider, subscription_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(subscription_id) do
+    subscription(:invoice_upcoming, provider, tenant, & &1.upcoming_invoice(subscription_id, &2))
   end
 
   @doc """

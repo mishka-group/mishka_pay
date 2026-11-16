@@ -738,6 +738,131 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.finalize_invoice("stripe", "cus_1")
     end
 
+    test "customers are searched by email, name and reference, and a subscription's next bill is read" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        send(test_pid, {:query, conn.request_path, conn.query_params})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{} | _]}} =
+               MishkaPay.search_customers("stripe", "site-a",
+                 email: "ava@example.com",
+                 reference: "user's-1"
+               )
+
+      assert_received {:query, "/v1/customers/search", %{"query" => query}}
+
+      assert query ==
+               ~S(email:'ava@example.com' AND metadata['mishka_pay_reference']:'user\'s-1')
+
+      assert {:ok, %Invoice{}} = MishkaPay.upcoming_invoice("stripe", "sub_123", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :query}]}} =
+               MishkaPay.search_customers("stripe", "site-a", limit: 5)
+    end
+
+    test "a checkout with terms, a phone, questions, a description and a statement suffix goes as Stripe's spec accepts" do
+      checkout =
+        Map.merge(@checkout, %{
+          terms: true,
+          phone: true,
+          description: "Order 42",
+          statement_suffix: "ORDER 42",
+          submit_type: :book,
+          fields: [
+            %{key: "certname", label: "Name on the certificate"},
+            %{
+              key: "seat",
+              label: "Seat",
+              type: :dropdown,
+              options: [%{value: "a", label: "Front"}, %{value: "b", label: "Back"}],
+              optional: true
+            }
+          ]
+        })
+
+      assert {:ok, %Checkout{id: "cs_" <> _}} = MishkaPay.checkout(checkout)
+
+      params = Stripe.Mapper.checkout_params(elem(Checkout.builder(checkout), 1))
+      assert params["consent_collection"] == %{"terms_of_service" => "required"}
+      assert params["phone_number_collection"] == %{"enabled" => true}
+      assert params["submit_type"] == "book"
+
+      assert params["payment_intent_data"]["statement_descriptor_suffix"] == "ORDER 42"
+
+      assert [%{"type" => "text"}, %{"type" => "dropdown", "dropdown" => %{"options" => [_, _]}}] =
+               params["custom_fields"]
+
+      trial =
+        Map.merge(@checkout, %{
+          mode: :subscription,
+          items: [%{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}],
+          trial_days: 14,
+          card_required: false
+        })
+
+      assert {:ok, %Checkout{}} = MishkaPay.checkout(trial)
+      params = Stripe.Mapper.checkout_params(elem(Checkout.builder(trial), 1))
+      assert params["payment_method_collection"] == "if_required"
+    end
+
+    test "checkout options that do not fit are refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      field = %{key: "a", label: "A"}
+
+      for {changes, field_name} <- [
+            {%{fields: [field, %{field | key: "b"}, %{field | key: "c"}, %{field | key: "d"}]},
+             :fields},
+            {%{fields: [%{key: "bad key", label: "A"}]}, :fields},
+            {%{fields: [%{key: "a", label: "A", type: :dropdown}]}, :fields},
+            {%{card_required: false}, :card_required},
+            {%{statement_suffix: "no-dashes"}, :statement_suffix}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} =
+                 MishkaPay.checkout(Map.merge(@checkout, changes))
+
+        assert Enum.any?(errors, &(&1.field == field_name)), inspect({changes, errors})
+      end
+    end
+
+    test "a portal session opens on one task, as Stripe's spec accepts, and a subscription task needs its subscription" do
+      base = %{
+        provider: "stripe",
+        tenant: "site-a",
+        customer_id: "cus_123",
+        return_url: "https://shop.test/account"
+      }
+
+      for flow <- [:subscription_cancel, :subscription_update] do
+        assert {:ok, %MishkaPay.PortalSession{url: "https://" <> _}} =
+                 MishkaPay.portal_session(
+                   Map.merge(base, %{flow: flow, subscription_id: "sub_123"})
+                 )
+      end
+
+      assert {:ok, %MishkaPay.PortalSession{}} =
+               MishkaPay.portal_session(Map.put(base, :flow, :payment_method_update))
+
+      {:ok, session} =
+        MishkaPay.PortalSession.builder(
+          Map.merge(base, %{flow: :subscription_cancel, subscription_id: "sub_1"})
+        )
+
+      assert %{
+               "type" => "subscription_cancel",
+               "subscription_cancel" => %{"subscription" => "sub_1"},
+               "after_completion" => %{
+                 "redirect" => %{"return_url" => "https://shop.test/account"}
+               }
+             } = Stripe.Mapper.portal_flow(session)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
+               MishkaPay.portal_session(Map.put(base, :flow, :subscription_cancel))
+    end
+
     test "a refund is read again and listed by payment, as Stripe's spec answers" do
       assert {:ok, %Refund{provider: "stripe", id: "re_" <> _, amount: %Elixir.Money{}}} =
                MishkaPay.fetch_refund("stripe", "re_123", "site-a")
@@ -1299,10 +1424,19 @@ defmodule MishkaPay.Providers.StripeTest do
         "currency" => "usd",
         "amount_total" => 2139,
         "total_details" => %{"amount_tax" => 140},
-        "customer_details" => %{"email" => "ava@example.com"},
+        "customer_details" => %{"email" => "ava@example.com", "phone" => "+31612345678"},
         "payment_intent" => "pi_1",
-        "client_reference_id" => "ebook-1"
+        "client_reference_id" => "ebook-1",
+        "consent" => %{"terms_of_service" => "accepted"},
+        "custom_fields" => [
+          %{"key" => "certname", "type" => "text", "text" => %{"value" => "Ava Martin"}},
+          %{"key" => "seat", "type" => "dropdown", "dropdown" => %{"value" => "b"}}
+        ]
       })
+
+    assert checkout.phone_number == "+31612345678"
+    assert checkout.terms_accepted
+    assert checkout.field_values == %{"certname" => "Ava Martin", "seat" => "b"}
 
     assert checkout.amount_total == Money.new(:USD, "21.39")
     assert checkout.amount_tax == Money.new(:USD, "1.40")

@@ -78,6 +78,9 @@ defmodule MishkaPay.Messages do
           | :stripe_whole
           | :due_sent_only
           | :stripe_event_types
+          | :search_needs
+          | :fields_three
+          | :dropdown_options
           | :declined
           | :declined_reason
           | :missing_keys
@@ -395,6 +398,19 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
       )
+
+  defp msgid(:fields_three),
+    do: dgettext_noop("mishka_pay", "A checkout asks at most three questions")
+
+  defp msgid(:dropdown_options),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A dropdown needs its options, each a value and a label; other fields take none"
+      )
+
+  defp msgid(:search_needs),
+    do: dgettext_noop("mishka_pay", "Search needs an email, a name or a reference")
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")

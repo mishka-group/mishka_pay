@@ -8,7 +8,8 @@ defmodule MishkaPay.Checkout do
   guarded_struct; `MishkaPay.checkout/1` builds it from a map and hands it to the provider.
 
   Read back with `MishkaPay.fetch_checkout/3`, `:items` are what the buyer bought, with their
-  provider price and product ids.
+  provider price and product ids; `:phone_number`, `:field_values` (each field's key to the
+  buyer's answer) and `:terms_accepted` are what the buyer gave.
 
   What the caller gives:
 
@@ -43,6 +44,18 @@ defmodule MishkaPay.Checkout do
     * `:customer_creation`: in a one-time checkout, `:always` makes a provider customer for the
       buyer, `:if_required` only when the provider needs one.
     * `:locale`: the language of the provider's page (`"de"`, `"auto"`).
+    * `:terms`: `true` makes the buyer accept the site's terms of service before paying (the
+      terms page is set in the provider's account). It helps when a buyer later disputes a sale.
+    * `:phone`: `true` asks the buyer for a phone number.
+    * `:fields`: up to three questions the page asks, each a `MishkaPay.CheckoutField`; the
+      answers come back in `:field_values`.
+    * `:card_required`: with `:subscription` and a trial, `false` starts the trial without a card;
+      the provider asks for one before the first charge.
+    * `:description`: the payment's or the subscription's description at the provider.
+    * `:statement_suffix`: up to 22 letters, digits or spaces added to the line on the buyer's
+      card statement, such as an order number.
+    * `:submit_type`: the word on the pay button of a one-time checkout: `:pay`, `:book`,
+      `:donate` or `:auto`.
     * `:expires_at`: when the checkout stops taking payment; the provider has its own limits
       (Stripe: 30 minutes to 24 hours from now). `MishkaPay.expire_checkout/3` ends it at once.
     * `:billing_address`: `:auto` (only when needed) or `:required`.
@@ -69,6 +82,7 @@ defmodule MishkaPay.Checkout do
 
   use GuardedStruct
 
+  alias MishkaPay.Helpers.Choice
   alias MishkaPay.Messages
 
   guardedstruct authorized_fields: true, main_validator: {__MODULE__, :consistent} do
@@ -135,6 +149,24 @@ defmodule MishkaPay.Checkout do
       validator: {__MODULE__, :billing_address}
 
     field :tax_id_collection, boolean(), derives: "validate(boolean)"
+    field :terms, boolean(), derives: "validate(boolean)"
+    field :phone, boolean(), derives: "validate(boolean)"
+    field :fields, list(), structs: MishkaPay.CheckoutField, derives: "validate(list)"
+    field :card_required, boolean(), derives: "validate(boolean)"
+
+    field :description, String.t(),
+      derives: "sanitize(trim) validate(string, not_empty, max_len=500)"
+
+    field :statement_suffix, String.t(),
+      derives: "sanitize(trim) validate(string, not_empty, max_len=22, regex=^[A-Za-z0-9 ]+$)"
+
+    field :submit_type, :auto | :pay | :book | :donate,
+      derives: "validate(enum=Atom[auto::pay::book::donate])",
+      validator: {__MODULE__, :submit_type}
+
+    field :phone_number, String.t(), derives: "validate(string)"
+    field :field_values, map(), derives: "validate(map)"
+    field :terms_accepted, boolean(), derives: "validate(boolean)"
     field :invoice, boolean(), derives: "validate(boolean)"
     field :invoice_id, String.t(), derives: "validate(string)"
     field :payment_link_id, String.t(), derives: "validate(string)"
@@ -149,11 +181,15 @@ defmodule MishkaPay.Checkout do
   # Choices from JSON or a form come as strings.
   @doc false
   def customer_creation(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(always if_required))
+    do: Choice.atom(field, value, ~w(always if_required))
+
+  @doc false
+  def submit_type(field, value),
+    do: Choice.atom(field, value, ~w(auto pay book donate))
 
   @doc false
   def billing_address(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(auto required))
+    do: Choice.atom(field, value, ~w(auto required))
 
   # A checkout that expires is one that has not expired yet.
   @doc false
@@ -208,6 +244,7 @@ defmodule MishkaPay.Checkout do
          {:ok, attrs} <- one_discount_way(attrs),
          {:ok, attrs} <- customer_creation_mode(attrs),
          {:ok, attrs} <- invoice_mode(attrs),
+         {:ok, attrs} <- options_mode(attrs),
          do: fits_mode(attrs)
   end
 
@@ -219,6 +256,36 @@ defmodule MishkaPay.Checkout do
          %{field: :discounts, action: :discounts, message: Messages.text(:discounts_or_codes)}}
 
       _one_way ->
+        {:ok, attrs}
+    end
+  end
+
+  # At most three questions; a trial without a card is a subscription's, the button's word a
+  # one-time checkout's.
+  defp options_mode(attrs) do
+    subscription? = key(attrs, :mode) in [:subscription, "subscription"]
+
+    cond do
+      Enum.count_until(List.wrap(key(attrs, :fields)), 4) > 3 ->
+        {:error, %{field: :fields, action: :fields, message: Messages.text(:fields_three)}}
+
+      given(attrs, :card_required) == false and not subscription? ->
+        {:error,
+         %{
+           field: :card_required,
+           action: :mode,
+           message: Messages.text(:recurring_only, param: "card_required")
+         }}
+
+      not is_nil(key(attrs, :submit_type)) and subscription? ->
+        {:error,
+         %{
+           field: :submit_type,
+           action: :mode,
+           message: Messages.text(:one_time_only, param: "submit_type")
+         }}
+
+      true ->
         {:ok, attrs}
     end
   end
@@ -291,6 +358,14 @@ defmodule MishkaPay.Checkout do
 
   defp key(%{} = item, name), do: Map.get(item, name) || Map.get(item, Atom.to_string(name))
   defp key(_not_a_map, _name), do: nil
+
+  # A value as given, `false` too, which `key/2` reads as absent.
+  defp given(%{} = attrs, name) do
+    case Map.fetch(attrs, name) do
+      {:ok, value} -> value
+      :error -> Map.get(attrs, Atom.to_string(name))
+    end
+  end
 
   defp one_currency(%{items: []}),
     do: {:error, %{field: :items, action: :items, message: Messages.text(:items_empty)}}

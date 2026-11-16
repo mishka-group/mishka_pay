@@ -49,13 +49,14 @@ defmodule MishkaPay.Provider do
     * `:refund`: `refund/2`;
     * `:refund_read`: `fetch_refund/2`, `list_refunds/2`;
     * `:subscription`: `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2`,
-      `list_invoices/2` and `fetch_invoice/2` (a subscription starts with a checkout in
+      `list_invoices/2`, `fetch_invoice/2` and `upcoming_invoice/2` (a subscription starts with a checkout in
       `mode: :subscription`);
     * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
       `pause_collection/3`, `resume_collection/2`;
     * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
-    * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
+    * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
+      `search_customers/2`;
     * `:portal`: `portal_session/2`;
     * `:discount`: coupons and promotion codes (`create_coupon/2` and the rest);
     * `:catalog`: products and prices (`create_product/2` and the rest);
@@ -221,6 +222,17 @@ defmodule MishkaPay.Provider do
   """
   @callback list_events(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:customer`. One page of customers that match every filter given: `:email`, `:name`,
+  `:reference` (the host's own id kept on the customer).
+  """
+  @callback search_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription`. The bill a subscription will make next, as the provider counts it now."
+  @callback upcoming_invoice(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:subscription`. Reads one subscription again from the provider."
   @callback fetch_subscription(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -436,6 +448,8 @@ defmodule MishkaPay.Provider do
                       expire_checkout: 2,
                       refund: 2,
                       fetch_refund: 2,
+                      search_customers: 2,
+                      upcoming_invoice: 2,
                       list_events: 2,
                       create_invoice: 2,
                       finalize_invoice: 2,
@@ -497,7 +511,8 @@ defmodule MishkaPay.Provider do
       cancel_subscription: 3,
       resume_subscription: 2,
       list_invoices: 2,
-      fetch_invoice: 2
+      fetch_invoice: 2,
+      upcoming_invoice: 2
     ],
     subscription_change: [
       change_subscription: 2,
@@ -514,7 +529,13 @@ defmodule MishkaPay.Provider do
       mark_invoice_uncollectible: 2,
       delete_invoice: 2
     ],
-    customer: [create_customer: 2, fetch_customer: 2, update_customer: 2, list_customers: 2],
+    customer: [
+      create_customer: 2,
+      fetch_customer: 2,
+      update_customer: 2,
+      list_customers: 2,
+      search_customers: 2
+    ],
     portal: [portal_session: 2],
     discount: [
       create_coupon: 2,
