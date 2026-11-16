@@ -53,7 +53,7 @@ defmodule ShopWeb.ShopLive do
   @statuses ~w(paid partially_refunded refunded pending requires_action failed canceled)
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     if connected?(socket) do
       # Mishka Pay's own PubSub plugin (Shop.Pay.Broadcast): this site's changes only.
       for kind <- MishkaPay.PubSub.kinds(),
@@ -69,6 +69,7 @@ defmodule ShopWeb.ShopLive do
     {:ok,
      socket
      |> assign(page_title: "Mishka Pay demo shop", tenant: @tenant, statuses: @statuses)
+     |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
      |> assign(
@@ -296,6 +297,7 @@ defmodule ShopWeb.ShopLive do
 
   def handle_info({:mishka_pay, :subscription, %{record: record}}, socket) do
     send_update(ShopWeb.SubscriptionsComponent, id: "subscriptions", changed: record)
+    send_update(ShopWeb.AccessComponent, id: "access", changed: record)
     {:noreply, socket}
   end
 
@@ -435,6 +437,8 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.TestClocksComponent} id="clocks" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.AccessComponent} id="access" tenant={@tenant} member={@member} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
@@ -546,6 +550,17 @@ defmodule ShopWeb.ShopLive do
     case MishkaPay.fetch_checkout(provider_of(id), id, @tenant) do
       {:ok, checkout} -> assign(socket, checkout_read: checkout)
       {:error, _gone} -> socket
+    end
+  end
+
+  # The member signed in by email (ShopWeb.MemberController); a member gone from the table is
+  # nobody.
+  defp member(nil), do: nil
+
+  defp member(id) do
+    case Ash.get(Shop.Accounts.Member, id, authorize?: false) do
+      {:ok, member} -> member
+      {:error, _gone} -> nil
     end
   end
 
