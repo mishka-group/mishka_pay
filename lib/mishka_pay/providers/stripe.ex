@@ -289,7 +289,9 @@ defmodule MishkaPay.Providers.Stripe do
   defp bad(reason),
     do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
-  defp request(method, path, params, keys, opts \\ []) do
+  # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
+  @doc false
+  def request(method, path, params, keys, opts \\ []) do
     base = %{
       provider: "stripe",
       method: method,
