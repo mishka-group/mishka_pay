@@ -42,19 +42,24 @@ defmodule MishkaPay do
 
   ## Telemetry
 
-  Each call is a span, `[:mishka_pay, operation, :start | :stop]`, the operation being
-  `:checkout`, `:checkout_read`, `:payment`, `:refund`, `:subscription`, `:subscription_cancel`,
-  `:subscription_resume`, `:invoices`, `:customer_create`, `:customer_update`, `:customer`,
-  `:customer_list`, `:portal`, `:checkout_expire`, `:coupon_create`, `:coupon`, `:coupon_list`,
-  `:coupon_delete`, `:promotion_code_create`, `:promotion_code`, `:promotion_code_list` or
-  `:promotion_code_update`, `:payment_list`, `:invoices`, `:product_create`, `:product`,
-  `:product_update`, `:product_list`, `:price_create`, `:price`, `:price_update`, `:price_list`, `:payment_link_create`, `:payment_link`, `:payment_link_update`,
-  `:payment_link_list`, `:invoice`, `:subscription_change`, `:subscription_preview`,
-  `:subscription_pause`, `:subscription_unpause`, `:dispute`, `:dispute_list`, `:dispute_update`
-  or `:dispute_accept`,
-  with
-  `:provider` and `:tenant`, and on `:stop` the `:outcome`: `:ok` or the error's class (`:invalid`,
-  `:provider`, `:unknown`). Never a key or a buyer's details.
+  Each call is a span, `[:mishka_pay, operation, :start | :stop]`, with `:provider` and `:tenant`
+  in its metadata and, on `:stop`, the `:outcome`: `:ok` or the error's class (`:invalid`,
+  `:provider`, `:unknown`). Never a key or a buyer's details. The operations:
+
+    * checkouts and payments: `:checkout`, `:checkout_read`, `:checkout_expire`, `:payment`,
+      `:payment_list`, `:refund`;
+    * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
+      `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
+      `:subscription_unpause`, `:invoices`, `:invoice`;
+    * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`, `:portal`;
+    * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
+      `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
+      `:promotion_code_update`;
+    * the catalog: `:product_create`, `:product`, `:product_update`, `:product_list`,
+      `:price_create`, `:price`, `:price_update`, `:price_list`;
+    * payment links: `:payment_link_create`, `:payment_link`, `:payment_link_update`,
+      `:payment_link_list`;
+    * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`.
   """
 
   alias MishkaPay.{
