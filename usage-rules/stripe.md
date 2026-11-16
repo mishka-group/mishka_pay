@@ -71,6 +71,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reached, the link turns itself off and shows `inactive_message`.
 - `invoice: true` is Stripe's `invoice_creation`: an invoice for a one-time payment. Whether
   Stripe emails receipts and invoices is a Dashboard setting (Customer emails), not code.
+- `calculate_tax/1` is Stripe Tax without Checkout (`POST /v1/tax/calculations`): a
+  `MishkaPay.TaxLine`'s `:amount` is the whole line (unit price times `:quantity`), as Stripe
+  takes it. `record_tax/4` is `POST /v1/tax/transactions/create_from_calculation`; its
+  reference makes the idempotency key, and Stripe wants it unique across all transactions. A
+  calculation can be recorded for 90 days (`:expires_at`).
+- An account without Stripe Tax turned on answers `Errors.Rejected` with code
+  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
+  it on but with no registration where the buyer is counts a tax of zero.
 - Stripe Tax must be turned on in the Dashboard (origin address, registrations) before
   `automatic_tax` counts anything. A price's `tax_behavior` can be set once on a price that had
   none; otherwise make a new price.

@@ -9,6 +9,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   """
 
   alias MishkaPay.{
+    Address,
     Checkout,
     Coupon,
     Customer,
@@ -22,7 +23,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     PromotionCode,
     Refund,
     Subscription,
-    TaxId
+    TaxCalculation,
+    TaxId,
+    TaxLine,
+    TaxTransaction
   }
 
   @reference "mishka_pay_reference"
@@ -534,6 +538,113 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       created_at: time(tax_id["created"])
     }
     |> TaxId.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/tax/calculations`: the lines (each its whole amount), the buyer's address
+  or customer, the shipping cost, and the lines asked back with their tax.
+  """
+  @spec tax_calculation_params(TaxCalculation.t()) :: map()
+  def tax_calculation_params(%TaxCalculation{items: [first | _]} = calculation) do
+    reject_nil(%{
+      "currency" => lower_currency(first.amount),
+      "line_items" => Enum.map(calculation.items, &tax_line_params/1),
+      "customer" => calculation.customer_id,
+      "customer_details" =>
+        calculation.address &&
+          %{
+            "address" => address_params(calculation.address),
+            "address_source" => Atom.to_string(calculation.address_source)
+          },
+      "shipping_cost" => calculation.shipping && %{"amount" => minor(calculation.shipping)},
+      "expand" => ["line_items"]
+    })
+  end
+
+  defp tax_line_params(%TaxLine{} = line) do
+    reject_nil(%{
+      "reference" => line.reference,
+      "amount" => minor(line.amount),
+      "quantity" => line.quantity,
+      "tax_code" => line.tax_code,
+      "tax_behavior" => line.tax_behavior && Atom.to_string(line.tax_behavior),
+      "product" => line.product_id
+    })
+  end
+
+  defp address_params(%Address{} = address) do
+    address
+    |> Map.take([:country, :postal_code, :line1, :line2, :city, :state])
+    |> Map.new(fn {field, value} -> {Atom.to_string(field), value} end)
+    |> reject_nil()
+  end
+
+  @doc "A Stripe Tax Calculation (`tax.calculation`) as a `MishkaPay.TaxCalculation`."
+  @spec tax_calculation(map()) :: {:ok, TaxCalculation.t()} | {:error, Splode.Error.t()}
+  def tax_calculation(calculation) do
+    currency = calculation["currency"]
+    details = calculation["customer_details"] || %{}
+
+    %{
+      provider: "stripe",
+      id: calculation["id"],
+      items:
+        calculation
+        |> get_in(["line_items", "data"])
+        |> List.wrap()
+        |> Enum.map(&tax_line(&1, currency)),
+      customer_id: id_of(calculation["customer"]),
+      address: address(details["address"]),
+      address_source: details["address_source"],
+      shipping: money(get_in(calculation, ["shipping_cost", "amount"]), currency),
+      amount_total: money(calculation["amount_total"], currency),
+      tax_amount_exclusive: money(calculation["tax_amount_exclusive"], currency),
+      tax_amount_inclusive: money(calculation["tax_amount_inclusive"], currency),
+      expires_at: time(calculation["expires_at"])
+    }
+    |> reject_nil()
+    |> TaxCalculation.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp tax_line(line, currency) do
+    reject_nil(%{
+      id: line["id"],
+      reference: line["reference"],
+      amount: money(line["amount"], currency),
+      quantity: line["quantity"],
+      tax_code: id_of(line["tax_code"]),
+      tax_behavior: tax_behavior(line["tax_behavior"]),
+      product_id: id_of(line["product"]),
+      amount_tax: money(line["amount_tax"], currency)
+    })
+  end
+
+  # A Stripe address, its empty fields left out; none without a country.
+  defp address(%{"country" => country} = address) when is_binary(country) do
+    address
+    |> Map.take(~w(country postal_code line1 line2 city state))
+    |> Map.new(fn {field, value} -> {String.to_existing_atom(field), blank(value)} end)
+    |> reject_nil()
+  end
+
+  defp address(_none), do: nil
+
+  @doc "A Stripe Tax Transaction as a `MishkaPay.TaxTransaction`, made from `calculation_id`."
+  @spec tax_transaction(map(), String.t()) ::
+          {:ok, TaxTransaction.t()} | {:error, Splode.Error.t()}
+  def tax_transaction(transaction, calculation_id) do
+    %{
+      provider: "stripe",
+      id: transaction["id"],
+      reference: transaction["reference"],
+      calculation_id: calculation_id,
+      customer_id: id_of(transaction["customer"]),
+      posted_at: time(transaction["posted_at"]),
+      created_at: time(transaction["created"])
+    }
+    |> TaxTransaction.builder()
     |> MishkaPay.Errors.from_builder()
   end
 

@@ -56,6 +56,7 @@ defmodule MishkaPay do
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
       `:customer_search`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
       `:tax_id_delete`;
+    * tax outside a checkout: `:tax_calculate`, `:tax_record`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
       `:promotion_code_update`;
@@ -255,6 +256,51 @@ defmodule MishkaPay do
       tenant,
       & &1.delete_tax_id(customer_id, tax_id_id, &2)
     )
+  end
+
+  @doc """
+  Counts the tax on a sale made outside the provider's checkout, from `attrs` (see
+  `MishkaPay.TaxCalculation`): its lines, the buyer's address or customer, and shipping. Show the
+  answer's `:tax_amount_exclusive` and charge its `:amount_total`; once paid, report the sale
+  with `record_tax/4`.
+
+      MishkaPay.calculate_tax(%{
+        provider: "stripe",
+        tenant: site_id,
+        items: [%{reference: "sku-1", amount: %{amount: "30.00", currency: "EUR"}, quantity: 2}],
+        address: %{country: "NL", postal_code: "1012"}
+      })
+  """
+  @spec calculate_tax(map()) :: {:ok, MishkaPay.TaxCalculation.t()} | {:error, Splode.Error.t()}
+  def calculate_tax(attrs) when is_map(attrs) do
+    made(:tax_calculate, :tax, attrs, MishkaPay.TaxCalculation, [:provider], :calculate_tax)
+  end
+
+  @doc """
+  Records the sale counted by tax calculation `calculation_id` under the caller's `reference`
+  (an order id, one sale per reference), so the provider counts its tax in the site's tax
+  reports. A calculation can be recorded until its `:expires_at`.
+  """
+  @spec record_tax(String.t(), String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.TaxTransaction.t()} | {:error, Splode.Error.t()}
+  def record_tax(provider, calculation_id, reference, tenant \\ nil)
+      when is_binary(provider) and is_binary(calculation_id) and is_binary(reference) do
+    case String.trim(reference) do
+      "" ->
+        MishkaPay.ProviderKit.invalid(
+          :reference,
+          Messages.text(:customer_needs, field: :reference)
+        )
+
+      reference ->
+        capable(
+          :tax,
+          :tax_record,
+          provider,
+          tenant,
+          & &1.record_tax(calculation_id, reference, &2)
+        )
+    end
   end
 
   @doc """

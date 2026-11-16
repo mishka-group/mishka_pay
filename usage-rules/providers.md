@@ -33,6 +33,7 @@ end
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
   - `:tax_id`: `create_tax_id/2`, `list_tax_ids/2` (`:customer_id` in its options),
     `delete_tax_id/3`;
+  - `:tax`: `calculate_tax/2`, `record_tax/3`;
   - `:portal`: `portal_session/2`;
   - `:discount`: `create_coupon/2`, `fetch_coupon/2`, `list_coupons/2`, `delete_coupon/2`,
     `create_promotion_code/2`, `fetch_promotion_code/2`, `list_promotion_codes/2`,

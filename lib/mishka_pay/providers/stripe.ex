@@ -38,6 +38,10 @@ defmodule MishkaPay.Providers.Stripe do
       `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
+    * `calculate_tax/2` asks Stripe Tax for the tax on a sale made outside Checkout
+      (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
+      (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
+      An account without Stripe Tax turned on is refused with code `"tax_not_set_up"`.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
 
@@ -81,6 +85,7 @@ defmodule MishkaPay.Providers.Stripe do
       :invoice,
       :customer,
       :tax_id,
+      :tax,
       :portal,
       :discount,
       :webhook,
@@ -594,6 +599,40 @@ defmodule MishkaPay.Providers.Stripe do
   def list_tax_ids(opts, keys) do
     with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
       page("/v1/customers/#{opts[:customer_id]}/tax_ids", [], opts, keys, &Mapper.tax_id/1)
+    end
+  end
+
+  # Stripe Tax on its own: a calculation (`taxcalc_...`) changes nothing until it is recorded as a
+  # Tax Transaction under the caller's reference.
+  @impl MishkaPay.Provider
+  def calculate_tax(%MishkaPay.TaxCalculation{} = calculation, keys) do
+    shipping = (calculation.shipping && [%{amount: calculation.shipping}]) || []
+
+    with :ok <- maybe_id(calculation.customer_id, "cus_", :customer_id),
+         :ok <- currencies(calculation.items ++ shipping),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/calculations",
+             Mapper.tax_calculation_params(calculation),
+             keys
+           ) do
+      Mapper.tax_calculation(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def record_tax(calculation_id, reference, keys) do
+    with :ok <- stripe_id(calculation_id, "taxcalc_", :calculation_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/transactions/create_from_calculation",
+             %{"calculation" => calculation_id, "reference" => reference},
+             keys,
+             key: ProviderKit.idempotency_key("tax-record", keys.tenant, reference)
+           ) do
+      Mapper.tax_transaction(answer, calculation_id)
     end
   end
 
@@ -1165,6 +1204,13 @@ defmodule MishkaPay.Providers.Stripe do
   # the tax code it needs, and a choice that belongs only to one-time or only to recurring prices.
   defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
 
+  # Stripe Tax turned off on the account, and an address it cannot count the tax for.
+  defp code_of(%{"code" => "stripe_tax_inactive"}), do: "tax_not_set_up"
+
+  defp code_of(%{"code" => code})
+       when code in ["customer_tax_location_invalid", "invalid_tax_location"],
+       do: "tax_location_invalid"
+
   defp code_of(%{"code" => code}) when is_binary(code), do: code
 
   defp code_of(%{"message" => message}) when is_binary(message) do
@@ -1174,6 +1220,7 @@ defmodule MishkaPay.Providers.Stripe do
       String.contains?(message, "product tax code is missing") -> "tax_code_missing"
       String.contains?(message, "does not contain any recurring prices") -> "one_time_only"
       String.contains?(message, "must pass a recurring price") -> "recurring_only"
+      String.contains?(message, "Stripe Tax has not been activated") -> "tax_not_set_up"
       true -> nil
     end
   end

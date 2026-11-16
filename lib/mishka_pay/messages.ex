@@ -57,6 +57,11 @@ defmodule MishkaPay.Messages do
           | :managed_payments_invoice
           | :tax_code_missing
           | :tax_id_invalid
+          | :tax_not_set_up
+          | :tax_location_invalid
+          | :tax_lines_many
+          | :tax_lines_unique
+          | :tax_address
           | :one_time_only
           | :recurring_only
           | :rejected_param
@@ -271,6 +276,33 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The tax id number does not have the form its kind needs: check the number and its country"
+      )
+
+  defp msgid(:tax_not_set_up),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The provider's tax service is not turned on for this account: set it up in the provider's dashboard first"
+      )
+
+  defp msgid(:tax_location_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The buyer's address is not enough to count the tax: give its country, and its postal code in the US"
+      )
+
+  defp msgid(:tax_lines_many),
+    do: dgettext_noop("mishka_pay", "A tax calculation takes at most 100 lines")
+
+  defp msgid(:tax_lines_unique),
+    do: dgettext_noop("mishka_pay", "Each line of a tax calculation needs its own reference")
+
+  defp msgid(:tax_address),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax calculation needs the buyer's address or a customer whose address the provider keeps"
       )
 
   defp msgid(:one_time_only),

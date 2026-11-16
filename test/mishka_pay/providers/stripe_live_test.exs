@@ -502,6 +502,54 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Page{items: []}} = MishkaPay.list_tax_ids("stripe", customer_id)
   end
 
+  test "the tax on a sale outside Checkout is counted and recorded, or the account says Stripe Tax is off" do
+    run = System.unique_integer([:positive])
+
+    calculation = %{
+      provider: "stripe",
+      items: [
+        %{
+          reference: "ebook-#{run}",
+          amount: %{amount: "20.00", currency: "EUR"},
+          quantity: 2,
+          tax_code: "txcd_10302000"
+        }
+      ],
+      address: %{country: "DE", postal_code: "10115"},
+      shipping: %{amount: "4.95", currency: "EUR"}
+    }
+
+    # The test account's own Stripe Tax settings decide which answer comes; they are never changed.
+    case MishkaPay.calculate_tax(calculation) do
+      {:ok,
+       %MishkaPay.TaxCalculation{
+         id: "taxcalc_" <> _ = id,
+         amount_total: total,
+         tax_amount_exclusive: tax,
+         items: [%MishkaPay.TaxLine{reference: reference, amount_tax: %Money{}}]
+       }} ->
+        assert reference == "ebook-#{run}"
+        # The line's amount is its whole: 20.00 for the two, then 4.95 shipping and the tax.
+        expected = Money.add!(Money.new(:EUR, "24.95"), tax)
+        assert Money.equal?(total, expected)
+
+        assert {:ok,
+                %MishkaPay.TaxTransaction{
+                  id: "tax_" <> _ = recorded,
+                  calculation_id: ^id,
+                  reference: order
+                }} = MishkaPay.record_tax("stripe", id, "order-#{run}")
+
+        assert order == "order-#{run}"
+
+        assert {:ok, %MishkaPay.TaxTransaction{id: ^recorded}} =
+                 MishkaPay.record_tax("stripe", id, "order-#{run}")
+
+      {:error, %Errors.Rejected{code: "tax_not_set_up"} = error} ->
+        assert Exception.message(error) =~ "tax service is not turned on"
+    end
+  end
+
   test "a promotion code lowers a real checkout, and an expired checkout cannot be paid" do
     run = System.unique_integer([:positive])
 

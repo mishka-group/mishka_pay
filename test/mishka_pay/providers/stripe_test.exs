@@ -20,6 +20,23 @@ defmodule MishkaPay.Providers.StripeTest do
     customer: %{email: "buyer@shop.test"}
   }
 
+  @tax %{
+    provider: "stripe",
+    tenant: "site-a",
+    items: [
+      %{
+        reference: "sku-1",
+        amount: %{amount: "60.00", currency: "EUR"},
+        quantity: 2,
+        tax_code: "txcd_99999999"
+      },
+      %{reference: "sku-2", amount: %{amount: "10.00", currency: "EUR"}, tax_behavior: :inclusive}
+    ],
+    address: %{country: "nl", postal_code: "1012 AB"},
+    address_source: :shipping,
+    shipping: %{amount: "4.95", currency: "EUR"}
+  }
+
   setup do
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123"})
@@ -409,6 +426,101 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.list_tax_ids("stripe", "cus_123", "site-a", limit: 3)
 
       assert :ok = MishkaPay.delete_tax_id("stripe", "cus_123", "txi_123", "site-a")
+    end
+
+    test "the tax on a sale is counted and recorded as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.TaxCalculation{id: "taxcalc_" <> _, amount_total: %Money{}}} =
+               MishkaPay.calculate_tax(@tax)
+
+      by_customer = @tax |> Map.delete(:address) |> Map.put(:customer_id, "cus_123")
+      assert {:ok, %MishkaPay.TaxCalculation{}} = MishkaPay.calculate_tax(by_customer)
+
+      assert {:ok, %MishkaPay.TaxTransaction{id: "tax_" <> _, calculation_id: "taxcalc_123"}} =
+               MishkaPay.record_tax("stripe", "taxcalc_123", "order-7", "site-a")
+
+      {:ok, calculation} = MishkaPay.TaxCalculation.builder(@tax)
+
+      assert %{
+               "currency" => "eur",
+               "line_items" => [
+                 %{"reference" => "sku-1", "amount" => 6000, "quantity" => 2},
+                 %{"reference" => "sku-2", "amount" => 1000, "tax_behavior" => "inclusive"}
+               ],
+               "customer_details" => %{
+                 "address" => %{"country" => "NL", "postal_code" => "1012 AB"},
+                 "address_source" => "shipping"
+               },
+               "shipping_cost" => %{"amount" => 495},
+               "expand" => ["line_items"]
+             } = Stripe.Mapper.tax_calculation_params(calculation)
+    end
+
+    test "a tax record sends one idempotency key per reference" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:key, Plug.Conn.get_req_header(conn, "idempotency-key")})
+        StripeMock.forward(conn)
+      end)
+
+      {:ok, _first} = MishkaPay.record_tax("stripe", "taxcalc_1", "order-7", "site-a")
+      {:ok, _again} = MishkaPay.record_tax("stripe", "taxcalc_1", "order-7", "site-a")
+      {:ok, _other} = MishkaPay.record_tax("stripe", "taxcalc_1", "order-8", "site-a")
+
+      assert_receive {:key, [first]}
+      assert_receive {:key, [^first]}
+      assert_receive {:key, [other]}
+      assert other != first
+    end
+
+    test "an account without Stripe Tax, or an address it cannot use, is a plain rejection" do
+      for {code, ours} <- [
+            {"stripe_tax_inactive", "tax_not_set_up"},
+            {"customer_tax_location_invalid", "tax_location_invalid"}
+          ] do
+        MishkaPay.Test.stub_http(fn conn ->
+          conn
+          |> Plug.Conn.put_status(400)
+          |> Req.Test.json(%{
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => code,
+              "message" => "Stripe's own words, with a dashboard link acct_123."
+            }
+          })
+        end)
+
+        assert {:error, %Errors.Rejected{status: 400, code: ^ours} = error} =
+                 MishkaPay.calculate_tax(@tax)
+
+        refute Exception.message(error) =~ "acct_"
+      end
+    end
+
+    test "a tax calculation that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      [line, other] = @tax.items
+
+      for {attrs, field} <- [
+            {%{@tax | items: []}, :items},
+            {%{@tax | items: [line, %{other | reference: "sku-1"}]}, :items},
+            {%{@tax | items: [line, %{other | amount: %{amount: "10", currency: "USD"}}]},
+             :items},
+            {%{@tax | shipping: %{amount: "4.95", currency: "USD"}}, :items},
+            {Map.delete(@tax, :address), :address},
+            {%{@tax | address: %{country: "Netherlands"}}, :address},
+            {%{@tax | items: [Map.delete(line, :reference)]}, :items},
+            {@tax |> Map.delete(:address) |> Map.put(:customer_id, "sub_1"), :customer_id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.calculate_tax(attrs)
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :calculation_id}]}} =
+               MishkaPay.record_tax("stripe", "tax_1", "order-1")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :reference}]}} =
+               MishkaPay.record_tax("stripe", "taxcalc_1", "  ")
     end
 
     test "a tax id that cannot be right is refused before any request" do
@@ -1489,6 +1601,112 @@ defmodule MishkaPay.Providers.StripeTest do
                "value" => "12-3456789",
                "verification" => nil
              })
+  end
+
+  test "a tax calculation maps with its totals, each line's tax, the address and the expiry" do
+    assert {:ok,
+            %MishkaPay.TaxCalculation{
+              provider: "stripe",
+              id: "taxcalc_1",
+              address: %MishkaPay.Address{country: "US", state: "WA", postal_code: "98104"},
+              address_source: :shipping,
+              items: [
+                %MishkaPay.TaxLine{
+                  id: "tax_li_1",
+                  reference: "Music Streaming Coupon",
+                  quantity: 1,
+                  tax_code: "txcd_10000000",
+                  tax_behavior: :exclusive,
+                  amount: amount,
+                  amount_tax: line_tax
+                }
+              ],
+              amount_total: total,
+              tax_amount_exclusive: tax,
+              tax_amount_inclusive: inclusive,
+              shipping: shipping,
+              expires_at: %DateTime{}
+            }} =
+             Stripe.Mapper.tax_calculation(%{
+               "id" => "taxcalc_1",
+               "object" => "tax.calculation",
+               "amount_total" => 1953,
+               "currency" => "usd",
+               "customer" => nil,
+               "customer_details" => %{
+                 "address" => %{
+                   "city" => "Seattle",
+                   "country" => "US",
+                   "line1" => "920 5th Ave",
+                   "line2" => nil,
+                   "postal_code" => "98104",
+                   "state" => "WA"
+                 },
+                 "address_source" => "shipping",
+                 "ip_address" => nil,
+                 "tax_ids" => [],
+                 "taxability_override" => "none"
+               },
+               "expires_at" => 1_706_708_005,
+               "line_items" => %{
+                 "object" => "list",
+                 "data" => [
+                   %{
+                     "id" => "tax_li_1",
+                     "object" => "tax.calculation_line_item",
+                     "amount" => 1499,
+                     "amount_tax" => 154,
+                     "product" => nil,
+                     "quantity" => 1,
+                     "reference" => "Music Streaming Coupon",
+                     "tax_behavior" => "exclusive",
+                     "tax_code" => "txcd_10000000"
+                   }
+                 ],
+                 "has_more" => false
+               },
+               "shipping_cost" => %{
+                 "amount" => 300,
+                 "amount_tax" => 0,
+                 "tax_behavior" => "exclusive",
+                 "tax_code" => "txcd_92010001"
+               },
+               "tax_amount_exclusive" => 154,
+               "tax_amount_inclusive" => 0,
+               "tax_date" => 1_706_535_204
+             })
+
+    for {money, expected} <- [
+          {amount, "14.99"},
+          {line_tax, "1.54"},
+          {total, "19.53"},
+          {tax, "1.54"},
+          {inclusive, "0"},
+          {shipping, "3.00"}
+        ] do
+      assert Money.equal?(money, Money.new(:USD, expected)), inspect({money, expected})
+    end
+
+    assert {:ok,
+            %MishkaPay.TaxTransaction{
+              id: "tax_1",
+              reference: "myOrder_123",
+              calculation_id: "taxcalc_1",
+              posted_at: %DateTime{}
+            }} =
+             Stripe.Mapper.tax_transaction(
+               %{
+                 "id" => "tax_1",
+                 "object" => "tax.transaction",
+                 "created" => 1_690_938_353,
+                 "currency" => "usd",
+                 "customer" => nil,
+                 "posted_at" => 1_690_932_566,
+                 "reference" => "myOrder_123",
+                 "type" => "transaction"
+               },
+               "taxcalc_1"
+             )
   end
 
   test "a checkout read back brings its totals and the buyer's email" do
