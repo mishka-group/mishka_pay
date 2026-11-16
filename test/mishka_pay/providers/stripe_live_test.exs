@@ -902,7 +902,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                DateTime.add(now, 60)
              )
 
-    assert value == 0 or value == 3 or value == 4.5
+    # None, the first report, or both; Stripe may answer a whole number as a float.
+    assert Enum.any?([0, 3, 4.5], &(&1 == value)), inspect(value)
 
     {:ok, %MishkaPay.Product{id: product_id} = product} =
       MishkaPay.create_product(%{provider: "stripe", name: "Live usage #{run}"})
