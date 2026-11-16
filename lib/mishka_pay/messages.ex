@@ -40,6 +40,7 @@ defmodule MishkaPay.Messages do
           | :price_needs
           | :customer_one_of
           | :customer_needs
+          | :reference_reused
           | :keys_answer
           | :stripe_id
           | :paypal_id
@@ -165,6 +166,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:customer_needs),
     do: dgettext_noop("mishka_pay", "The %{field} field is required for this call")
+
+  defp msgid(:reference_reused),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "This reference was used in the last 24 hours with other details. Use a new reference, or change the record made then"
+      )
 
   defp msgid(:customer_one_of),
     do: dgettext_noop("mishka_pay", "A customer is an id or an email, one of them")

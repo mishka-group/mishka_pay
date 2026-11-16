@@ -43,6 +43,10 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   pass `configuration: "bpc_..."` to use another.
 - Stripe sends `customer.created`, `customer.updated` and `customer.deleted`; the Ash customer
   listener syncs the row on each.
+- `list_customers/3` leaves out customers made on a test clock (Stripe's list does); read those by
+  id with `fetch_customer/3`.
+- A `reference` reused within 24 hours with other details is `Errors.Rejected` with code
+  `"idempotency_error"` and a plain message.
 
 ## Sandbox
 

@@ -39,6 +39,32 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(@checkout)
     end
 
+    test "a reference reused with other details is a plain rejection that never shows the key" do
+      MishkaPay.Test.stub_http(fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{
+          "error" => %{
+            "type" => "idempotency_error",
+            "message" =>
+              "Keys for idempotent requests can only be used with the same parameters. Try using a key other than 'mishka_pay-customer-abc'."
+          }
+        })
+      end)
+
+      assert {:error, %Errors.Rejected{status: 400, code: "idempotency_error"} = error} =
+               MishkaPay.create_customer(%{
+                 provider: "stripe",
+                 email: "ava@example.com",
+                 reference: "user-1"
+               })
+
+      for text <- [Exception.message(error), MishkaPay.Ash.message(error)] do
+        assert text =~ "reference was used in the last 24 hours"
+        refute text =~ "mishka_pay-customer"
+      end
+    end
+
     test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id}} =
                MishkaPay.create_customer(%{

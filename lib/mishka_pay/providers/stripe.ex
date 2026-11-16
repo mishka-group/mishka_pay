@@ -393,7 +393,7 @@ defmodule MishkaPay.Providers.Stripe do
      Errors.Rejected.exception(
        provider: "stripe",
        status: status,
-       code: error["code"],
+       code: code_of(error),
        message: error["message"]
      )}
   end
@@ -402,6 +402,10 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
+
+  # Stripe gives a reused idempotency key a type and no code.
+  defp code_of(%{"type" => "idempotency_error"}), do: "idempotency_error"
+  defp code_of(error), do: error["code"]
 
   # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
   # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
