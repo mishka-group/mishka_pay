@@ -80,6 +80,14 @@ if Code.ensure_loaded?(Ash) do
           the actor and every sync writes again (`MishkaPay.Ash.Owner`); a customer's `:register`
           takes it as an input. It may be nil, for a sale with no owner.
           """
+        ],
+        keep_events_for: [
+          type: {:or, [:pos_integer, {:literal, :forever}]},
+          default: 30,
+          doc: """
+          For an `:inbox`: how many days a processed event is kept before its daily `:forget`
+          trigger deletes it, or `:forever`. Failed and pending events are always kept.
+          """
         ]
       ]
     }

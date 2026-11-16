@@ -178,12 +178,33 @@ if Code.ensure_loaded?(Ash) do
     def identity(:customer), do: {:provider_customer, [:provider, :provider_id]}
     def identity(:dispute), do: {:provider_dispute, [:provider, :provider_id]}
 
-    @doc "The calculations of a kind: its amounts as `Money`."
-    @spec calculations(kind()) :: [{atom(), atom(), {module(), keyword()}}]
+    @doc """
+    The calculations of a kind: its amounts as `Money`, and for a subscription `:active?` (gives
+    access now, as `MishkaPay.Ash.Subscribed` counts it by default), `:on_trial?` and `:canceling?`
+    (ends at the period's end), each usable in a filter or a sort.
+    """
+    @spec calculations(kind()) :: [{atom(), atom(), term()}]
     def calculations(:payment),
       do: [money(:money, :amount), money(:money_refunded, :amount_refunded)]
 
-    def calculations(kind) when kind in [:subscription, :dispute], do: [money(:money, :amount)]
+    def calculations(:subscription) do
+      [
+        money(:money, :amount),
+        {:active?, :boolean,
+         Ash.Expr.expr(
+           status in [:active, :trialing] and
+             (status != :trialing or is_nil(trial_end) or trial_end > now())
+         )},
+        {:on_trial?, :boolean,
+         Ash.Expr.expr(status == :trialing and (is_nil(trial_end) or trial_end > now()))},
+        {:canceling?, :boolean,
+         Ash.Expr.expr(
+           cancel_at_period_end == true and status not in [:canceled, :incomplete_expired]
+         )}
+      ]
+    end
+
+    def calculations(:dispute), do: [money(:money, :amount)]
     def calculations(_kind), do: []
 
     @doc """
@@ -210,6 +231,7 @@ if Code.ensure_loaded?(Ash) do
         {:process, :update,
          [require_atomic?: false, changes: [change(MishkaPay.Ash.Inbox.Process)]]},
         {:note_error, :update, [accept: [:last_error]]},
+        {:forget, :destroy, []},
         {:fail, :update,
          [
            require_atomic?: false,
@@ -363,6 +385,24 @@ if Code.ensure_loaded?(Ash) do
       ]
     end
 
+    @doc """
+    The inbox's daily AshOban trigger that deletes processed events older than `days`.
+    """
+    @spec forget_trigger(module(), pos_integer()) :: keyword()
+    # sobelow_skip ["DOS.ModuleConcat"]
+    def forget_trigger(resource, days) do
+      [
+        name: :forget,
+        action: :forget,
+        where: Ash.Expr.expr(status == :processed and processed_at < ago(^days, :day)),
+        queue: :mishka_pay_inbox,
+        max_attempts: 3,
+        scheduler_cron: "@daily",
+        worker_module_name: Module.concat(resource, MishkaPayForgetWorker),
+        scheduler_module_name: Module.concat(resource, MishkaPayForgetScheduler)
+      ]
+    end
+
     # Reads the provider object by its id and writes what the provider said, once per object. A
     # payment or a subscription with a user writes its owner there too (`MishkaPay.Ash.Owner`).
     defp sync(kind, id, change, user \\ nil) do
@@ -412,17 +452,20 @@ if Code.ensure_loaded?(Ash) do
           arguments
         )
 
+    # A provider object's attributes are written only from the provider's word, by the kind's
+    # changes; no action takes them as input, so a host's `accept :*` never reaches them.
     defp object(attributes) do
-      [
-        {:provider, :string, required()},
-        {:provider_id, :string, required()},
-        {:tenant, :string, public()}
-      ] ++
-        attributes ++
-        [
-          {:provider_created_at, :utc_datetime_usec, public()},
-          {:synced_at, :utc_datetime_usec, required()}
-        ]
+      ([
+         {:provider, :string, required()},
+         {:provider_id, :string, required()},
+         {:tenant, :string, public()}
+       ] ++
+         attributes ++
+         [
+           {:provider_created_at, :utc_datetime_usec, public()},
+           {:synced_at, :utc_datetime_usec, required()}
+         ])
+      |> Enum.map(fn {name, type, opts} -> {name, type, Keyword.put(opts, :writable?, false)} end)
     end
 
     defp money(name, field), do: {name, :term, {MishkaPay.Ash.Payment.Money, field: field}}

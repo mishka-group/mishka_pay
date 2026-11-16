@@ -67,6 +67,18 @@ Access is `:active`, or `:trialing` until the trial ends; `statuses: [:active, :
 :past_due]` keeps it while the provider retries a failed renewal. Each check is one query, so a
 cancel a webhook brought counts at once. In a multi-tenant resource it reads the action's site.
 
+## What the rows hold
+
+- A payment row keeps `checkout_id`, `price_ids` and `product_ids`: what its checkout sold, for a
+  shop to deliver.
+- A subscription row keeps `price_ids` and `product_ids`, and has the calculations `active?`,
+  `on_trial?` and `canceling?`, usable in filters, sorts and admin tables.
+- The provider's fields are never an action's input: a host's `accept :*` takes only its own
+  attributes, and every write comes from the provider's word.
+- Two syncs of one object can run at once (a webhook and an action); the row keeps the newer read.
+- The inbox forgets processed events after `keep_events_for` days (30), with a daily AshOban
+  trigger; failed ones stay.
+
 ## Your own admin pages
 
 Mishka Pay has no admin page of its own. Every call is an Ash action on your resources, run in

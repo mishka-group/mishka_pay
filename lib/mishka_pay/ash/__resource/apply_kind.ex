@@ -51,7 +51,7 @@ if Code.ensure_loaded?(Ash) do
         |> Builder.add_new_update_timestamp(:updated_at)
         |> identity(Kinds.identity(kind))
         |> each(Kinds.calculations(kind), fn dsl, {name, type, calculation} ->
-          Builder.add_new_calculation(dsl, name, type, calculation)
+          Builder.add_new_calculation(dsl, name, type, calculation, public?: true)
         end)
         |> user(Info.mishka_pay_belongs_to_user(dsl))
         |> read()
@@ -61,6 +61,7 @@ if Code.ensure_loaded?(Ash) do
         |> interfaces(Info.mishka_pay_code_interface?(dsl), actions)
         |> tenant_change(tenant_from)
         |> trigger(kind, module)
+        |> forget(kind, module, Info.mishka_pay_keep_events_for!(dsl))
         |> listener(Info.mishka_pay_listen?(dsl), kind, module)
       end
     end
@@ -238,6 +239,25 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp trigger(result, _kind, _module), do: result
+
+    defp forget({:ok, dsl}, :inbox, module, days) when is_integer(days) do
+      case Enum.any?(Transformer.get_entities(dsl, [:oban, :triggers]), &(&1.name == :forget)) do
+        true ->
+          {:ok, dsl}
+
+        false ->
+          with {:ok, trigger} <-
+                 Transformer.build_entity(
+                   AshOban,
+                   [:oban, :triggers],
+                   :trigger,
+                   Kinds.forget_trigger(module, days)
+                 ),
+               do: {:ok, Transformer.add_entity(dsl, [:oban, :triggers], trigger, type: :append)}
+      end
+    end
+
+    defp forget(result, _kind, _module, _keep), do: result
 
     # sobelow_skip ["DOS.ModuleConcat"]
     defp listener({:ok, dsl}, true, kind, module) do

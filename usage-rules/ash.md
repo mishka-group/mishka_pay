@@ -110,6 +110,18 @@ Ash.create(MyApp.Pay.Payment, %{provider: "stripe", payment_id: "pi_..."},
 
 The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.Tenant`).
 
+## What the rows hold
+
+- Payment rows: `checkout_id`, `price_ids`, `product_ids` (what was sold). Subscription rows:
+  `price_ids`, `product_ids`, calculations `active?`, `on_trial?`, `canceling?`.
+- Kind attributes are `writable?: false`: never put them in an action's `accept`; write your own
+  attributes beside them.
+- A `:sync` that read the provider before a newer sync wrote is skipped (`MishkaPay.Ash.stale?/1`
+  on its error); the listeners count it as done.
+- `keep_events_for 30` (inbox, default): processed events are deleted daily; `:forever` keeps them.
+- Inbox telemetry: `[:mishka_pay, :inbox, :process, :stop]` (`:outcome`, `:lag`) and
+  `[:mishka_pay, :inbox, :failed]`.
+
 ## Access: who has a subscription
 
 - `belongs_to_user` on the payment and subscription resources: `:start_checkout` sends the actor

@@ -38,11 +38,15 @@ defmodule MishkaPay.Ash.ResourceTest do
       end
     end
 
-    test "the inbox's trigger is named after its resource" do
-      assert [trigger] = AshOban.Info.oban_triggers(WebhookEvent)
+    test "the inbox's triggers are named after its resource, and old events are forgotten daily" do
+      assert [trigger, forget] = AshOban.Info.oban_triggers(WebhookEvent)
       assert trigger.worker_module_name == WebhookEvent.MishkaPayWorker
       assert trigger.scheduler_module_name == WebhookEvent.MishkaPayScheduler
       assert trigger.on_error == :fail
+
+      assert {forget.name, forget.action, forget.scheduler_cron} == {:forget, :forget, "@daily"}
+      assert forget.worker_module_name == WebhookEvent.MishkaPayForgetWorker
+      assert Info.mishka_pay_keep_events_for!(WebhookEvent) == 30
     end
   end
 
@@ -209,6 +213,18 @@ defmodule MishkaPay.Ash.ResourceTest do
                AshInfo.identity(Kept, :provider_dispute)
 
       assert :rename in action_names(Owned)
+    end
+
+    test "a host's accept :* takes its own attributes and never the provider's word" do
+      accepted = AshInfo.action(Owned, :host_create).accept
+      assert :plan in accepted
+
+      refute Enum.any?(
+               [:status, :provider_id, :price_ids, :tenant, :synced_at],
+               &(&1 in accepted)
+             )
+
+      refute AshInfo.attribute(Owned, :status).writable?
     end
   end
 

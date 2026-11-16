@@ -176,6 +176,9 @@ Its listener syncs the dispute of each `charge.dispute.*` event.
   the actor and every sync writes again (`MishkaPay.Ash.Owner`); a customer's `:register`
   takes it as an input. It may be nil, for a sale with no owner.
 
+* `:keep_events_for` - For an `:inbox`: how many days a processed event is kept before its daily `:forget`
+  trigger deletes it, or `:forever`. Failed and pending events are always kept. The default value is `30`.
+
 
 
 `MishkaPay.Ash.Resource.Info` reads them back.
@@ -212,6 +215,7 @@ end
 | [`code_interface?`](#mishka_pay-code_interface?){: #mishka_pay-code_interface? } | `boolean` | `true` | Defines a code interface function for each action it adds, such as `MyApp.Pay.Subscription.cancel!(row, %{at: :now})`. The inbox's `:receive` is `receive_event`. |
 | [`tenant_from`](#mishka_pay-tenant_from){: #mishka_pay-tenant_from } | `atom` |  | The host's own attribute that holds the tenant, such as `:site_id` (an attribute, or the source attribute of a `belongs_to :site`), for a host that keeps sites apart without Ash multitenancy. Each create action writes its tenant there too; the row's `:tenant` still picks the provider keys. With Ash multitenancy on that attribute, Ash fills it and this is not needed. Not for an `:inbox`, which stays global. |
 | [`belongs_to_user`](#mishka_pay-belongs_to_user){: #mishka_pay-belongs_to_user } | `atom \| {atom, keyword}` |  | A `:user` belongs_to relationship to the host's user resource, on `:user_id`, or on another attribute with `{MyApp.Accounts.User, attribute: :owner_id}`. A payment or a subscription gets its user from the checkout's owner, which `:start_checkout` takes from the actor and every sync writes again (`MishkaPay.Ash.Owner`); a customer's `:register` takes it as an input. It may be nil, for a sale with no owner. |
+| [`keep_events_for`](#mishka_pay-keep_events_for){: #mishka_pay-keep_events_for } | `pos_integer \| :forever` | `30` | For an `:inbox`: how many days a processed event is kept before its daily `:forget` trigger deletes it, or `:forever`. Failed and pending events are always kept. |
 
 
 

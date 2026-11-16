@@ -130,7 +130,9 @@ defmodule MishkaPay.Ash.SubscribedTest do
       "sub_trialing_2" =>
         subscription("sub_trialing_2", "trialing", member.id, %{"trial_end" => past}),
       "sub_past_due_1" => subscription("sub_past_due_1", "past_due", member.id),
-      "sub_canceled_1" => subscription("sub_canceled_1", "canceled", member.id)
+      "sub_canceled_1" => subscription("sub_canceled_1", "canceled", member.id),
+      "sub_active_9" =>
+        subscription("sub_active_9", "active", member.id, %{"cancel_at_period_end" => true})
     })
 
     other = Ash.create!(Member, %{}, authorize?: false)
@@ -153,11 +155,33 @@ defmodule MishkaPay.Ash.SubscribedTest do
     assert subscribed?.(member, tenant: "site-a", price: ["price_team", "price_pro_month"])
     refute subscribed?.(member, tenant: "site-a", product: "prod_team")
 
+    rows =
+      Ash.read!(SiteSubscription,
+        tenant: "site-a",
+        authorize?: false,
+        load: [:active?, :on_trial?, :canceling?]
+      )
+
+    assert rows |> Enum.filter(& &1.active?) |> Enum.map(& &1.provider_id) == ["sub_trialing_1"]
+    assert rows |> Enum.filter(& &1.on_trial?) |> Enum.map(& &1.provider_id) == ["sub_trialing_1"]
+
+    require Ash.Query
+
+    assert [%{provider_id: "sub_trialing_1"}] =
+             SiteSubscription
+             |> Ash.Query.filter(active?)
+             |> Ash.read!(tenant: "site-a", authorize?: false)
+
+    {:ok, ending} = sync("sub_active_9", "site-c")
+
+    assert %{active?: true, canceling?: true, on_trial?: false} =
+             Ash.load!(ending, [:active?, :canceling?, :on_trial?], tenant: "site-c")
+
     {:ok, _row} = sync("sub_active_1", "site-b")
     assert subscribed?.(member, tenant: "site-b")
     refute subscribed?.(other, tenant: "site-a")
     refute subscribed?.(nil, tenant: "site-a")
-    refute subscribed?.(member, tenant: "site-c")
+    refute subscribed?.(member, tenant: "site-d")
   end
 
   test "as a policy, a members-only post is read only by a member with access in that site",

@@ -78,10 +78,14 @@ defmodule MishkaPay.Support.Options.Owned do
   end
 
   actions do
+    default_accept :*
+
     update :rename do
       accept [:plan]
       change set_attribute(:reference, "renamed")
     end
+
+    create :host_create
   end
 
   attributes do

@@ -9,6 +9,10 @@ if Code.ensure_loaded?(Ash) do
     transaction starts, since the listeners may call the provider, and marks it processed when
     every listener took it. Otherwise it keeps the reason in `:last_error` and the action fails, so
     its AshOban job tries again.
+
+    Each try is a span, `[:mishka_pay, :inbox, :process, :start | :stop]`, with the event's
+    `:provider`, `:tenant`, `:type` and `:event_id`; `:stop` adds the `:outcome` (`:processed` or
+    `:retry`) and the measurement `:lag`, the milliseconds since the event was stored.
     """
 
     use Ash.Resource.Change
@@ -19,30 +23,52 @@ if Code.ensure_loaded?(Ash) do
     @impl true
     def change(changeset, _opts, _context) do
       Ash.Changeset.before_transaction(changeset, fn changeset ->
-        timeout = Application.get_env(:mishka_pay, :event_process_timeout, 30_000)
+        row = changeset.data
 
-        case Plugins.call(
-               Events.event_process(),
-               %{event: event(changeset.data), failed: nil},
-               timeout
-             ) do
-          {:ok, %{failed: nil}} ->
-            Ash.Changeset.force_change_attributes(changeset,
-              status: :processed,
-              last_error: nil,
-              processed_at: DateTime.utc_now()
-            )
+        meta = %{
+          provider: row.provider,
+          tenant: row.tenant,
+          type: row.type,
+          event_id: row.event_id
+        }
 
-          answer ->
-            message = "the event was not processed: #{reason(answer)}"
-            note(changeset.data, message)
-
-            Ash.Changeset.add_error(
-              changeset,
-              Ash.Error.Changes.InvalidChanges.exception(message: message)
-            )
-        end
+        :telemetry.span([:mishka_pay, :inbox, :process], meta, fn ->
+          changeset = work(changeset)
+          outcome = (changeset.valid? && :processed) || :retry
+          {changeset, %{lag: lag(row)}, Map.put(meta, :outcome, outcome)}
+        end)
       end)
+    end
+
+    defp lag(%{inserted_at: %DateTime{} = at}),
+      do: DateTime.diff(DateTime.utc_now(), at, :millisecond)
+
+    defp lag(_row), do: nil
+
+    defp work(changeset) do
+      timeout = Application.get_env(:mishka_pay, :event_process_timeout, 30_000)
+
+      case Plugins.call(
+             Events.event_process(),
+             %{event: event(changeset.data), failed: nil},
+             timeout
+           ) do
+        {:ok, %{failed: nil}} ->
+          Ash.Changeset.force_change_attributes(changeset,
+            status: :processed,
+            last_error: nil,
+            processed_at: DateTime.utc_now()
+          )
+
+        answer ->
+          message = "the event was not processed: #{reason(answer)}"
+          note(changeset.data, message)
+
+          Ash.Changeset.add_error(
+            changeset,
+            Ash.Error.Changes.InvalidChanges.exception(message: message)
+          )
+      end
     end
 
     # Outside the failing action, so the reason stays on the row while AshOban tries again; the row
