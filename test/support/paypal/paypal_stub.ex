@@ -5,11 +5,12 @@
 defmodule MishkaPay.Support.PayPalStub do
   @moduledoc """
   A stand-in for PayPal's REST API behind the test kit's HTTP stub, answering in PayPal's own
-  shapes (Orders v2, captures, refunds, OAuth, webhook verification) from what the test set up.
+  shapes (Orders v2, captures, refunds, catalog products, billing plans, subscriptions and their
+  transactions, OAuth, webhook verification) from what the test set up.
   It keeps the orders of the running test in its process, and tells the test every request it
   got as `{:paypal, method, path, headers, body}`.
 
-  `order/2` puts an Order in a state; `forward/1` is the plug.
+  `order/2` puts an Order in a state, `subscription/3` a subscription; `forward/1` is the plug.
   """
 
   import Plug.Conn
@@ -20,6 +21,28 @@ defmodule MishkaPay.Support.PayPalStub do
     Process.put(:paypal_orders, Map.put(orders, id, build(id, status, opts)))
     :ok
   end
+
+  @doc """
+  Puts the subscription `id` made earlier (or a new one) in PayPal's `status` (ACTIVE,
+  SUSPENDED...): `:billing_info` and `:transactions` as PayPal would answer them.
+  """
+  def subscription(id, status, opts \\ []) do
+    subs = Process.get(:paypal_subscriptions, %{})
+    sub = Map.get(subs, id) || new_subscription(id, opts[:plan] || plan(%{}))
+
+    sub =
+      sub
+      |> Map.put("status", status)
+      |> Map.put("status_update_time", "2026-11-20T10:00:00Z")
+      |> put_billing(opts[:billing_info])
+      |> Map.put("transactions", opts[:transactions] || sub["transactions"] || [])
+
+    Process.put(:paypal_subscriptions, Map.put(subs, id, sub))
+    :ok
+  end
+
+  defp put_billing(sub, nil), do: sub
+  defp put_billing(sub, billing), do: Map.put(sub, "billing_info", billing)
 
   @doc "The plug for `MishkaPay.Test.stub_http/1`."
   def forward(conn) do
@@ -133,9 +156,118 @@ defmodule MishkaPay.Support.PayPalStub do
     reply(conn, 201, refund)
   end
 
+  defp answer(conn, "POST", ["v1", "catalogs", "products"], body) do
+    reply(conn, 201, %{
+      "id" => "PROD-#{System.unique_integer([:positive])}",
+      "name" => body["name"]
+    })
+  end
+
+  defp answer(conn, "POST", ["v1", "billing", "plans"], body) do
+    plan = plan(body)
+    Process.put(:paypal_plans, Map.put(Process.get(:paypal_plans, %{}), plan["id"], plan))
+    reply(conn, 201, Map.take(plan, ["id", "product_id", "name", "status"]))
+  end
+
+  defp answer(conn, "POST", ["v1", "billing", "subscriptions"], body) do
+    id = "I-SUB#{System.unique_integer([:positive])}"
+    plan = Process.get(:paypal_plans, %{})[body["plan_id"]]
+
+    sub =
+      new_subscription(id, plan)
+      |> Map.merge(Map.take(body, ["quantity", "custom_id"]))
+      |> Map.put("subscriber", Map.get(body, "subscriber", %{}))
+
+    Process.put(:paypal_subscriptions, Map.put(Process.get(:paypal_subscriptions, %{}), id, sub))
+    reply(conn, 201, Map.drop(sub, ["plan", "transactions"]))
+  end
+
+  defp answer(conn, "GET", ["v1", "billing", "subscriptions", id], _body) do
+    case Process.get(:paypal_subscriptions, %{})[id] do
+      nil -> not_found(conn)
+      sub -> reply(conn, 200, Map.drop(sub, ["transactions"]))
+    end
+  end
+
+  defp answer(conn, "GET", ["v1", "billing", "subscriptions", id, "transactions"], _body) do
+    case Process.get(:paypal_subscriptions, %{})[id] do
+      %{"status" => status} = sub when status not in ["APPROVAL_PENDING", "APPROVED"] ->
+        reply(conn, 200, %{"transactions" => sub["transactions"], "total_items" => 1})
+
+      _none ->
+        not_found(conn)
+    end
+  end
+
+  defp answer(conn, "POST", ["v1", "billing", "subscriptions", id, "cancel"], _body) do
+    subs = Process.get(:paypal_subscriptions, %{})
+
+    case subs[id] do
+      %{"status" => status} = sub when status in ["ACTIVE", "SUSPENDED"] ->
+        canceled = Map.merge(sub, %{"status" => "CANCELLED"})
+        Process.put(:paypal_subscriptions, Map.put(subs, id, canceled))
+        send_resp(conn, 204, "")
+
+      _not_cancelable ->
+        not_found(conn)
+    end
+  end
+
   defp answer(conn, "POST", ["v1", "notifications", "verify-webhook-signature"], body) do
     status = if body["transmission_sig"] == "good", do: "SUCCESS", else: "FAILURE"
     reply(conn, 200, %{"verification_status" => status})
+  end
+
+  defp not_found(conn) do
+    reply(conn, 404, %{
+      "name" => "RESOURCE_NOT_FOUND",
+      "details" => [%{"issue" => "INVALID_RESOURCE_ID"}]
+    })
+  end
+
+  defp plan(body) do
+    %{
+      "id" => "P-PLAN#{System.unique_integer([:positive])}",
+      "product_id" => body["product_id"] || "PROD-1",
+      "name" => body["name"] || "Pro monthly",
+      "status" => "ACTIVE",
+      "quantity_supported" => true,
+      "billing_cycles" =>
+        body["billing_cycles"] ||
+          [
+            %{
+              "tenure_type" => "REGULAR",
+              "sequence" => 1,
+              "total_cycles" => 0,
+              "frequency" => %{"interval_unit" => "MONTH", "interval_count" => 1},
+              "pricing_scheme" => %{
+                "fixed_price" => %{"currency_code" => "USD", "value" => "9.0"}
+              }
+            }
+          ]
+    }
+  end
+
+  defp new_subscription(id, plan) do
+    %{
+      "id" => id,
+      "status" => "APPROVAL_PENDING",
+      "plan_id" => plan["id"],
+      "plan" => Map.drop(plan, ["id", "status"]),
+      "quantity" => "1",
+      "custom_id" => "sub-1",
+      "start_time" => "2026-11-16T09:00:00Z",
+      "create_time" => "2026-11-16T09:00:00Z",
+      "status_update_time" => "2026-11-16T09:00:00Z",
+      "subscriber" => %{},
+      "transactions" => [],
+      "links" => [
+        %{
+          "rel" => "approve",
+          "href" => "https://www.sandbox.paypal.com/webapps/billing/subscriptions?ba_token=BA-1"
+        }
+      ]
+    }
   end
 
   defp reply(conn, status, body) do

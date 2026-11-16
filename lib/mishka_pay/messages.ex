@@ -89,6 +89,7 @@ defmodule MishkaPay.Messages do
           | :keys_answer
           | :stripe_id
           | :paypal_id
+          | :no_upcoming_invoice
           | :refund_currency
           | :refund_left
           | :capture_over
@@ -510,6 +511,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The %{field} field is not a Stripe id that starts with %{prefix}"
+      )
+
+  defp msgid(:no_upcoming_invoice),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The subscription %{id} has no next bill: it is not active, or it ends without one"
       )
 
   defp msgid(:paypal_id),

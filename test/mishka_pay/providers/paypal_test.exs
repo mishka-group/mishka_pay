@@ -6,7 +6,7 @@ defmodule MishkaPay.Providers.PayPalTest do
   # Starts the PayPal plugin, which changes the providers event every test sees.
   use ExUnit.Case, async: false
 
-  alias MishkaPay.{Checkout, Errors, Event, Payment, Refund}
+  alias MishkaPay.{Checkout, Errors, Event, Invoice, Page, Payment, Price, Refund, Subscription}
   alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.PayPal
   alias MishkaPay.Support.PayPalStub
@@ -83,7 +83,8 @@ defmodule MishkaPay.Providers.PayPalTest do
       monthly = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
 
       for {attrs, operation} <- [
-            {%{mode: :subscription, items: [monthly]}, :subscription},
+            {%{mode: :subscription, items: [monthly, %{monthly | name: "Extra"}]},
+             "subscription checkout with more than one price"},
             {%{merchant_of_record: true}, "checkout as merchant of record"},
             {%{allow_promotion_codes: true}, "checkout with promotion codes"},
             {%{discounts: [%{coupon_id: "SPRING"}]}, "checkout with discounts"},
@@ -262,6 +263,156 @@ defmodule MishkaPay.Providers.PayPalTest do
     end
   end
 
+  describe "subscriptions" do
+    @monthly %{
+      @checkout
+      | items: [
+          %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month, quantity: 2}
+        ],
+        reference: "sub-order-1"
+    }
+
+    test "a subscription checkout makes a product, a plan with its trial, and the subscription to approve" do
+      assert {:ok, %Checkout{id: "I-" <> _ = id, url: url, status: :open}} =
+               MishkaPay.checkout(Map.merge(@monthly, %{mode: :subscription, trial_days: 7}))
+
+      assert url =~ "/webapps/billing/subscriptions?ba_token="
+
+      {_headers, product} = paypal_request("POST", "/v1/catalogs/products")
+      assert product == %{"name" => "Pro", "type" => "SERVICE"}
+
+      {headers, plan} = paypal_request("POST", "/v1/billing/plans")
+      assert headers["paypal-request-id"] =~ "mishka_pay-plan-"
+
+      assert [
+               %{"tenure_type" => "TRIAL", "frequency" => %{"interval_count" => 7}},
+               %{
+                 "tenure_type" => "REGULAR",
+                 "sequence" => 2,
+                 "frequency" => %{"interval_unit" => "MONTH", "interval_count" => 1},
+                 "pricing_scheme" => %{"fixed_price" => %{"value" => "9.00"}}
+               }
+             ] = plan["billing_cycles"]
+
+      {_headers, sub} = paypal_request("POST", "/v1/billing/subscriptions")
+      assert sub["quantity"] == "2"
+      assert sub["custom_id"] == "sub-order-1"
+      assert sub["subscriber"] == %{"email_address" => "buyer@shop.test"}
+      assert sub["application_context"]["return_url"] == "https://shop.test/thanks"
+
+      assert {:ok, %Checkout{status: :open, subscription_id: nil}} =
+               MishkaPay.fetch_checkout("paypal", id, "site-a")
+    end
+
+    test "back from PayPal, an approved subscription completes its checkout and reads as active" do
+      {:ok, %Checkout{id: id}} = MishkaPay.checkout(Map.put(@monthly, :mode, :subscription))
+
+      PayPalStub.subscription(id, "ACTIVE",
+        billing_info: %{
+          "next_billing_time" => "2026-12-16T10:00:00Z",
+          "last_payment" => %{"time" => "2026-11-16T10:00:00Z"},
+          "cycle_executions" => [%{"tenure_type" => "REGULAR", "cycles_completed" => 1}]
+        }
+      )
+
+      assert {:ok, %Checkout{status: :complete, subscription_id: ^id, reference: "sub-order-1"}} =
+               MishkaPay.fetch_checkout("paypal", id, "site-a")
+
+      assert {:ok,
+              %Subscription{
+                status: :active,
+                reference: "sub-order-1",
+                current_period_end: period_end,
+                items: [%Price{amount: amount, quantity: 2, interval: :month, interval_count: 1}]
+              }} = MishkaPay.fetch_subscription("paypal", id, "site-a")
+
+      assert period_end == ~U[2026-12-16 10:00:00Z]
+      assert amount == Money.new(:USD, "9.00")
+
+      assert {:ok, %Invoice{status: :draft, amount_due: due}} =
+               MishkaPay.upcoming_invoice("paypal", id, "site-a")
+
+      assert due == Money.new(:USD, "18.00")
+    end
+
+    test "a subscription in its trial reads as trialing, until the trial ends" do
+      {:ok, %Checkout{id: id}} =
+        MishkaPay.checkout(Map.merge(@monthly, %{mode: :subscription, trial_days: 7}))
+
+      PayPalStub.subscription(id, "ACTIVE",
+        billing_info: %{
+          "next_billing_time" => "2026-11-23T10:00:00Z",
+          "cycle_executions" => [
+            %{"tenure_type" => "TRIAL", "cycles_completed" => 0},
+            %{"tenure_type" => "REGULAR", "cycles_completed" => 0}
+          ]
+        }
+      )
+
+      assert {:ok, %Subscription{status: :trialing, trial_end: ~U[2026-11-23 10:00:00Z]}} =
+               MishkaPay.fetch_subscription("paypal", id, "site-a")
+    end
+
+    test "its bills are its transactions, newest first; one not approved yet has none" do
+      {:ok, %Checkout{id: id}} = MishkaPay.checkout(Map.put(@monthly, :mode, :subscription))
+
+      assert {:ok, %Page{items: []}} =
+               MishkaPay.list_invoices("paypal", "site-a", subscription_id: id)
+
+      transactions = "/v1/billing/subscriptions/#{id}/transactions"
+      refute_received {:paypal, "GET", ^transactions, _headers, _body}
+
+      bill = fn id, time, status ->
+        %{
+          "id" => id,
+          "status" => status,
+          "time" => time,
+          "amount_with_breakdown" => %{
+            "gross_amount" => %{"currency_code" => "USD", "value" => "18.00"}
+          }
+        }
+      end
+
+      PayPalStub.subscription(id, "ACTIVE",
+        transactions: [
+          bill.("TX1", "2026-11-16T10:00:00Z", "COMPLETED"),
+          bill.("TX2", "2026-12-16T10:00:00Z", "DECLINED")
+        ]
+      )
+
+      assert {:ok, %Page{items: [%Invoice{id: "TX2", status: :uncollectible}, first]}} =
+               MishkaPay.list_invoices("paypal", "site-a", subscription_id: id)
+
+      assert %Invoice{id: "TX1", status: :paid, subscription_id: ^id} = first
+      assert first.amount_paid == Money.new(:USD, "18.00")
+    end
+
+    test "it is canceled at once; a cancel at the period's end and a resume are refused" do
+      {:ok, %Checkout{id: id}} = MishkaPay.checkout(Map.put(@monthly, :mode, :subscription))
+      PayPalStub.subscription(id, "ACTIVE")
+
+      assert {:error,
+              %Errors.Unsupported{operation: "canceling a subscription at the period's end" <> _}} =
+               MishkaPay.cancel_subscription("paypal", id, "site-a")
+
+      assert {:ok, %Subscription{status: :canceled, canceled_at: %DateTime{}}} =
+               MishkaPay.cancel_subscription("paypal", id, "site-a", at: :now)
+
+      assert {:error, %Errors.Unsupported{}} =
+               MishkaPay.resume_subscription("paypal", id, "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
+               MishkaPay.upcoming_invoice("paypal", id, "site-a")
+    end
+
+    test "an id that is not a PayPal subscription id never reaches a path" do
+      for id <- ["I-../../v1/x", "sub_123", "I-"] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :subscription_id}]}} =
+                 MishkaPay.fetch_subscription("paypal", id, "site-a")
+      end
+    end
+  end
+
   describe "webhooks" do
     @event %{
       "id" => "WH-EVT-1",
@@ -316,6 +467,26 @@ defmodule MishkaPay.Providers.PayPalTest do
 
       assert {:error, %Errors.BadSignature{reason: :malformed}} =
                PayPal.verify_webhook("not json", headers("good"), keys)
+    end
+
+    test "a subscription's own events and its renewals' sales name the subscription" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+
+      for {type, resource_type, resource} <- [
+            {"BILLING.SUBSCRIPTION.ACTIVATED", "subscription", %{"id" => "I-SUB42AAAA"}},
+            {"PAYMENT.SALE.COMPLETED", "sale",
+             %{"id" => "SALE1", "billing_agreement_id" => "I-SUB42AAAA"}}
+          ] do
+        event = %{
+          @event
+          | "event_type" => type,
+            "resource_type" => resource_type,
+            "resource" => resource
+        }
+
+        assert {:ok, %Event{subscription_id: "I-SUB42AAAA", payment_id: nil}} =
+                 PayPal.verify_webhook(JSON.encode!(event), headers("good"), keys)
+      end
     end
   end
 end
