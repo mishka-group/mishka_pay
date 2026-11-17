@@ -75,7 +75,9 @@ Keys fields: `secret_key` (required), `publishable_key`, `webhook_secret`, `webh
 (older secrets still accepted while a rolled one runs out, see `usage-rules/webhooks.md`), `mode` (`:test`
 default, or `:live`), `merchant_of_record` (Stripe Managed Payments, `true`/`false`/absent),
 `refunds` (`:once` default, or `:many`), `automatic_tax` (`true` counts the tax of every checkout
-and payment link of this site with Stripe Tax; a checkout's own choice wins), `extra` (a map). Answer `nil` for a tenant without keys.
+and payment link of this site with Stripe Tax; a checkout's own choice wins), `account_id` (the
+connected account the site acts for on a Stripe Connect platform: `acct_...`, sent as
+`Stripe-Account` on every request; see `usage-rules/stripe.md`), `extra` (a map). Answer `nil` for a tenant without keys.
 
 Mount the webhook endpoint **before** `Plug.Parsers` in the endpoint (it needs the raw body):
 

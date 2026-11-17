@@ -35,6 +35,9 @@ plug Plug.Parsers, ...
 | 500 | a listener failed, raised, exited or took over 15 s | sends again later |
 
 An unknown tenant gets the same 400 as a bad signature, so strangers cannot tell which sites exist.
+A tenant whose keys name a connected account (`account_id`) gets 400 (`:account`) for an event
+about any other account; the platform's own URL takes its connected accounts' events with
+`event.account` set (`usage-rules/stripe.md`, Connect).
 A refused message is never stored.
 
 ## The events that change anything

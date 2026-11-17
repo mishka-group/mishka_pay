@@ -77,6 +77,8 @@ defmodule MishkaPay.Messages do
           | :managed_payments_shipping
           | :shipping_countries
           | :webhook_secrets
+          | :account_id_plain
+          | :account_invalid
           | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
@@ -421,6 +423,20 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The webhook_secrets field must be a list of secrets, none of them empty"
+      )
+
+  defp msgid(:account_id_plain),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The account_id field must be an account id of letters, digits and underscores only"
+      )
+
+  defp msgid(:account_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} does not know this site's connected account, or the platform's key has no access to it"
       )
 
   defp msgid(:shipping_countries),

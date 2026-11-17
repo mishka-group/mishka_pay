@@ -1894,5 +1894,18 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
   end
 
+  # The account this key reaches is checked by Stripe, not by Mishka Pay: a site's keys that name
+  # an account the platform does not have are refused plainly, and the key never shows.
+  test "a site's keys naming a connected account the platform does not have are a plain rejection",
+       %{key: key} do
+    MishkaPay.Test.put_keys("stripe", %{secret_key: key, account_id: "acct_1doesnotexist0"}, "x")
+
+    assert {:error, %Errors.Rejected{code: "account_invalid"} = error} =
+             MishkaPay.fetch_balance("stripe", "x")
+
+    assert Exception.message(error) =~ "connected account"
+    refute Exception.message(error) =~ "sk_test"
+  end
+
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

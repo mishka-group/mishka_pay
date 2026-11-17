@@ -146,6 +146,39 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.request(%{provider: "stripe", path: "/v1/no_such_thing"})
     end
 
+    test "a site acting for a connected account sends it as Stripe-Account on every call; the platform sends none" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.request_path, Map.new(conn.req_headers)})
+        StripeMock.forward(conn)
+      end)
+
+      MishkaPay.Test.put_keys(
+        "stripe",
+        %{secret_key: "sk_test_platform", account_id: "acct_site_b"},
+        "site-b"
+      )
+
+      assert {:ok, %Payment{}} = MishkaPay.fetch_payment("stripe", "pi_123", "site-b")
+      assert_received {:sent, "/v1/payment_intents/pi_123", read}
+
+      assert {read["stripe-account"], read["authorization"]} ==
+               {"acct_site_b", "Bearer sk_test_platform"}
+
+      assert {:ok, %{"object" => "balance"}} =
+               MishkaPay.request(%{provider: "stripe", tenant: "site-b", path: "/v1/balance"})
+
+      assert_received {:sent, "/v1/balance", %{"stripe-account" => "acct_site_b"}}
+
+      assert {:ok, %Checkout{}} = MishkaPay.checkout(%{@checkout | tenant: "site-b"})
+      assert_received {:sent, "/v1/checkout/sessions", %{"stripe-account" => "acct_site_b"}}
+
+      assert {:ok, %Payment{}} = MishkaPay.fetch_payment("stripe", "pi_123", "site-a")
+      assert_received {:sent, "/v1/payment_intents/pi_123", platform}
+      refute Map.has_key?(platform, "stripe-account")
+    end
+
     test "a reference reused with other details is a plain rejection that never shows the key" do
       MishkaPay.Test.stub_http(fn conn ->
         conn
@@ -2884,6 +2917,37 @@ defmodule MishkaPay.Providers.StripeTest do
   end
 
   describe "before any request" do
+    test "a connected account that is not an account id, or would end the header, is never sent" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_1", account_id: "cus_1"}, "site-c")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :account_id}]}} =
+               MishkaPay.fetch_payment("stripe", "pi_123", "site-c")
+
+      for id <- ["acct_1\r\nstripe-account: acct_2", "acct_1 acct_2", ""] do
+        MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_1", account_id: id}, "site-c")
+
+        assert {:error, %Errors.Invalid{errors: [%{field: :account_id}]}} =
+                 MishkaPay.fetch_payment("stripe", "pi_123", "site-c")
+      end
+    end
+
+    test "a raw call has no way to set a header, so it cannot act for another account" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      for extra <- [
+            %{headers: %{"stripe-account" => "acct_other"}},
+            %{options: %{headers: %{"stripe-account" => "acct_other"}}},
+            %{options: %{stripe_account: "acct_other"}}
+          ] do
+        assert {:error, %Errors.Invalid{}} =
+                 MishkaPay.request(
+                   Map.merge(%{provider: "stripe", tenant: "site-a", path: "/v1/balance"}, extra)
+                 )
+      end
+    end
+
     test "an id that is not a Stripe id never reaches a path" do
       assert {:error, %Errors.Invalid{errors: [%{field: :payment_id}]}} =
                MishkaPay.fetch_payment("stripe", "pi_1/../../v1/charges", "site-a")

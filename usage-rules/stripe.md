@@ -14,6 +14,27 @@
 - A write's `:reference` with its method and path makes the idempotency key; without one, a
   write gets a fresh key that its retries reuse.
 
+## Connect: a platform and its sites
+
+- A platform (Mishka Cloud, a marketplace) keeps one Stripe secret key and gives each site its
+  own connected account (`acct_...`). The site's keys answer the platform's `secret_key` with
+  the site's `account_id`; every Stripe request for that tenant then carries
+  `Stripe-Account: acct_...`, so its payments, customers and refunds live on the site's account.
+  Keys without `account_id` are the platform itself.
+- The header comes only from the keys. No call, `RequestOptions` or `MishkaPay.request/1` can
+  set it: a raw call has no header field. An `account_id` that is not `acct_` and plain is
+  `Errors.Invalid` on `:account_id` before any request.
+- Webhooks: a tenant with `account_id` takes only events that name that account (Stripe's
+  top-level `account`); an event of the platform's own account or of another connected account
+  is refused with 400 (`BadSignature`, reason `:account`). Mishka Pay never routes an event to
+  another tenant: it keeps no map from account to site, and a message checked with one tenant's
+  secret must never act on another's data. A platform subscribes **one** Connect endpoint
+  ("Events from: Connected accounts") to its own tenant's URL (keys without `account_id`); each
+  event there names its `:account`, and the host's listener finds the site by it. Never point a
+  Connect endpoint at a site's URL when the platform has more than one connected account: it
+  receives every account's events, refuses the others, and Stripe retries them until it turns
+  the endpoint off.
+
 ## Retries and rate limits
 
 - A read, and a write with its idempotency key, is tried again on a network error and on 408,

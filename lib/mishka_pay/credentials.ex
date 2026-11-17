@@ -44,6 +44,13 @@ defmodule MishkaPay.Credentials do
       in part, and a buyer who wants it again makes a new purchase. `:many`: part refunds until
       the payment is used up, as the provider itself allows; each refund then needs its own
       `:reference` (`MishkaPay.Refund`).
+    * `:account_id`: the connected account this tenant acts for, at a provider with connected
+      accounts (Stripe Connect, `acct_...`). A platform answers its own secret key with each site's
+      connected account: every request is then made as that account (Stripe's `Stripe-Account`
+      header), and a webhook message about any other account is refused. Left out, the tenant is
+      the account that owns the secret key (the platform itself, or a plain site). It comes only
+      from these keys: no call, request option or raw request can set the header. A provider
+      without connected accounts (PayPal) never reads it.
 
   These are read at runtime on every call, never from `config.exs`, so each tenant of a
   multi-site project carries its own and a change in its settings applies to the next call.
@@ -85,6 +92,10 @@ defmodule MishkaPay.Credentials do
       default: :once,
       derives: "validate(not_nil_value, enum=Atom[once::many])",
       validator: {__MODULE__, :refunds}
+
+    field :account_id, String.t(),
+      derives: "sanitize(trim) validate(string, not_empty, max_len=255)",
+      validator: {__MODULE__, :account_id}
 
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
 
@@ -230,6 +241,20 @@ defmodule MishkaPay.Credentials do
   end
 
   def secret_list(field, _other), do: {:error, field, MishkaPay.Messages.text(:webhook_secrets)}
+
+  # An account id goes into a request header: letters, digits and underscores only, so it can never
+  # end the header or add another.
+  @doc false
+  def account_id(field, id) when is_binary(id) do
+    trimmed = String.trim(id)
+
+    case Regex.match?(~r/\A[A-Za-z0-9_]+\z/, trimmed) do
+      true -> {:ok, field, trimmed}
+      false -> {:error, field, MishkaPay.Messages.text(:account_id_plain)}
+    end
+  end
+
+  def account_id(field, id), do: {:ok, field, id}
 
   # A plugin that reads its keys from JSON or settings answers the mode as a string.
   @doc false

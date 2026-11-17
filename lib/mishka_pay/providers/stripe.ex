@@ -114,6 +114,12 @@ defmodule MishkaPay.Providers.Stripe do
       (`config :mishka_pay, MishkaPay.Providers.Stripe, webhook_tolerance: seconds`), and from the
       same mode (live or test) as the tenant's keys.
 
+  A tenant whose keys name a connected account (`:account_id`, `acct_...`) acts as that account:
+  every request carries it in the `Stripe-Account` header, and only from the keys. Such a tenant
+  takes only webhook messages about its own account (Stripe's `account` on the event); one about
+  the platform or another connected account is refused like a bad signature. Keys without one
+  are the platform's own, and take its connected accounts' events, each with its `:account`.
+
   Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
   and other errors as `MishkaPay.Errors.Rejected` with its code and status. Both keep Stripe's
   `Request-Id` header as `:request_id` (`req_...`) and its error page as `:doc_url`, for support and
@@ -1960,7 +1966,8 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- fresh(timestamp),
          :ok <- signed(payload, timestamp, signatures, secrets),
          {:ok, %{} = event} <- decode(payload),
-         :ok <- same_mode(event, keys) do
+         :ok <- same_mode(event, keys),
+         :ok <- same_account(event, keys) do
       Mapper.event(event)
     end
   end
@@ -2058,34 +2065,54 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp same_mode(_event, _keys), do: bad(:malformed)
 
+  # A tenant that acts for a connected account takes only that account's events: one about the
+  # platform's own account (no `account`) or another connected account is not this tenant's. The
+  # platform's own keys (no `:account_id`) take its connected accounts' events too, each naming
+  # its `:account`, for the host to tell which of its sites it is about.
+  defp same_account(event, keys) do
+    case {Map.get(keys, :account_id), event["account"]} do
+      {nil, _any} -> :ok
+      {account, account} -> :ok
+      _another -> bad(:account)
+    end
+  end
+
   defp bad(reason),
     do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
   # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
   # `upload: true` sends `params` as multipart parts to Stripe's files host; `request_options:` (a
-  # `MishkaPay.RequestOptions`) another API version and the objects to expand.
+  # `MishkaPay.RequestOptions`) another API version and the objects to expand. The tenant's
+  # connected account (`:account_id` in its keys) goes in `Stripe-Account` on every request, so
+  # each call is made as that account; nothing else sets the header.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
     options = opts[:request_options] || %RequestOptions{}
+    account_id = Map.get(keys, :account_id)
 
-    base = %{
-      provider: "stripe",
-      method: method,
-      base_url: base_url(opts[:upload] == true),
-      path: path,
-      auth: {:bearer, keys.secret_key},
-      headers: %{"stripe-version" => options.api_version || @version},
-      idempotency_header: "idempotency-key",
-      idempotency_key: opts[:key],
-      retry_header: "stripe-should-retry",
-      limit_header: "stripe-rate-limited-reason"
-    }
-
-    base
-    |> put_body(method, expanded(params, options.expand), opts[:upload] == true)
-    |> Client.request()
-    |> answer()
+    with :ok <- maybe_id(account_id, "acct_", :account_id) do
+      %{
+        provider: "stripe",
+        method: method,
+        base_url: base_url(opts[:upload] == true),
+        path: path,
+        auth: {:bearer, keys.secret_key},
+        headers: headers(options, account_id),
+        idempotency_header: "idempotency-key",
+        idempotency_key: opts[:key],
+        retry_header: "stripe-should-retry",
+        limit_header: "stripe-rate-limited-reason"
+      }
+      |> put_body(method, expanded(params, options.expand), opts[:upload] == true)
+      |> Client.request()
+      |> answer()
+    end
   end
+
+  defp headers(options, nil), do: %{"stripe-version" => options.api_version || @version}
+
+  defp headers(options, account_id),
+    do: options |> headers(nil) |> Map.put("stripe-account", account_id)
 
   # Stripe takes `expand[]` in a read's query and in a write's form alike.
   defp expanded(params, nil), do: params

@@ -104,6 +104,32 @@ defmodule MishkaPay.WebhookTest do
     assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{outcome: :mode}}
   end
 
+  test "a site acting for a connected account takes only that account's events", %{ref: ref} do
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_platform", webhook_secret: @secret, account_id: "acct_site_b"},
+      "site-b"
+    )
+
+    own = payload(%{"account" => "acct_site_b"})
+    assert post("/pay/webhooks/stripe/site-b", own, signed(own)).status == 200
+    assert_received {:webhook_event, %Event{tenant: "site-b", account: "acct_site_b"}}
+
+    for body <- [payload(%{"account" => "acct_site_c"}), payload()] do
+      assert post("/pay/webhooks/stripe/site-b", body, signed(body)).status == 400
+      assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{status: 400, outcome: :account}}
+    end
+
+    refute_received {:webhook_event, _event}
+  end
+
+  test "the platform's own endpoint takes its connected accounts' events, each naming its account" do
+    body = payload(%{"account" => "acct_site_b"})
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+    assert_received {:webhook_event, %Event{tenant: "site-a", account: "acct_site_b"}}
+  end
+
   test "a rolled secret still works while Stripe signs with both" do
     body = payload()
     time = System.system_time(:second)

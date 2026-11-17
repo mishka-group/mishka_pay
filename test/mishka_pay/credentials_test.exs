@@ -40,6 +40,26 @@ defmodule MishkaPay.CredentialsTest do
     assert inspect(keys) =~ "site-a"
   end
 
+  test "a platform key answers each site's connected account, which must be a plain id" do
+    MishkaPay.Test.put_keys(
+      "acme",
+      %{secret_key: "sk_platform", account_id: " acct_1 "},
+      "site-b"
+    )
+
+    assert {:ok, %Credentials{account_id: "acct_1"}} = Credentials.fetch("acme", "site-b")
+
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_platform"}, "platform")
+    assert {:ok, %Credentials{account_id: nil}} = Credentials.fetch("acme", "platform")
+
+    for id <- ["acct_1\r\nx-other: 1", "acct 1", "", 7] do
+      MishkaPay.Test.put_keys("acme", %{secret_key: "sk_platform", account_id: id}, "site-b")
+
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :account_id} | _]}} =
+               Credentials.fetch("acme", "site-b")
+    end
+  end
+
   test "the first plugin that answers wins" do
     MishkaPay.Test.start_plugin!(FallbackKeys)
     MishkaPay.Test.start_plugin!(SiteKeys)
