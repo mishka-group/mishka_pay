@@ -245,6 +245,8 @@ defmodule MishkaPay.Providers.Stripe do
   @version "2026-10-28.endive"
 
   @eu_countries ~w(AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK)
+  @scheme_countries ~w(AE AL AO AU AW BA BB BD BF BH BS CD CH ET GB GN IS JP ME MK MR NO NZ OM RS
+                       SG SR UY ZA ZW)
   @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
@@ -380,6 +382,25 @@ defmodule MishkaPay.Providers.Stripe do
   @doc "The Stripe API version every request is pinned to."
   @spec version() :: String.t()
   def version, do: @version
+
+  @doc """
+  The place of supply schemes Stripe takes for a tax registration of `type` in `country` (two
+  capital letters), from its API's `country_options`: a `"standard"` registration in an EU
+  country takes `:standard`, `:small_seller` or `:inbound_goods`; one in the other countries
+  whose standard registration has a scheme (the UK, Norway, Switzerland, Australia, Japan and
+  others) takes `:standard` or `:inbound_goods`; any other registration takes none (`[]`).
+  `MishkaPay.create_tax_registration/1` refuses any other before asking Stripe.
+  """
+  @spec place_of_supply_schemes(String.t(), String.t()) :: [
+          :inbound_goods | :small_seller | :standard
+        ]
+  def place_of_supply_schemes(country, "standard") when country in @eu_countries,
+    do: [:standard, :small_seller, :inbound_goods]
+
+  def place_of_supply_schemes(country, "standard") when country in @scheme_countries,
+    do: [:standard, :inbound_goods]
+
+  def place_of_supply_schemes(_country, _type), do: []
 
   @doc """
   The API version of Stripe's newest published OpenAPI spec (github.com/stripe/openapi): its
@@ -1399,14 +1420,13 @@ defmodule MishkaPay.Providers.Stripe do
   defp registration_state(%{state: nil}), do: :ok
   defp registration_state(_other), do: invalid(:state, Messages.text(:registration_state))
 
-  # A place of supply scheme goes only with a standard registration in an EU country.
   defp registration_scheme(%{place_of_supply_scheme: nil}), do: :ok
 
-  defp registration_scheme(%{country: country, type: "standard"}) when country in @eu_countries,
-    do: :ok
-
-  defp registration_scheme(_other),
-    do: invalid(:place_of_supply_scheme, Messages.text(:registration_scheme))
+  defp registration_scheme(%{country: country, type: type, place_of_supply_scheme: scheme}) do
+    if scheme in place_of_supply_schemes(country, type),
+      do: :ok,
+      else: invalid(:place_of_supply_scheme, Messages.text(:registration_scheme))
+  end
 
   # Every tax rate a line or a bill names is a Stripe tax rate id.
   defp tax_rates(lines) do

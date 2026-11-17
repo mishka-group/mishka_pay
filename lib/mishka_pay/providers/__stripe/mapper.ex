@@ -1057,8 +1057,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @doc """
   Params of `POST /v1/tax/registrations`: the country, and its kind (and state or province, or
-  an EU standard registration's place of supply scheme) under the country's own
-  `country_options`; it starts now unless `:active_from` says when.
+  a standard registration's place of supply scheme) under the country's own `country_options`;
+  it starts now unless `:active_from` says when.
   """
   @spec tax_registration_params(MishkaPay.TaxRegistration.t()) :: map()
   def tax_registration_params(%MishkaPay.TaxRegistration{} = registration) do
@@ -1087,7 +1087,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp registration_options(%{type: type}), do: %{"type" => type}
 
   @registration_statuses %{"active" => :active, "scheduled" => :scheduled, "expired" => :expired}
-  @supply_schemes %{"small_seller" => :small_seller, "standard" => :standard}
+  @supply_schemes %{
+    "inbound_goods" => :inbound_goods,
+    "small_seller" => :small_seller,
+    "standard" => :standard
+  }
 
   @doc "A Stripe Tax Registration as a `MishkaPay.TaxRegistration`."
   @spec tax_registration(map()) ::

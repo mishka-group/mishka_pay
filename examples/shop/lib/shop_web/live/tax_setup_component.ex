@@ -5,7 +5,8 @@ defmodule ShopWeb.TaxSetupComponent do
   the site is registered to collect tax (`MishkaPay.create_tax_registration/1`,
   `list_tax_registrations/3`, ended with `expire_tax_registration/4`; the form offers only the
   kinds Stripe takes in the country typed, a state where the kind needs one, and the place of
-  supply scheme of an EU standard registration), and Stripe Tax's settings
+  supply schemes `MishkaPay.Providers.Stripe.place_of_supply_schemes/2` gives for a standard
+  registration), and Stripe Tax's settings
   (`MishkaPay.fetch_tax_settings/2`, `update_tax_settings/1`): the head office and the defaults.
 
   Nothing is read when the page opens: "Show tax setup" reads the three in the background
@@ -33,8 +34,8 @@ defmodule ShopWeb.TaxSetupComponent do
 
   # The registration kinds Stripe takes in each country (its API's `country_options`).
   @eu ~w(AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK)
-  @simplified_only ~w(AM AZ BJ BY CL CM CO CR CV EC EG GE ID IN KE KG KH KR KZ LA MA MD MX MY NG
-                      NP PE PH RU SA SN TH TJ TR TW TZ UA UG UZ VN ZM)
+  @simplified_only ~w(AM AZ BJ BW BY CI CL CM CO CR CV EC EG GE GH ID IN KE KG KH KR KZ LA LK MA
+                      MD MU MX MY NG NP PE PH RU SA SN TH TJ TR TW TZ UA UG UZ VN ZM)
   @us_kinds ~w(state_sales_tax state_communications_tax state_retail_delivery_fee
                local_amusement_tax local_lease_tax)
 
@@ -203,13 +204,17 @@ defmodule ShopWeb.TaxSetupComponent do
     end)
   end
 
-  # The form as typed, with a kind the country takes: the first one when the country changed.
+  # The form as typed, with a kind the country takes and a scheme the kind takes: the first one
+  # when the country or the kind changed.
   defp registration_form(params) do
     form = Map.merge(@registration_form, Map.take(params, Map.keys(@registration_form)))
     country = form["country"] |> to_string() |> String.trim() |> String.upcase()
     kinds = kinds(country)
     type = (form["type"] in kinds && form["type"]) || hd(kinds)
-    %{form | "country" => country, "type" => type}
+    form = %{form | "country" => country, "type" => type}
+    schemes = Enum.map(schemes(form), &Atom.to_string/1)
+    scheme = form["place_of_supply_scheme"]
+    %{form | "place_of_supply_scheme" => (scheme in schemes && scheme) || List.first(schemes)}
   end
 
   defp kinds(country) when country in @eu, do: ~w(standard oss_union oss_non_union ioss)
@@ -222,8 +227,14 @@ defmodule ShopWeb.TaxSetupComponent do
   defp state?(%{"country" => "CA", "type" => "province_standard"}), do: true
   defp state?(_form), do: false
 
-  defp scheme?(%{"country" => country, "type" => "standard"}), do: country in @eu
-  defp scheme?(_form), do: false
+  defp schemes(%{"country" => country, "type" => type}),
+    do: MishkaPay.Providers.Stripe.place_of_supply_schemes(country, type)
+
+  defp scheme?(form), do: schemes(form) != []
+
+  defp scheme_label(:small_seller), do: "small seller (under the EU threshold)"
+  defp scheme_label(:inbound_goods), do: "inbound goods"
+  defp scheme_label(:standard), do: "standard"
 
   defp done(socket, notice), do: assign(socket, notice: notice, error: nil)
   defp failed(socket, error), do: assign(socket, error: MishkaPay.Ash.message(error), notice: nil)
@@ -441,16 +452,11 @@ defmodule ShopWeb.TaxSetupComponent do
                 data-testid="tax-registration-scheme"
               >
                 <option
-                  :for={
-                    {value, label} <- [
-                      {"standard", "standard"},
-                      {"small_seller", "small seller (under the EU threshold)"}
-                    ]
-                  }
-                  value={value}
-                  selected={value == @registration_form["place_of_supply_scheme"]}
+                  :for={scheme <- schemes(@registration_form)}
+                  value={scheme}
+                  selected={Atom.to_string(scheme) == @registration_form["place_of_supply_scheme"]}
                 >
-                  {label}
+                  {scheme_label(scheme)}
                 </option>
               </select>
             </label>

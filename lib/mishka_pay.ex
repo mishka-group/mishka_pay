@@ -623,7 +623,7 @@ defmodule MishkaPay do
   @doc """
   Registers the seller to collect tax in a country, from `attrs` (see `MishkaPay.TaxRegistration`):
   its `:country` and `:type`, a `:state` where the kind needs one, the `:place_of_supply_scheme`
-  of an EU standard registration, and when it starts and ends.
+  of a standard registration, and when it starts and ends.
   The provider's tax counting then charges tax there.
   """
   @spec create_tax_registration(map()) ::

@@ -19,10 +19,12 @@ defmodule MishkaPay.TaxRegistration do
       exists; in the EU also `"oss_union"`, `"oss_non_union"` or `"ioss"`; in the US
       `"state_sales_tax"` and the other state kinds; in Canada `"province_standard"` too.
     * `:state`: the US state or the Canadian province (two letters), where the kind needs one.
-    * `:place_of_supply_scheme`: for a `"standard"` registration in an EU country, which place
-      of supply scheme it follows: `:small_seller` (a seller under the EU's yearly threshold for
-      selling across borders) or `:standard`. Stripe needs it for that registration, and a
-      registration of any other kind or country refuses it.
+    * `:place_of_supply_scheme`: for a `"standard"` registration, which place of supply scheme
+      it follows: `:standard`, `:inbound_goods`, or in an EU country also `:small_seller` (a
+      seller under the EU's yearly threshold for selling across borders). Stripe takes it in the
+      EU and in the other countries whose standard registration has one
+      (`MishkaPay.Providers.Stripe.place_of_supply_schemes/2` says which); a registration of
+      any other kind or country refuses it.
     * `:active_from`: when it starts; left out, at once.
     * `:expires_at`: when it ends; left out, never.
 
@@ -49,8 +51,8 @@ defmodule MishkaPay.TaxRegistration do
 
     field :state, String.t(), derives: "sanitize(trim, upcase) validate(string, regex=^[A-Z]{2}$)"
 
-    field :place_of_supply_scheme, :small_seller | :standard,
-      derives: "validate(enum=Atom[small_seller::standard])",
+    field :place_of_supply_scheme, :inbound_goods | :small_seller | :standard,
+      derives: "validate(enum=Atom[inbound_goods::small_seller::standard])",
       validator: {__MODULE__, :place_of_supply_scheme}
 
     field :active_from, DateTime.t(), derives: "validate(struct)"
@@ -64,5 +66,5 @@ defmodule MishkaPay.TaxRegistration do
 
   @doc false
   def place_of_supply_scheme(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(small_seller standard))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inbound_goods small_seller standard))
 end

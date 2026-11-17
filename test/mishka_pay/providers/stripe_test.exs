@@ -2841,21 +2841,6 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert map_size(eu) == 3
 
-      assert {:ok, %MishkaPay.TaxRegistration{id: "taxreg_" <> _}} =
-               MishkaPay.create_tax_registration(%{
-                 provider: "stripe",
-                 tenant: "site-a",
-                 country: "FR",
-                 type: "standard",
-                 place_of_supply_scheme: "small_seller"
-               })
-
-      assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
-                       %{
-                         "country_options[fr][type]" => "standard",
-                         "country_options[fr][standard][place_of_supply_scheme]" => "small_seller"
-                       }, _key}
-
       ends = ~U[2030-01-01 00:00:00Z]
 
       assert {:ok, %MishkaPay.TaxRegistration{}} =
@@ -2926,6 +2911,45 @@ defmodule MishkaPay.Providers.StripeTest do
              }
     end
 
+    test "a standard registration sends its place of supply scheme where Stripe's spec takes one" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.TaxRegistration{id: "taxreg_" <> _}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 country: "FR",
+                 type: "standard",
+                 place_of_supply_scheme: "small_seller"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
+                       %{
+                         "country_options[fr][type]" => "standard",
+                         "country_options[fr][standard][place_of_supply_scheme]" => "small_seller"
+                       }, _key}
+
+      for {country, scheme} <- [{"GB", :inbound_goods}, {"IS", :standard}, {"DE", :inbound_goods}] do
+        assert {:ok, %MishkaPay.TaxRegistration{}} =
+                 MishkaPay.create_tax_registration(%{
+                   provider: "stripe",
+                   tenant: "site-a",
+                   country: country,
+                   type: "standard",
+                   place_of_supply_scheme: scheme
+                 })
+
+        code = String.downcase(country)
+        type_key = "country_options[#{code}][type]"
+        scheme_key = "country_options[#{code}][standard][place_of_supply_scheme]"
+        sent = Atom.to_string(scheme)
+
+        assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
+                         %{^type_key => "standard", ^scheme_key => ^sent}, _key}
+      end
+    end
+
     test "tax rates where Stripe takes none, and tax setups that cannot be right, are refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
 
@@ -2956,8 +2980,20 @@ defmodule MishkaPay.Providers.StripeTest do
              }), :state},
             {MishkaPay.create_tax_registration(%{
                provider: "stripe",
-               country: "IS",
+               country: "GB",
                type: "standard",
+               place_of_supply_scheme: :small_seller
+             }), :place_of_supply_scheme},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "CA",
+               type: "standard",
+               place_of_supply_scheme: :standard
+             }), :place_of_supply_scheme},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "IN",
+               type: "simplified",
                place_of_supply_scheme: :standard
              }), :place_of_supply_scheme},
             {MishkaPay.create_tax_registration(%{
@@ -4654,18 +4690,24 @@ defmodule MishkaPay.Providers.StripeTest do
                "active_from" => 1_894_825_000
              })
 
-    for {scheme, read} <- [{"small_seller", :small_seller}, {"inbound_goods", nil}] do
+    for {country, scheme, read} <- [
+          {"DE", "small_seller", :small_seller},
+          {"DE", "inbound_goods", :inbound_goods},
+          {"GB", "inbound_goods", :inbound_goods},
+          {"JP", "standard", :standard},
+          {"GB", "something_new", nil}
+        ] do
       assert {:ok,
               %MishkaPay.TaxRegistration{
-                country: "DE",
+                country: ^country,
                 type: "standard",
                 place_of_supply_scheme: ^read
               }} =
                Stripe.Mapper.tax_registration(%{
                  "id" => "taxreg_2",
-                 "country" => "DE",
+                 "country" => country,
                  "country_options" => %{
-                   "de" => %{
+                   String.downcase(country) => %{
                      "type" => "standard",
                      "standard" => %{"place_of_supply_scheme" => scheme}
                    }

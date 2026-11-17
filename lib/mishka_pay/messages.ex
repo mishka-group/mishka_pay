@@ -752,7 +752,7 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "A place of supply scheme goes only with a standard registration in an EU country"
+        "Stripe takes no such place of supply scheme for this kind of registration in this country"
       )
 
   defp msgid(:registration_state),

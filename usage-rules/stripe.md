@@ -326,11 +326,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   go under `country_options[<country>]` (Canada's provincial one as
   `province_standard[province]`); a US registration and Canada's `"province_standard"` need
   `:state`, refused before any request without it, and any other registration refuses one.
-  Stripe needs a `"standard"` registration in an EU country to say its `:place_of_supply_scheme`
-  (`:small_seller` or `:standard`, sent as `standard[place_of_supply_scheme]`); one given with
-  another kind or outside the EU is `Errors.Invalid` before any request. `expire_tax_registration/4` sets
-  `expires_at` (`now` unless `at:`); Stripe never deletes one. A second registration of the same
-  kind in a country is `Errors.Rejected`.
+  A `"standard"` registration may say its `:place_of_supply_scheme`, sent as
+  `standard[place_of_supply_scheme]`: in an EU country `:standard`, `:small_seller` or
+  `:inbound_goods`; in the other countries whose standard registration has one (GB, NO, CH,
+  AU, JP, IS and others) `:standard` or `:inbound_goods`.
+  `MishkaPay.Providers.Stripe.place_of_supply_schemes/2` gives the list for a country and kind;
+  any other scheme, kind or country is `Errors.Invalid` before any request.
+  `expire_tax_registration/4` sets `expires_at` (`now` unless `at:`); Stripe never deletes one.
+  A second registration of the same kind in a country is `Errors.Rejected`.
 - `fetch_tax_settings/2` and `update_tax_settings/1` are `GET` and `POST /v1/tax/settings`:
   `:head_office` is `head_office[address]`, `:tax_code` and `:tax_behavior` are `defaults`.
 - Stripe sends `tax_rate.created` and `.updated`; the event's `:object_id` is the rate.

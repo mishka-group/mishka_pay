@@ -791,6 +791,14 @@ defmodule MishkaPayTest do
                  type: "standard",
                  place_of_supply_scheme: "sometimes"
                })
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :tax_setup}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "acme",
+                 country: "GB",
+                 type: "standard",
+                 place_of_supply_scheme: "inbound_goods"
+               })
     end
 
     test "a line's tax rates are a list of ids" do

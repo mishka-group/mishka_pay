@@ -231,12 +231,51 @@ defmodule ShopWeb.TaxSetupTest do
     view |> form(form, %{country: "IS"}) |> render_change()
     assert has_element?(view, "#{kind} option[value=standard][selected]")
     refute has_element?(view, "[data-testid=tax-registration-state]")
-    refute has_element?(view, "[data-testid=tax-registration-scheme]")
+    assert has_element?(view, "[data-testid=tax-registration-scheme]")
 
     view |> form(form, %{country: "CA"}) |> render_change()
     refute has_element?(view, "[data-testid=tax-registration-state]")
+    refute has_element?(view, "[data-testid=tax-registration-scheme]")
     view |> form(form, %{type: "province_standard"}) |> render_change()
     assert has_element?(view, "[data-testid=tax-registration-state]")
+
+    view |> form(form, %{country: "BW"}) |> render_change()
+    assert has_element?(view, "#{kind} option[value=simplified][selected]")
+    refute has_element?(view, "#{kind} option[value=standard]")
+  end
+
+  test "the place of supply schemes offered are the ones Stripe takes in the country", %{
+    conn: conn
+  } do
+    view = shown(conn)
+    form = "[data-testid=tax-registration-form]"
+    scheme = "[data-testid=tax-registration-scheme]"
+
+    for value <- ~w(standard small_seller inbound_goods),
+        do: assert(has_element?(view, "#{scheme} option[value=#{value}]"))
+
+    view |> form(form, %{place_of_supply_scheme: "small_seller"}) |> render_change()
+    assert has_element?(view, "#{scheme} option[value=small_seller][selected]")
+
+    view |> form(form, %{country: "GB"}) |> render_change()
+    refute has_element?(view, "#{scheme} option[value=small_seller]")
+    assert has_element?(view, "#{scheme} option[value=standard][selected]")
+    assert has_element?(view, "#{scheme} option[value=inbound_goods]")
+
+    view |> form(form, %{place_of_supply_scheme: "inbound_goods"}) |> render_change()
+    assert has_element?(view, "#{scheme} option[value=inbound_goods][selected]")
+    view |> form(form) |> render_submit()
+
+    assert_received {:registered,
+                     %{
+                       "country" => "GB",
+                       "country_options" => %{
+                         "gb" => %{
+                           "type" => "standard",
+                           "standard" => %{"place_of_supply_scheme" => "inbound_goods"}
+                         }
+                       }
+                     }}
   end
 
   test "the settings are saved: the head office and the default behavior", %{conn: conn} do
