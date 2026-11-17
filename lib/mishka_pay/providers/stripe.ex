@@ -2368,6 +2368,7 @@ defmodule MishkaPay.Providers.Stripe do
   defp accounts_page(:v1, opts, keys),
     do: page("/v1/accounts", [], opts, keys, &Mapper.connected_account/1)
 
+  @v2_capability ~r/\A(merchant|recipient|customer)\.[a-z0-9_.]+\z/
   @reject_reasons ~w(credit fraud_no_intent_to_fulfill fraud_other fraud_payment_method_casher fraud_payment_method_tester other terms_of_service)
 
   # API v2 closes an account only with every configuration it has, so it is read first. Accounts
@@ -2443,24 +2444,31 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Accounts v1 has no customer configuration and names a capability plainly; on v2 a capability
   # is its configuration and its path there.
-  defp account_fits(%{configurations: configurations, capabilities: names}, :v1) do
-    case {:customer in List.wrap(configurations),
-          Enum.any?(List.wrap(names), &String.contains?(&1, "."))} do
-      {true, _dotted} -> invalid(:configurations, Messages.text(:connect_v1_customer))
-      {_customer, true} -> invalid(:capabilities, Messages.text(:connect_capability_v1))
-      _fits -> :ok
+  defp account_fits(account, :v1) do
+    with :ok <-
+           refused_if(
+             :customer in List.wrap(account.configurations),
+             :configurations,
+             :connect_v1_customer
+           ) do
+      refused_if(
+        Enum.any?(List.wrap(account.capabilities), &String.contains?(&1, ".")),
+        :capabilities,
+        :connect_capability_v1
+      )
     end
   end
 
-  defp account_fits(%{capabilities: names}, :v2) do
-    case Enum.all?(
-           List.wrap(names),
-           &Regex.match?(~r/\A(merchant|recipient|customer)\.[a-z0-9_.]+\z/, &1)
-         ) do
-      true -> :ok
-      false -> invalid(:capabilities, Messages.text(:connect_capability_v2))
-    end
+  defp account_fits(account, :v2) do
+    refused_if(
+      not Enum.all?(List.wrap(account.capabilities), &Regex.match?(@v2_capability, &1)),
+      :capabilities,
+      :connect_capability_v2
+    )
   end
+
+  defp refused_if(true, field, message), do: invalid(field, Messages.text(message))
+  defp refused_if(false, _field, _message), do: :ok
 
   defp listed_configurations(nil), do: :ok
 

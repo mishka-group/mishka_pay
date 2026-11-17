@@ -2591,8 +2591,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     controller =
       reject_nil(%{
         "stripe_dashboard" => %{"type" => Atom.to_string(account.dashboard)},
-        "fees" => v1_fees(account),
-        "losses" => v1_losses(account),
+        "fees" => keyed("payer", v1_collector(account, :fees_collector, "account")),
+        "losses" => keyed("payments", v1_collector(account, :losses_collector, "stripe")),
         "requirement_collection" => requirement_collection(account.dashboard)
       })
 
@@ -2608,21 +2608,17 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp collector(%{dashboard: :full} = account, field), do: Map.get(account, field) || :stripe
   defp collector(account, field), do: Map.get(account, field) || :application
 
-  defp v1_fees(account) do
-    case {account.fees_collector, collector(account, :fees_collector)} do
-      {_given, :application} -> %{"payer" => "application"}
-      {:stripe, :stripe} -> %{"payer" => "account"}
-      {nil, :stripe} -> nil
-    end
-  end
+  # Who collects, as v1's controller says it: the platform always; the seller with Stripe only
+  # when asked for, since that is Stripe's own default for a full dashboard.
+  defp v1_collector(account, field, seller_word),
+    do: v1_word(Map.get(account, field), collector(account, field), seller_word)
 
-  defp v1_losses(account) do
-    case {account.losses_collector, collector(account, :losses_collector)} do
-      {_given, :application} -> %{"payments" => "application"}
-      {:stripe, :stripe} -> %{"payments" => "stripe"}
-      {nil, :stripe} -> nil
-    end
-  end
+  defp v1_word(_given, :application, _seller_word), do: "application"
+  defp v1_word(:stripe, :stripe, seller_word), do: seller_word
+  defp v1_word(nil, :stripe, _seller_word), do: nil
+
+  defp keyed(_key, nil), do: nil
+  defp keyed(key, value), do: %{key => value}
 
   @doc """
   Params of changing a connected account (`POST /v2/core/accounts/:id` or `POST

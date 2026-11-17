@@ -204,15 +204,13 @@ defmodule ShopWeb.ConnectComponent do
   # A hidden empty value keeps the configurations' key in the form when every box is unticked.
   defp kept(defaults, params) do
     merged = Map.merge(defaults, Map.take(params, Map.keys(defaults)))
-
-    case merged do
-      %{"configurations" => names} ->
-        %{merged | "configurations" => Enum.reject(names, &(&1 == ""))}
-
-      other ->
-        other
-    end
+    ticked(merged)
   end
+
+  defp ticked(%{"configurations" => names} = form),
+    do: %{form | "configurations" => Enum.reject(names, &(&1 == ""))}
+
+  defp ticked(form), do: form
 
   # An account made or read: its row shows what was read of it, at the top when it is new.
   defp put_account(socket, account) do
