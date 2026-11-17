@@ -109,6 +109,10 @@
 - Stripe Managed Payments works with Checkout on a hosted page or an embedded page. Stripe lists
   "payment flows that use Elements with the Checkout Sessions API" and Payment Intents
   integrations as not supported. A Mishka Pay checkout is always a Checkout Session.
+- `capture: :automatic` is `capture_method=automatic_async` (Stripe's default, recommended over
+  `automatic` because it answers sooner), on a checkout's PaymentIntent and on
+  `create_payment_intent/1`; left out, nothing is sent and Stripe's default applies. Read back,
+  `automatic` and `automatic_async` are both `:automatic`.
 - `capture: :manual` is `payment_intent_data[capture_method]=manual`. The PaymentIntent waits in
   `requires_capture`, read as `:authorized`. `capture_payment/4` is
   `POST /v1/payment_intents/:id/capture` with `amount_to_capture` in Stripe's units; Stripe lets

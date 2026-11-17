@@ -4772,6 +4772,32 @@ defmodule MishkaPay.Providers.StripeTest do
              id: "pi_1",
              description: "New"
            }) == %{"description" => "New"}
+
+    # Taken at once is Stripe's recommended automatic_async; held stays manual; left out, unsent.
+    for {capture, sent} <- [{:automatic, "automatic_async"}, {:manual, "manual"}, {nil, nil}] do
+      intent = %MishkaPay.PaymentIntent{
+        provider: "stripe",
+        amount: Money.new(:USD, "5"),
+        capture: capture
+      }
+
+      assert Stripe.Mapper.payment_intent_params(intent)["capture_method"] == sent
+
+      checkout = %{params_checkout() | capture: capture}
+
+      assert Stripe.Mapper.checkout_params(checkout)["payment_intent_data"]["capture_method"] ==
+               sent
+    end
+
+    for method <- ["automatic", "automatic_async"] do
+      assert {:ok, %MishkaPay.PaymentIntent{capture: :automatic}} =
+               Stripe.Mapper.payment_intent(%{
+                 "id" => "pi_3",
+                 "amount" => 500,
+                 "currency" => "usd",
+                 "capture_method" => method
+               })
+    end
   end
 
   test "a tax rate, a registration and the tax settings map from Stripe's answers" do

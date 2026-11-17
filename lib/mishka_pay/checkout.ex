@@ -80,7 +80,7 @@ defmodule MishkaPay.Checkout do
     * `:capture`: in a one-time checkout, `:manual` only holds the money on the buyer's card: the
       payment waits as `:authorized` until `MishkaPay.capture_payment/4` takes it, all or part,
       or `MishkaPay.cancel_payment/3` lets it go. Needs `:capture`. `:automatic` (the default)
-      takes it at once. Card holds end on their own after some days (Stripe: 7 by default).
+      takes it at once, the provider's recommended way (Stripe's `automatic_async`). Card holds end on their own after some days (Stripe: 7 by default).
     * `:shipping_countries`: two-letter country codes (`["NL", "DE"]`): the page asks the buyer
       for a shipping address in one of them. A subscription may ask for one too.
     * `:shipping_rates`: in a one-time checkout, the ways to ship the buyer picks from: a rate the

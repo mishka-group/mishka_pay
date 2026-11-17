@@ -21,7 +21,8 @@ defmodule MishkaPay.PaymentIntent do
     * `:amount` (required to make one): a `Money`, or `%{amount: "19.99", currency: "USD"}`.
     * `:customer_id`: the provider customer who pays (`MishkaPay.create_customer/1`).
     * `:payment_method_id`: a payment method the customer saved, to charge it without the form.
-    * `:capture`: `:automatic` (the default) takes the money when it is confirmed; `:manual` holds
+    * `:capture`: `:automatic` (the default) takes the money when it is confirmed, the
+      provider's recommended way (Stripe's `automatic_async`); `:manual` holds
       it, read as `:requires_capture`, until `MishkaPay.capture_payment/4` takes it or
       `MishkaPay.cancel_payment_intent/3` lets it go.
     * `:setup_future_usage`: `:off_session` keeps the payment method on the customer for later

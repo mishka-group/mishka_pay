@@ -88,6 +88,7 @@ defmodule ShopWeb.CardFormTest do
              "amount" => "1200",
              "currency" => "usd",
              "setup_future_usage" => "off_session",
+             "capture_method" => "automatic_async",
              "automatic_payment_methods" => %{"enabled" => "true"}
            } = sent
 

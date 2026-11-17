@@ -288,7 +288,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           "metadata" => reference,
           "description" => checkout.description,
           "statement_descriptor_suffix" => checkout.statement_suffix,
-          "capture_method" => checkout.capture && Atom.to_string(checkout.capture),
+          "capture_method" => capture_method(checkout.capture),
           "application_fee_amount" => minor_of(checkout.application_fee)
         }
         |> Map.merge(seller(checkout))
@@ -315,6 +315,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
     end
   end
+
+  # Stripe takes the money at once with `automatic_async`, its default and recommended way (it
+  # answers sooner than `automatic`); `manual` holds it. Left out, Stripe's default applies.
+  defp capture_method(nil), do: nil
+  defp capture_method(:automatic), do: "automatic_async"
+  defp capture_method(:manual), do: "manual"
 
   # The seller a platform's sale is for: where the money goes, and who sells it.
   defp seller(checkout),
@@ -913,7 +919,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "currency" => intent.amount && lower_currency(intent.amount),
       "customer" => intent.customer_id,
       "payment_method" => intent.payment_method_id,
-      "capture_method" => intent.capture && Atom.to_string(intent.capture),
+      "capture_method" => capture_method(intent.capture),
       "setup_future_usage" =>
         intent.setup_future_usage && Atom.to_string(intent.setup_future_usage),
       "automatic_payment_methods" => automatic_methods(intent),
@@ -974,7 +980,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       amount_received: money(intent["amount_received"], currency),
       customer_id: id_of(intent["customer"]),
       payment_method_id: id_of(intent["payment_method"]),
-      capture: (intent["capture_method"] == "manual" && :manual) || :automatic,
+      capture: capture_of(intent["capture_method"]),
       setup_future_usage: Map.get(@future_usages, intent["setup_future_usage"]),
       automatic_payment_methods: get_in(intent, ["automatic_payment_methods", "enabled"]),
       description: intent["description"],
@@ -989,6 +995,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.PaymentIntent.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # `automatic` and `automatic_async` both take the money at once; only `manual` holds it.
+  defp capture_of("manual"), do: :manual
+  defp capture_of(_automatic), do: :automatic
 
   @doc "A Stripe SetupIntent as a `MishkaPay.SetupIntent`, for a page with Stripe Elements."
   @spec setup_intent(map()) :: {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}

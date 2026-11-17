@@ -25,6 +25,9 @@ defmodule MishkaPay.Providers.Stripe do
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
     * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
+    * `capture: :automatic`, on a checkout or a PaymentIntent, is Stripe's `automatic_async`
+      (its default and recommended way); `:manual` holds the money. Both `automatic` and
+      `automatic_async` read back as `:automatic`.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, the charge's refunds and the
       customer, in one request: the buyer, the card, the receipt, why it failed and every refund.
     * `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and

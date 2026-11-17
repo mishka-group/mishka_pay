@@ -2029,6 +2029,39 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.cancel_payment_intent("stripe", held)
   end
 
+  test "a payment taken at once is Stripe's automatic_async, on an intent and a checkout, and reads back as automatic" do
+    assert {:ok, %MishkaPay.PaymentIntent{id: id, capture: :automatic}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "7.00", currency: "USD"},
+               capture: :automatic,
+               payment_method_id: "pm_card_mastercard"
+             })
+
+    assert {:ok, %{"capture_method" => "automatic_async"}} =
+             MishkaPay.request(%{provider: "stripe", path: "/v1/payment_intents/#{id}"})
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^id, status: :succeeded, capture: :automatic}} =
+             MishkaPay.confirm_payment_intent("stripe", id, nil,
+               return_url: "https://shop.test/paid"
+             )
+
+    assert {:ok, %Payment{id: ^id, status: :paid}} = MishkaPay.fetch_payment("stripe", id)
+
+    for invoice <- [false, true] do
+      assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+               MishkaPay.checkout(%{
+                 provider: "stripe",
+                 items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+                 success_url: "https://shop.test/thanks",
+                 cancel_url: "https://shop.test/cart",
+                 capture: :automatic,
+                 invoice: invoice,
+                 merchant_of_record: false
+               })
+    end
+  end
+
   test "a setup intent saves a test card on a customer without a charge; another is canceled",
        %{key: key} do
     run = run_id()
