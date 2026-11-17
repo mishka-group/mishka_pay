@@ -25,21 +25,32 @@ defmodule MishkaPay.Support.StripeMock do
   A `MishkaPay.Test.stub_http/1` plug that forwards the request to stripe-mock, or to `url`, such
   as `"https://api.stripe.com"` for the tests against a real test account, and answers with its
   status, body and `Request-Id` header.
+
+  It waits as long as `MishkaPay.Client` waits in production (30 seconds), and a request that
+  gets no answer comes back to the client as the same transport error, so the client retries it
+  as it would in production (a read, or a write with its idempotency key) instead of the test
+  crashing on a slow sandbox answer.
   """
   @spec forward(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   def forward(conn, url \\ @url) do
     {:ok, body, conn} = Plug.Conn.read_body(conn)
 
-    {:ok, answer} =
-      Req.request(
-        method: conn.method,
-        url: url <> conn.request_path <> query(conn.query_string),
-        headers: conn.req_headers,
-        body: body,
-        decode_body: false,
-        retry: false
-      )
+    Req.request(
+      method: conn.method,
+      url: url <> conn.request_path <> query(conn.query_string),
+      headers: conn.req_headers,
+      body: body,
+      decode_body: false,
+      retry: false,
+      receive_timeout: 30_000
+    )
+    |> answered(conn)
+  end
 
+  defp answered({:error, %Req.TransportError{reason: reason}}, conn),
+    do: Req.Test.transport_error(conn, reason)
+
+  defp answered({:ok, answer}, conn) do
     answer.headers
     |> Map.take(["request-id"])
     |> Enum.reduce(conn, fn {name, [value | _]}, conn ->
