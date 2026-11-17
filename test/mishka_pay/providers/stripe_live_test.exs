@@ -687,6 +687,80 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.list_invoice_items("stripe", nil, customer_id: customer, pending: true)
   end
 
+  test "a portal configuration is made, changed, read and listed, a session opens with it, and it is turned off",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "portal-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Portal plan #{run}"})
+
+    {:ok, %MishkaPay.Price{id: price}} =
+      MishkaPay.create_price(%{
+        provider: "stripe",
+        product_id: product,
+        amount: %{amount: "7.00", currency: "USD"},
+        interval: :month
+      })
+
+    assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_" <> _ = id} = config} =
+             MishkaPay.create_portal_configuration(%{
+               provider: "stripe",
+               name: "Live portal #{run}",
+               headline: "Live billing",
+               default_return_url: "https://shop.test/account",
+               invoice_history: true,
+               payment_method_update: true,
+               customer_update: [:email, :name],
+               subscription_cancel: :at_period_end,
+               subscription_update: [:price, :quantity],
+               plans: [%{product_id: product, price_ids: [price]}],
+               proration: :create_prorations
+             })
+
+    on_exit(fn ->
+      cleanup(
+        key,
+        &Stripe.update_portal_configuration(
+          %MishkaPay.PortalConfiguration{provider: "stripe", id: id, active: false},
+          &1
+        )
+      )
+
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    assert {config.active, config.default, config.customer_update, config.subscription_cancel} ==
+             {true, false, [:email, :name], :at_period_end}
+
+    assert [%MishkaPay.PortalPlan{product_id: ^product, price_ids: [^price]}] = config.plans
+
+    assert {:ok, %MishkaPay.PortalConfiguration{subscription_cancel: :off, customer_update: []}} =
+             MishkaPay.update_portal_configuration(%{
+               provider: "stripe",
+               id: id,
+               subscription_cancel: :off,
+               customer_update: []
+             })
+
+    assert {:ok, %MishkaPay.PortalConfiguration{name: "Live portal " <> _, invoice_history: true}} =
+             MishkaPay.fetch_portal_configuration("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _]}} =
+             MishkaPay.list_portal_configurations("stripe", nil, active: true, limit: 100)
+
+    assert {:ok, %MishkaPay.PortalSession{url: "https://billing.stripe.com/" <> _}} =
+             MishkaPay.portal_session(%{
+               provider: "stripe",
+               customer_id: customer,
+               return_url: "https://shop.test/account",
+               configuration: id
+             })
+  end
+
   defp delete_customer(id, keys) do
     with :ok <- Stripe.delete_customer(id, keys), do: {:ok, :deleted}
   end

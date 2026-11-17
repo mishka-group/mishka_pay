@@ -187,6 +187,16 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no customer portal: its setups are refused before any request" do
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :portal}} =
+               MishkaPay.create_portal_configuration(%{provider: "paypal", name: "Teams"})
+
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :portal}} =
+               MishkaPay.list_portal_configurations("paypal", "site-a")
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "a decline and a refusal keep PayPal's debug id and error page, never in their words" do
       PayPalStub.order("ORDER3", "APPROVED", declined: true)
 

@@ -1421,6 +1421,141 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.set_default_payment_method("stripe", "cus_1", "seti_1", "site-a")
     end
 
+    test "portal configurations are made, changed, read and listed as Stripe's spec accepts, and a session names one" do
+      assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_" <> _ = id, provider: "stripe"}} =
+               MishkaPay.create_portal_configuration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 name: "Teams",
+                 headline: "Acme Teams billing",
+                 privacy_policy_url: "https://shop.test/privacy",
+                 terms_of_service_url: "https://shop.test/terms",
+                 default_return_url: "https://shop.test/account",
+                 invoice_history: true,
+                 payment_method_update: true,
+                 customer_update: ["email", :address, :tax_id],
+                 subscription_cancel: "at_period_end",
+                 subscription_update: [:price, :quantity],
+                 plans: [%{product_id: "prod_team", price_ids: ["price_month", "price_year"]}],
+                 proration: :always_invoice,
+                 metadata: %{"for" => "teams"}
+               })
+
+      assert {:ok, %MishkaPay.PortalConfiguration{}} =
+               MishkaPay.update_portal_configuration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: "bpc_123",
+                 active: false,
+                 subscription_cancel: :off,
+                 customer_update: []
+               })
+
+      assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_123"}} =
+               MishkaPay.fetch_portal_configuration("stripe", "bpc_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalConfiguration{} | _]}} =
+               MishkaPay.list_portal_configurations("stripe", "site-a", active: true, limit: 3)
+
+      assert {:ok, %MishkaPay.PortalSession{url: "https://" <> _}} =
+               MishkaPay.portal_session(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 return_url: "https://shop.test/account",
+                 configuration: id
+               })
+    end
+
+    test "a portal configuration goes to Stripe as its features, and only what a change names" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test, {:stripe, conn.request_path, URI.decode_query(body)})
+        Req.Test.json(conn, %{"object" => "billing_portal.configuration", "id" => "bpc_1"})
+      end)
+
+      {:ok, _made} =
+        MishkaPay.create_portal_configuration(%{
+          provider: "stripe",
+          headline: "Billing",
+          invoice_history: false,
+          customer_update: [:email, :name],
+          subscription_cancel: :immediately,
+          subscription_update: [:price],
+          plans: [%{product_id: "prod_1", price_ids: ["price_a", "price_b"]}],
+          proration: :none
+        })
+
+      assert_received {:stripe, "/v1/billing_portal/configurations", params}
+
+      assert params == %{
+               "business_profile[headline]" => "Billing",
+               "features[invoice_history][enabled]" => "false",
+               "features[customer_update][enabled]" => "true",
+               "features[customer_update][allowed_updates][0]" => "email",
+               "features[customer_update][allowed_updates][1]" => "name",
+               "features[subscription_cancel][enabled]" => "true",
+               "features[subscription_cancel][mode]" => "immediately",
+               "features[subscription_update][enabled]" => "true",
+               "features[subscription_update][default_allowed_updates][0]" => "price",
+               "features[subscription_update][products][0][product]" => "prod_1",
+               "features[subscription_update][products][0][prices][0]" => "price_a",
+               "features[subscription_update][products][0][prices][1]" => "price_b",
+               "features[subscription_update][proration_behavior]" => "none",
+               "expand[0]" => "features.subscription_update.products"
+             }
+
+      {:ok, _changed} =
+        MishkaPay.update_portal_configuration(%{
+          provider: "stripe",
+          id: "bpc_1",
+          subscription_update: []
+        })
+
+      assert_received {:stripe, "/v1/billing_portal/configurations/bpc_1", change}
+
+      assert change == %{
+               "features[subscription_update][enabled]" => "false",
+               "expand[0]" => "features.subscription_update.products"
+             }
+    end
+
+    test "a portal configuration or session that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      base = %{provider: "stripe", subscription_update: [:price]}
+
+      for {attrs, field} <- [
+            {Map.put(base, :customer_update, [:email, :password]), :customer_update},
+            {Map.put(base, :subscription_update, ["seats"]), :subscription_update},
+            {Map.put(base, :subscription_cancel, :later), :subscription_cancel},
+            {Map.put(base, :proration, :sometimes), :proration},
+            {Map.put(base, :plans, [%{product_id: "prod_1", price_ids: []}]), :plans},
+            {Map.put(base, :plans, [%{product_id: "prod_1", price_ids: ["prod_2"]}]), :plans},
+            {Map.put(base, :plans, [%{product_id: "prod/../1", price_ids: ["price_1"]}]), :plans}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} =
+                 MishkaPay.create_portal_configuration(attrs)
+
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_portal_configuration(%{provider: "stripe", id: "cus_1"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :configuration_id}]}} =
+               MishkaPay.fetch_portal_configuration("stripe", "bpc_1/../../v1/charges")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :configuration}]}} =
+               MishkaPay.portal_session(%{
+                 provider: "stripe",
+                 customer_id: "cus_1",
+                 return_url: "https://shop.test/account",
+                 configuration: "pi_1"
+               })
+    end
+
     test "a portal task the portal's settings turn off is a plain refusal that says where to turn it on" do
       MishkaPay.Test.stub_http(fn conn ->
         error = %{
@@ -2737,6 +2872,52 @@ defmodule MishkaPay.Providers.StripeTest do
              |> Stripe.Mapper.invoice_item()
 
     assert credit == Money.new(:USD, "-5.00")
+  end
+
+  test "a portal configuration maps each feature: on with its choices, or off" do
+    config = %{
+      "object" => "billing_portal.configuration",
+      "id" => "bpc_1",
+      "name" => "Teams",
+      "active" => true,
+      "is_default" => false,
+      "created" => 1_794_000_000,
+      "default_return_url" => nil,
+      "business_profile" => %{"headline" => "Billing", "privacy_policy_url" => nil},
+      "metadata" => %{},
+      "features" => %{
+        "customer_update" => %{"enabled" => true, "allowed_updates" => ["email", "tax_id"]},
+        "invoice_history" => %{"enabled" => true},
+        "payment_method_update" => %{"enabled" => false},
+        "subscription_cancel" => %{"enabled" => true, "mode" => "at_period_end"},
+        "subscription_update" => %{
+          "enabled" => true,
+          "default_allowed_updates" => ["price"],
+          "products" => [%{"product" => "prod_1", "prices" => ["price_a"]}],
+          "proration_behavior" => "create_prorations"
+        }
+      }
+    }
+
+    assert {:ok, %MishkaPay.PortalConfiguration{} = mapped} =
+             Stripe.Mapper.portal_configuration(config)
+
+    assert {mapped.id, mapped.name, mapped.active, mapped.default, mapped.headline} ==
+             {"bpc_1", "Teams", true, false, "Billing"}
+
+    assert {mapped.invoice_history, mapped.payment_method_update} == {true, false}
+    assert mapped.customer_update == [:email, :tax_id]
+    assert {mapped.subscription_cancel, mapped.subscription_update} == {:at_period_end, [:price]}
+    assert [%MishkaPay.PortalPlan{product_id: "prod_1", price_ids: ["price_a"]}] = mapped.plans
+    assert mapped.proration == :create_prorations
+
+    off =
+      config
+      |> put_in(["features", "subscription_cancel", "enabled"], false)
+      |> put_in(["features", "customer_update", "enabled"], false)
+
+    assert {:ok, %{subscription_cancel: :off, customer_update: []}} =
+             Stripe.Mapper.portal_configuration(off)
   end
 
   test "a customer maps with its reference and card on file, and a deleted one is a rejection" do

@@ -169,7 +169,12 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   subscriptions at once. A second delete of the same id is `Errors.Rejected` with code
   `"resource_missing"`; reading it is `"customer_deleted"`.
 - The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
-  pass `configuration: "bpc_..."` to use another.
+  pass `configuration: "bpc_..."` to use another. Another kind of id is `Errors.Invalid` on
+  `:configuration` before any request.
+- `create_portal_configuration/1` is `POST /v1/billing_portal/configurations`: `:plans` is
+  `features.subscription_update.products` (a product, Stripe's id or the host's own, and its
+  `price_...` ids), which Stripe answers only expanded; Mishka Pay asks for it on every read.
+  A configuration is never deleted: `active: false` turns it off.
 - Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and
   `customer.tax_id.created`, `.updated` and `.deleted` for a customer's tax ids; the event's
   `:customer_id` names the customer, and the Ash customer listener syncs the row on each.

@@ -20,6 +20,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Payment,
     PaymentLink,
     PaymentMethod,
+    PortalConfiguration,
     Price,
     Product,
     PromotionCode,
@@ -384,6 +385,88 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp flow_target(flow, subscription_id),
     do: %{Atom.to_string(flow) => %{"subscription" => subscription_id}}
+
+  @doc """
+  Params of `POST /v1/billing_portal/configurations` (and its update): only what is set. A list
+  of choices turns its feature on with them, or off when empty.
+  """
+  @spec portal_configuration_params(PortalConfiguration.t()) :: map()
+  def portal_configuration_params(%PortalConfiguration{} = config) do
+    %{
+      "name" => config.name,
+      "active" => config.active,
+      "default_return_url" => config.default_return_url,
+      "metadata" => config.metadata,
+      "business_profile" => %{
+        "headline" => config.headline,
+        "privacy_policy_url" => config.privacy_policy_url,
+        "terms_of_service_url" => config.terms_of_service_url
+      },
+      "features" => %{
+        "invoice_history" => enabled(config.invoice_history),
+        "payment_method_update" => enabled(config.payment_method_update),
+        "customer_update" => allowed(config.customer_update, "allowed_updates"),
+        "subscription_cancel" => portal_cancel(config.subscription_cancel),
+        "subscription_update" =>
+          config.subscription_update
+          |> allowed("default_allowed_updates")
+          |> Kernel.||(%{})
+          |> Map.merge(%{
+            "products" => config.plans && Enum.map(config.plans, &portal_plan/1),
+            "proration_behavior" => config.proration && Atom.to_string(config.proration)
+          })
+      }
+    }
+  end
+
+  defp allowed(nil, _key), do: nil
+
+  defp allowed(choices, key),
+    do: %{"enabled" => choices != [], key => Enum.map(choices, &Atom.to_string/1)}
+
+  defp portal_cancel(nil), do: nil
+  defp portal_cancel(:off), do: %{"enabled" => false}
+  defp portal_cancel(mode), do: %{"enabled" => true, "mode" => Atom.to_string(mode)}
+
+  defp portal_plan(plan), do: %{"product" => plan.product_id, "prices" => plan.price_ids}
+
+  @doc "A Stripe portal configuration (`billing_portal.configuration`) as a `MishkaPay.PortalConfiguration`."
+  @spec portal_configuration(map()) ::
+          {:ok, PortalConfiguration.t()} | {:error, Splode.Error.t()}
+  def portal_configuration(config) do
+    features = config["features"] || %{}
+    profile = config["business_profile"] || %{}
+    update = features["subscription_update"] || %{}
+    cancel = features["subscription_cancel"] || %{}
+
+    %{
+      provider: "stripe",
+      id: config["id"],
+      name: config["name"],
+      active: config["active"] == true,
+      default: config["is_default"] == true,
+      headline: profile["headline"],
+      privacy_policy_url: profile["privacy_policy_url"],
+      terms_of_service_url: profile["terms_of_service_url"],
+      default_return_url: config["default_return_url"],
+      invoice_history: get_in(features, ["invoice_history", "enabled"]) == true,
+      payment_method_update: get_in(features, ["payment_method_update", "enabled"]) == true,
+      customer_update: turned_on(features["customer_update"], "allowed_updates"),
+      subscription_cancel: (cancel["enabled"] == true && cancel["mode"]) || "off",
+      subscription_update: turned_on(update, "default_allowed_updates"),
+      plans:
+        Enum.map(update["products"] || [], &%{product_id: &1["product"], price_ids: &1["prices"]}),
+      proration: update["proration_behavior"],
+      metadata: config["metadata"] || %{},
+      created_at: time(config["created"])
+    }
+    |> Map.reject(fn {_field, value} -> value == "" end)
+    |> PortalConfiguration.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp turned_on(%{"enabled" => true} = feature, key), do: feature[key] || []
+  defp turned_on(_off, _key), do: []
 
   @doc "A Checkout Session read back on its own: what Stripe filled in and the reference."
   @spec checkout(map()) :: Checkout.t()

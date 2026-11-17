@@ -41,6 +41,7 @@ defmodule MishkaPay.Support.Acme do
     Page,
     Payment,
     PaymentLink,
+    PortalConfiguration,
     PortalSession,
     Price,
     Product,
@@ -252,6 +253,24 @@ defmodule MishkaPay.Support.Acme do
          | id: "acme_portal_1",
            url: "https://pay.acme.test/portal/#{session.customer_id}"
        }}
+
+  @impl MishkaPay.Provider
+  def create_portal_configuration(%PortalConfiguration{} = config, %{secret_key: "sk_acme"}),
+    do: {:ok, %{config | id: "acme_bpc_1", active: true, default: false}}
+
+  @impl MishkaPay.Provider
+  def update_portal_configuration(%PortalConfiguration{} = config, %{secret_key: "sk_acme"}),
+    do: {:ok, config}
+
+  @impl MishkaPay.Provider
+  def fetch_portal_configuration("acme_bpc_" <> _ = id, %{secret_key: "sk_acme"}),
+    do: PortalConfiguration.builder(%{provider: "acme", id: id, active: true, default: true})
+
+  @impl MishkaPay.Provider
+  def list_portal_configurations(_opts, %{secret_key: "sk_acme"} = keys) do
+    with {:ok, config} <- fetch_portal_configuration("acme_bpc_1", keys),
+         do: {:ok, struct(Page, items: [config])}
+  end
 
   @impl MishkaPay.Provider
   def expire_checkout("acme_cs_" <> reference = id, %{secret_key: "sk_acme"}),

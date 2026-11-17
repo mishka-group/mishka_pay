@@ -45,7 +45,9 @@ end
   - `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2`; the checkout sends its
     `:shipping_countries` and `:shipping_rates`, and reads back `:shipping_address`,
     `:shipping_rate_id` and `:amount_shipping`;
-  - `:portal`: `portal_session/2`;
+  - `:portal`: `portal_session/2`, `create_portal_configuration/2`,
+    `update_portal_configuration/2`, `fetch_portal_configuration/2`,
+    `list_portal_configurations/2` (`:active`, `:default`);
   - `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
     `detach_payment_method/2`, `set_default_payment_method/3`; a checkout in `mode: :setup` needs
     it too;

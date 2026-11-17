@@ -10,7 +10,7 @@ defmodule ShopWeb.ShopLive do
       stored row beside the payment read live from Stripe (buyer, card, receipt, failure, metadata,
       refunds), its webhook events, sync and refund;
     * the customers: register one on Stripe, find and keep one, edit it, open its customer portal,
-      and buy as that customer;
+      and buy as that customer; the portal's setups on Stripe, and the portal opened with one;
     * the catalog: the shop's products published to Stripe as products and prices, sold by price
       id, and every Stripe list read page by page;
     * payment links for catalog prices, with every limit a developer can choose, and one buyer's
@@ -495,6 +495,8 @@ defmodule ShopWeb.ShopLive do
         tenant={@tenant}
         buyer={@buyer}
       />
+
+      <.live_component module={ShopWeb.PortalConfigsComponent} id="portal-configs" tenant={@tenant} />
 
       <.live_component module={ShopWeb.DiscountsComponent} id="discounts" tenant={@tenant} />
 

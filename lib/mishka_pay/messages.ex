@@ -113,6 +113,7 @@ defmodule MishkaPay.Messages do
           | :subscription_search_needs
           | :subscription_status
           | :invoice_item_moves
+          | :choices
           | :fields_three
           | :merchant_of_record_off
           | :portal_feature_off
@@ -641,6 +642,9 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:subscription_search_needs),
     do: dgettext_noop("mishka_pay", "Search needs a status, a reference or metadata")
+
+  defp msgid(:choices),
+    do: dgettext_noop("mishka_pay", "The %{field} field takes only: %{choices}")
 
   defp msgid(:invoice_item_moves),
     do:

@@ -130,6 +130,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.replay_events(provider, tenant, since: dt)` | `%{delivered: n, failed: [{id, reason}]}`: missed events handed to the listeners again |
 | `MishkaPay.Check.run(tenant: t, webhook_url: url, domain: MyApp.Pay)` | `[{check, :ok \| {:error, reason}}]`: the site's setup |
 | `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
+| `MishkaPay.create_portal_configuration(attrs)` (`MishkaPay.PortalConfiguration`), `update_portal_configuration/1`, `fetch_portal_configuration/3`, `list_portal_configurations(p, tenant, active: true)` | `%MishkaPay.PortalConfiguration{}`: what buyers may do in the portal; a session names it with `configuration: id` |
 | `MishkaPay.expire_checkout(provider, checkout_id, tenant)` | the checkout, `status: :expired`: it can no longer be paid |
 | `MishkaPay.create_coupon(attrs)`, `fetch_coupon/3`, `list_coupons/3`, `delete_coupon/3` | `%MishkaPay.Coupon{}` |
 | `MishkaPay.create_promotion_code(attrs)`, `fetch_promotion_code/3`, `list_promotion_codes/3`, `update_promotion_code/1` | `%MishkaPay.PromotionCode{}` |
@@ -295,6 +296,24 @@ redirect(conn, external: portal.url)
 - `reference` is the host's user id. Sent again within a day with the same fields, it answers the
   same customer instead of a second one; with other fields Stripe refuses it (`Errors.Rejected`,
   status 400). Change a customer with `update_customer/1`.
+- What buyers may do in the portal is a `MishkaPay.PortalConfiguration`, kept at the provider:
+
+  ```elixir
+  {:ok, teams} =
+    MishkaPay.create_portal_configuration(%{provider: "stripe", tenant: site.id, name: "Teams",
+      headline: "Acme billing", invoice_history: true, payment_method_update: true,
+      customer_update: [:email, :tax_id], subscription_cancel: :at_period_end,
+      subscription_update: [:price, :quantity], proration: :create_prorations,
+      plans: [%{product_id: team.id, price_ids: [monthly.id, yearly.id]}]})
+
+  MishkaPay.portal_session(%{..., configuration: teams.id})
+  ```
+
+  Every field is optional; a change (`update_portal_configuration/1` with `:id`) sends only what it
+  names. A list of choices (`customer_update`, `subscription_update`) turns its feature on, `[]`
+  off; `subscription_cancel` is `:immediately`, `:at_period_end` or `:off`. A provider never
+  deletes one: `active: false` turns it off. The provider's default one (`:default`) serves a
+  session without `configuration:`.
 - `return_url` follows the checkout URL rule. A customer the provider deleted reads back as
   `Errors.Rejected` with code `"customer_deleted"`.
 - A person's erase request: `delete_customer/3` (or the Ash customer's `:remove`). It cannot be

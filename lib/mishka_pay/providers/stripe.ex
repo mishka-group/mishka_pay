@@ -39,7 +39,10 @@ defmodule MishkaPay.Providers.Stripe do
       delete is for good and cancels the customer's subscriptions at once; `create_tax_id/2`,
       `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids (`txi_...`);
       `portal_session/2` opens a
-      billing portal session for one. Stripe answers a portal session only once the account's
+      billing portal session for one, with the portal configuration (`bpc_...`) it names;
+      `create_portal_configuration/2`, `update_portal_configuration/2`,
+      `fetch_portal_configuration/2` and `list_portal_configurations/2` keep those (Stripe never
+      deletes one: `active: false` turns it off). Stripe answers a portal session only once the account's
       portal is set up (Settings, Billing, Customer portal), in test mode too.
     * A checkout in `mode: :setup` opens a session in Stripe's `setup` mode that saves a card
       without a charge, with Managed Payments off (Stripe takes no setup mode with it) and, without
@@ -150,6 +153,7 @@ defmodule MishkaPay.Providers.Stripe do
     Messages,
     Page,
     PaymentLink,
+    PortalConfiguration,
     Price,
     Product,
     PromotionCode,
@@ -989,6 +993,7 @@ defmodule MishkaPay.Providers.Stripe do
   def portal_session(%MishkaPay.PortalSession{} = session, keys) do
     with :ok <- stripe_id(session.customer_id, "cus_", :customer_id),
          :ok <- maybe_id(session.subscription_id, "sub_", :subscription_id),
+         :ok <- maybe_id(session.configuration, "bpc_", :configuration),
          {:ok, answer} <-
            request(
              :post,
@@ -1004,6 +1009,67 @@ defmodule MishkaPay.Providers.Stripe do
       {:ok, %{session | id: answer["id"], url: answer["url"]}}
     end
   end
+
+  @impl MishkaPay.Provider
+  def create_portal_configuration(%PortalConfiguration{} = config, keys),
+    do: save_portal_configuration("/v1/billing_portal/configurations", config, keys)
+
+  @impl MishkaPay.Provider
+  def update_portal_configuration(%PortalConfiguration{id: id} = config, keys) do
+    with :ok <- stripe_id(id, "bpc_", :id),
+         do: save_portal_configuration("/v1/billing_portal/configurations/#{id}", config, keys)
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_portal_configuration(configuration_id, keys) do
+    with :ok <- stripe_id(configuration_id, "bpc_", :configuration_id),
+         {:ok, answer} <-
+           request(
+             :get,
+             "/v1/billing_portal/configurations/#{configuration_id}",
+             [{"expand[]", "features.subscription_update.products"}],
+             keys
+           ) do
+      Mapper.portal_configuration(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_portal_configurations(opts, keys) do
+    filters = [
+      active: opts[:active],
+      is_default: opts[:default],
+      "expand[]": "data.features.subscription_update.products"
+    ]
+
+    page("/v1/billing_portal/configurations", filters, opts, keys, &Mapper.portal_configuration/1)
+  end
+
+  # A plan's product is a catalog id (Stripe's own, or one the host chose) and its prices Stripe's.
+  # Stripe answers a configuration's plans only when they are expanded.
+  defp save_portal_configuration(path, config, keys) do
+    plans = config.plans || []
+
+    with :ok <- metadata(config.metadata),
+         :ok <- all_fine(plans, &plain_id(&1.product_id, :plans)),
+         :ok <- all_fine(Enum.flat_map(plans, & &1.price_ids), &stripe_id(&1, "price_", :plans)),
+         {:ok, answer} <-
+           request(
+             :post,
+             path,
+             Map.put(
+               Mapper.portal_configuration_params(config),
+               "expand",
+               ["features.subscription_update.products"]
+             ),
+             keys
+           ) do
+      Mapper.portal_configuration(answer)
+    end
+  end
+
+  defp all_fine(items, check),
+    do: Enum.find_value(items, :ok, &with(:ok <- check.(&1), do: nil))
 
   @impl MishkaPay.Provider
   def list_payment_methods(opts, keys) do

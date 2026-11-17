@@ -151,6 +151,47 @@ defmodule MishkaPayTest do
                })
     end
 
+    test "portal configurations are made, read and listed, and a session names one" do
+      assert {:ok, %MishkaPay.PortalConfiguration{id: "acme_bpc_1", subscription_cancel: :off}} =
+               MishkaPay.create_portal_configuration(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 name: "Teams",
+                 subscription_cancel: "off"
+               })
+
+      assert {:ok, %MishkaPay.PortalConfiguration{name: "Monthly"}} =
+               MishkaPay.update_portal_configuration(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 id: "acme_bpc_1",
+                 name: "Monthly"
+               })
+
+      assert {:ok, %MishkaPay.PortalConfiguration{default: true}} =
+               MishkaPay.fetch_portal_configuration("acme", "acme_bpc_1", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalConfiguration{}]}} =
+               MishkaPay.list_portal_configurations("acme", "site-a", active: true)
+
+      assert {:ok, %MishkaPay.PortalSession{configuration: "acme_bpc_1"}} =
+               MishkaPay.portal_session(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 customer_id: "acme_cus_1",
+                 return_url: "https://shop.test/account",
+                 configuration: "acme_bpc_1"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_portal_configuration(%{provider: "acme", name: "No id"})
+
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      assert {:error, %Errors.Unsupported{operation: :portal}} =
+               MishkaPay.list_portal_configurations("checkout_only")
+    end
+
     test "a call without its provider or id, and a portal with an unsafe return URL, are refused" do
       assert {:error, %Errors.Invalid{errors: [%{field: :provider}]}} =
                MishkaPay.create_customer(%{email: "ava@example.com"})

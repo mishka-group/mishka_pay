@@ -67,7 +67,9 @@ defmodule MishkaPay.Provider do
     * `:tax`: `calculate_tax/2`, `record_tax/3`;
     * `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2` (and a checkout's
       `:shipping_countries` and `:shipping_rates`);
-    * `:portal`: `portal_session/2`;
+    * `:portal`: `portal_session/2`, and the portal's setups: `create_portal_configuration/2`,
+      `update_portal_configuration/2`, `fetch_portal_configuration/2`,
+      `list_portal_configurations/2`;
     * `:payment_method`: `list_payment_methods/2`, `fetch_payment_method/2`,
       `detach_payment_method/2`, `set_default_payment_method/3` (a checkout in `mode: :setup`
       saves one);
@@ -159,7 +161,8 @@ defmodule MishkaPay.Provider do
       site's tax reports.
     * `:shipping`: keeps shipping rates, and its checkout asks for a shipping address and
       charges the rate the buyer picks.
-    * `:portal`: has a hosted page where a customer manages their own billing.
+    * `:portal`: has a hosted page where a customer manages their own billing, and keeps setups
+      of what buyers may do there.
     * `:payment_method`: keeps a customer's saved payment methods (read, list, take off, make
       the default), and saves one with a checkout in `mode: :setup`.
     * `:discount`: keeps coupons and the promotion codes buyers type.
@@ -484,6 +487,29 @@ defmodule MishkaPay.Provider do
   @callback portal_session(MishkaPay.PortalSession.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.PortalSession.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:portal`. Makes a portal setup and answers it with its `:id`."
+  @callback create_portal_configuration(
+              MishkaPay.PortalConfiguration.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:portal`. Changes the fields set on the portal setup whose `:id` it carries."
+  @callback update_portal_configuration(
+              MishkaPay.PortalConfiguration.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:portal`. Reads one portal setup."
+  @callback fetch_portal_configuration(configuration_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:portal`. One page of portal setups, newest first; only `:active` ones, or the
+  `:default` one, when given.
+  """
+  @callback list_portal_configurations(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:payment_method`. One page of a customer's saved payment methods (`:customer_id`)."
   @callback list_payment_methods(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
@@ -749,6 +775,10 @@ defmodule MishkaPay.Provider do
                       create_shipping_rate: 2,
                       list_shipping_rates: 2,
                       portal_session: 2,
+                      create_portal_configuration: 2,
+                      update_portal_configuration: 2,
+                      fetch_portal_configuration: 2,
+                      list_portal_configurations: 2,
                       list_payment_methods: 2,
                       fetch_payment_method: 2,
                       detach_payment_method: 2,
@@ -843,7 +873,13 @@ defmodule MishkaPay.Provider do
     tax_id: [create_tax_id: 2, list_tax_ids: 2, delete_tax_id: 3],
     tax: [calculate_tax: 2, record_tax: 3],
     shipping: [create_shipping_rate: 2, list_shipping_rates: 2],
-    portal: [portal_session: 2],
+    portal: [
+      portal_session: 2,
+      create_portal_configuration: 2,
+      update_portal_configuration: 2,
+      fetch_portal_configuration: 2,
+      list_portal_configurations: 2
+    ],
     payment_method: [
       list_payment_methods: 2,
       fetch_payment_method: 2,

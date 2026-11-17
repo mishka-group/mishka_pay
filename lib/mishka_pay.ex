@@ -59,7 +59,9 @@ defmodule MishkaPay do
       `:invoice_item_create`, `:invoice_item_update`, `:invoice_item_delete`,
       `:invoice_item_list`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
-      `:customer_search`, `:customer_delete`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
+      `:customer_search`, `:customer_delete`, `:portal`, the portal's setups:
+      `:portal_configuration_create`, `:portal_configuration_update`, `:portal_configuration`,
+      `:portal_configuration_list`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
       `:tax_id_delete`;
     * saved payment methods: `:payment_method_list`, `:payment_method`,
       `:payment_method_detach`, `:payment_method_default`;
@@ -409,7 +411,9 @@ defmodule MishkaPay do
 
   @doc """
   Opens the provider's billing page for one customer (see `MishkaPay.PortalSession`): `:provider`,
-  `:tenant`, `:customer_id`, `:return_url`. Redirect the buyer to the answer's `:url`.
+  `:tenant`, `:customer_id`, `:return_url`, and `:configuration`, the `:id` of a
+  `MishkaPay.PortalConfiguration` (the provider's default one when left out). Redirect the buyer
+  to the answer's `:url`.
   """
   @spec portal_session(map()) :: {:ok, PortalSession.t()} | {:error, Splode.Error.t()}
   def portal_session(attrs) when is_map(attrs) do
@@ -420,6 +424,77 @@ defmodule MishkaPay do
         module.portal_session(session, keys)
       end
     end)
+  end
+
+  @doc """
+  Makes a setup of the customer portal from `attrs` (see `MishkaPay.PortalConfiguration`): what
+  buyers may do there (cancel, switch plan and to which prices, change their card or details, see
+  their bills) and the page's header. A portal session uses it by its `:id` (`:configuration`).
+
+      MishkaPay.create_portal_configuration(%{provider: "stripe", tenant: site_id,
+        name: "Teams", subscription_cancel: :at_period_end, invoice_history: true,
+        payment_method_update: true, subscription_update: [:price, :quantity],
+        plans: [%{product_id: "prod_team", price_ids: ["price_monthly", "price_yearly"]}]})
+  """
+  @spec create_portal_configuration(map()) ::
+          {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+  def create_portal_configuration(attrs) when is_map(attrs) do
+    made(
+      :portal_configuration_create,
+      :portal,
+      attrs,
+      MishkaPay.PortalConfiguration,
+      [:provider],
+      :create_portal_configuration
+    )
+  end
+
+  @doc """
+  Changes portal setup `attrs.id` at `attrs.provider`: only the fields given. `active: false`
+  turns it off; a provider never deletes one.
+  """
+  @spec update_portal_configuration(map()) ::
+          {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+  def update_portal_configuration(attrs) when is_map(attrs) do
+    made(
+      :portal_configuration_update,
+      :portal,
+      attrs,
+      MishkaPay.PortalConfiguration,
+      [:provider, :id],
+      :update_portal_configuration
+    )
+  end
+
+  @doc "Reads portal setup `configuration_id` from `provider`, with `tenant`'s keys."
+  @spec fetch_portal_configuration(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+  def fetch_portal_configuration(provider, configuration_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(configuration_id) do
+    capable(
+      :portal,
+      :portal_configuration,
+      provider,
+      tenant,
+      & &1.fetch_portal_configuration(configuration_id, &2)
+    )
+  end
+
+  @doc """
+  One page of portal setups at `provider`, newest first (`MishkaPay.Page` of
+  `MishkaPay.PortalConfiguration`): `active:` only those on (or off), `default: true` only the one
+  a session without `:configuration` uses, plus `limit:` and `after:`.
+  """
+  @spec list_portal_configurations(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_portal_configurations(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :portal,
+      :portal_configuration_list,
+      provider,
+      tenant,
+      & &1.list_portal_configurations(limited(opts), &2)
+    )
   end
 
   @doc """

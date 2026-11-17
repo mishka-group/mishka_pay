@@ -16,4 +16,33 @@ defmodule MishkaPay.Helpers.Choice do
   end
 
   def atom(field, value, _choices), do: {:ok, field, value}
+
+  # A list of choices, each an atom or its string, becomes the atoms; one not among `choices` is
+  # an error naming them all.
+  @spec atoms(atom(), term(), [atom()]) ::
+          {:ok, atom(), [atom()] | nil} | {:error, atom(), String.t()}
+  def atoms(field, nil, _choices), do: {:ok, field, nil}
+
+  def atoms(field, values, choices) when is_list(values) do
+    found =
+      Enum.map(values, fn
+        value when is_atom(value) or is_binary(value) ->
+          Enum.find(choices, &(Atom.to_string(&1) == to_string(value)))
+
+        _other ->
+          nil
+      end)
+
+    case Enum.all?(found) do
+      true -> {:ok, field, Enum.uniq(found)}
+      false -> not_a_choice(field, choices)
+    end
+  end
+
+  def atoms(field, _other, choices), do: not_a_choice(field, choices)
+
+  defp not_a_choice(field, choices),
+    do:
+      {:error, field,
+       MishkaPay.Messages.text(:choices, field: field, choices: Enum.join(choices, ", "))}
 end
