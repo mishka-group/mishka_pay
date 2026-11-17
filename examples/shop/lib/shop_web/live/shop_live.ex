@@ -78,7 +78,7 @@ defmodule ShopWeb.ShopLive do
      |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
-     |> assign(lookup: nil)
+     |> assign(lookup: nil, typed: %{})
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -209,6 +209,16 @@ defmodule ShopWeb.ShopLive do
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
+
+  # What is typed in the buy form and the payment box is kept, so both come back as they were
+  # after a reconnect (LiveView sends them again as these changes).
+  def handle_event("typed", params, socket) do
+    typed = Map.reject(params, fn {name, _value} -> String.starts_with?(name, "_") end)
+    {:noreply, assign(socket, typed: typed)}
+  end
+
+  def handle_event("lookup", %{"payment_id" => value}, socket),
+    do: {:noreply, assign(socket, lookup: value)}
 
   def handle_event("sync", %{"payment_id" => payment_id}, socket) do
     with {:ok, payment_id} <- payment_id(payment_id),
@@ -414,7 +424,7 @@ defmodule ShopWeb.ShopLive do
 
       <section data-testid="buy">
         <.section_title icon="hero-shopping-cart" title="Buy something" />
-        <form id="buy" phx-submit="buy" class="group/buy space-y-4">
+        <form id="buy" phx-change="typed" phx-submit="buy" class="group/buy space-y-4">
           <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="one-time-products">
             <.product
               :for={product <- @products}
@@ -440,6 +450,7 @@ defmodule ShopWeb.ShopLive do
             max_quantity={@max_quantity}
             paypal?={@paypal?}
             buyer?={!!@buyer}
+            typed={@typed}
           />
         </form>
         <.test_cards />
@@ -450,7 +461,13 @@ defmodule ShopWeb.ShopLive do
       <section data-testid="payments">
         <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
           <.section_title icon="hero-banknotes" title="Payments" />
-          <form phx-submit="sync" class="join" data-testid="read-payment-form">
+          <form
+            id="read-payment-form"
+            phx-change="lookup"
+            phx-submit="sync"
+            class="join"
+            data-testid="read-payment-form"
+          >
             <input
               name="payment_id"
               value={@lookup}
