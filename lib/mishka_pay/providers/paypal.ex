@@ -53,6 +53,13 @@ defmodule MishkaPay.Providers.PayPal do
   record. Metadata has no
   place on a PayPal Order and is left out.
 
+  ## Errors
+
+  A refused card is `MishkaPay.Errors.Declined`, anything else PayPal refuses
+  `MishkaPay.Errors.Rejected`. Both keep PayPal's debug id (the `PayPal-Debug-Id` header) as
+  `:request_id` and the error's `information_link` as `:doc_url`, for PayPal's support and the
+  log; their messages never show them.
+
   `config :mishka_pay, MishkaPay.Providers.PayPal, base_url: "http://localhost:..."` points it at
   another address, such as a test server.
 
@@ -515,13 +522,15 @@ defmodule MishkaPay.Providers.PayPal do
   defp token_answer({:ok, %Req.Response{status: 200, body: %{"access_token" => token} = body}}),
     do: {:ok, token, body["expires_in"] || 3_600}
 
-  defp token_answer({:ok, %Req.Response{status: status, body: body}}) do
+  defp token_answer({:ok, %Req.Response{status: status, body: body} = response}) do
     {:error,
      Errors.Rejected.exception(
-       provider: "paypal",
-       status: status,
-       code: error_field(body, "error"),
-       message: error_field(body, "error_description")
+       [
+         provider: "paypal",
+         status: status,
+         code: error_field(body, "error"),
+         message: error_field(body, "error_description")
+       ] ++ support(response)
      )}
   end
 
@@ -534,46 +543,63 @@ defmodule MishkaPay.Providers.PayPal do
   defp answer({:ok, %Req.Response{status: 204}}, _keys), do: {:ok, %{}}
 
   # A token PayPal no longer takes is dropped, so the next call gets a new one.
-  defp answer({:ok, %Req.Response{status: 401, body: body}}, keys) do
+  defp answer({:ok, %Req.Response{status: 401} = response}, keys) do
     TokenCache.drop({:paypal, keys.publishable_key, keys.mode})
-    rejected(401, body)
+    rejected(response)
   end
 
   defp answer(
          {:ok,
-          %Req.Response{status: 422, body: %{"details" => [%{"issue" => issue} | _]} = body}},
+          %Req.Response{status: 422, body: %{"details" => [%{"issue" => issue} | _]} = body} =
+            response},
          _keys
        )
        when issue in ["INSTRUMENT_DECLINED", "PAYER_CANNOT_PAY", "TRANSACTION_REFUSED"] do
-    {:error, Errors.Declined.exception(provider: "paypal", reason: issue, answer: body)}
+    {:error,
+     Errors.Declined.exception(
+       [provider: "paypal", reason: issue, answer: body] ++ support(response)
+     )}
   end
 
-  defp answer({:ok, %Req.Response{status: status, body: body}}, _keys), do: rejected(status, body)
+  defp answer({:ok, %Req.Response{} = response}, _keys), do: rejected(response)
   defp answer({:error, _unreachable} = error, _keys), do: error
 
-  # PayPal's "not found" is Stripe's `resource_missing`: one code, one plain message.
-  defp rejected(404, body) do
+  defp rejected(%Req.Response{status: status, body: body} = response) do
     {:error,
      Errors.Rejected.exception(
-       provider: "paypal",
-       status: 404,
-       code: "resource_missing",
-       message: error_field(body, "message")
+       [
+         provider: "paypal",
+         status: status,
+         code: code_of(status, body),
+         message: error_field(body, "message")
+       ] ++ support(response)
      )}
   end
 
-  defp rejected(status, body) do
-    {:error,
-     Errors.Rejected.exception(
-       provider: "paypal",
-       status: status,
-       code: issue(body) || error_field(body, "name"),
-       message: error_field(body, "message")
-     )}
-  end
+  # PayPal's "not found" is Stripe's `resource_missing`: one code, one plain message.
+  defp code_of(404, _body), do: "resource_missing"
+  defp code_of(_status, body), do: issue(body) || error_field(body, "name")
 
   defp issue(%{"details" => [%{"issue" => issue} | _]}), do: issue
   defp issue(_body), do: nil
+
+  # PayPal names every request in its `PayPal-Debug-Id` header (and an error's `debug_id`), which
+  # its support asks for, and links an error to its page (`information_link`).
+  defp support(%Req.Response{body: body} = response) do
+    [
+      request_id:
+        List.first(Req.Response.get_header(response, "paypal-debug-id")) ||
+          error_field(body, "debug_id"),
+      doc_url: information_link(body)
+    ]
+  end
+
+  defp information_link(%{"information_link" => link}) when is_binary(link), do: link
+
+  defp information_link(%{"links" => links}) when is_list(links),
+    do: Enum.find_value(links, &(is_map(&1) and &1["rel"] == "information_link" and &1["href"]))
+
+  defp information_link(_body), do: nil
 
   defp error_field(%{} = body, name), do: body[name]
   defp error_field(_body, _name), do: nil

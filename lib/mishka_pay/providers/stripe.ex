@@ -78,7 +78,9 @@ defmodule MishkaPay.Providers.Stripe do
       same mode (live or test) as the tenant's keys.
 
   Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
-  and other errors as `MishkaPay.Errors.Rejected` with its code and status.
+  and other errors as `MishkaPay.Errors.Rejected` with its code and status. Both keep Stripe's
+  `Request-Id` header as `:request_id` (`req_...`) and its error page as `:doc_url`, for support and
+  the log; their messages never show them.
 
   Stripe counts a few currencies differently from ISO 4217: ISK and UGX as two-decimal amounts
   ending in 00, and MGA as zero-decimal. Mishka Pay sends and reads them as Stripe counts them,
@@ -1585,16 +1587,18 @@ defmodule MishkaPay.Providers.Stripe do
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
 
-  defp answer({:ok, %Req.Response{status: 402, body: %{"error" => error}}}) do
+  defp answer({:ok, %Req.Response{status: 402, body: %{"error" => error}} = response}) do
     {:error,
      Errors.Declined.exception(
        provider: "stripe",
        reason: error["decline_code"] || error["code"],
-       answer: error
+       answer: error,
+       request_id: request_id(response),
+       doc_url: error["doc_url"]
      )}
   end
 
-  defp answer({:ok, %Req.Response{status: status, body: body}}) do
+  defp answer({:ok, %Req.Response{status: status, body: body} = response}) do
     error = error_of(body)
 
     {:error,
@@ -1603,7 +1607,9 @@ defmodule MishkaPay.Providers.Stripe do
        status: status,
        code: code_of(error),
        param: field_of(error["param"] || param_in(error["message"])),
-       message: error["message"]
+       message: error["message"],
+       request_id: request_id(response),
+       doc_url: error["doc_url"]
      )}
   end
 
@@ -1611,6 +1617,10 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
+
+  # Stripe names every request in its `Request-Id` header (`req_...`): its support and the
+  # Dashboard's request log find a failed one by it.
+  defp request_id(response), do: response |> Req.Response.get_header("request-id") |> List.first()
 
   # Stripe's names of the fields Mishka Pay calls otherwise; any other is kept as Stripe says it.
   @fields [

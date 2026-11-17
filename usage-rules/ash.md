@@ -191,7 +191,8 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 - Every resource also gets the primary `:read`; with `code_interface? true` each action is a
   function of the resource named like it (`receive_event` for the inbox's `:receive`).
 - Errors are Ash errors on their fields (`MishkaPay.Ash.to_ash_error/1`); show
-  `MishkaPay.Ash.message(error)`.
+  `MishkaPay.Ash.message(error)`. `MishkaPay.Ash.provider_error(error)` gives the provider's own
+  `Rejected` or `Declined` inside, with its `request_id` for the log and the provider's support.
 - An inbox event whose work fails stays `:pending` with `last_error` set and is tried again (10
   tries), then `:failed`. A host listener on `mishka_pay:event:process` can do its own work per
   event.

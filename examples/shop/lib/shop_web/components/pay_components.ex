@@ -32,6 +32,38 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
+  @doc """
+  For the site's staff, beside an error's plain words: the provider's id of the request that
+  failed (`:request_id` of `MishkaPay.Errors.Rejected` or `Declined`, found with
+  `MishkaPay.Ash.provider_error/1`) and its page about the error. A buyer never sees it.
+  """
+  attr :error, :map, required: true
+
+  def request_id(assigns) do
+    ~H"""
+    <p
+      :if={@error.request_id}
+      class="text-xs opacity-70 mb-3 flex flex-wrap items-center gap-2"
+      data-testid="request-id"
+    >
+      <span>
+        {MishkaPay.Provider.label_of(@error.provider)}'s request id, for its support:
+      </span>
+      <code class="break-all" data-testid="request-id-value">{@error.request_id}</code>
+      <a
+        :if={@error.doc_url}
+        href={@error.doc_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="link"
+        data-testid="request-id-doc"
+      >
+        about this error
+      </a>
+    </p>
+    """
+  end
+
   @doc "What Mishka Pay sees right now: providers, the site's keys and settings, and plugins."
   attr :providers, :list, required: true
   attr :keys, :any, required: true

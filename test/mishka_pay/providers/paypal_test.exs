@@ -150,6 +150,24 @@ defmodule MishkaPay.Providers.PayPalTest do
                MishkaPay.fetch_payment("paypal", "ORDER2", "site-a")
     end
 
+    test "a decline and a refusal keep PayPal's debug id and error page, never in their words" do
+      PayPalStub.order("ORDER3", "APPROVED", declined: true)
+
+      assert {:error, %Errors.Declined{request_id: "f3a1c2b4d5e60", doc_url: doc_url} = declined} =
+               MishkaPay.fetch_payment("paypal", "ORDER3", "site-a")
+
+      assert doc_url =~ "#INSTRUMENT_DECLINED"
+
+      assert {:error, %Errors.Rejected{status: 404, request_id: "f3a1c2b4d5e60"} = missing} =
+               MishkaPay.fetch_payment("paypal", "ORDER404NOTHERE", "site-a")
+
+      for error <- [declined, missing],
+          text <- [Exception.message(error), MishkaPay.Ash.message(error)] do
+        refute text =~ "f3a1c2b4d5e60"
+        refute text =~ "developer.paypal.com"
+      end
+    end
+
     test "an Order's states read as payment statuses" do
       for {status, opts, expected} <- [
             {"PAYER_ACTION_REQUIRED", [], :pending},

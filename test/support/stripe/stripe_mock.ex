@@ -23,7 +23,8 @@ defmodule MishkaPay.Support.StripeMock do
 
   @doc """
   A `MishkaPay.Test.stub_http/1` plug that forwards the request to stripe-mock, or to `url`, such
-  as `"https://api.stripe.com"` for the tests against a real test account.
+  as `"https://api.stripe.com"` for the tests against a real test account, and answers with its
+  status, body and `Request-Id` header.
   """
   @spec forward(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   def forward(conn, url \\ @url) do
@@ -39,7 +40,11 @@ defmodule MishkaPay.Support.StripeMock do
         retry: false
       )
 
-    conn
+    answer.headers
+    |> Map.take(["request-id"])
+    |> Enum.reduce(conn, fn {name, [value | _]}, conn ->
+      Plug.Conn.put_resp_header(conn, name, value)
+    end)
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(answer.status, answer.body)
   end

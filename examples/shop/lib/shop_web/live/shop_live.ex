@@ -78,7 +78,7 @@ defmodule ShopWeb.ShopLive do
      |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
-     |> assign(lookup: nil, typed: %{})
+     |> assign(lookup: nil, typed: %{}, lookup_failure: nil)
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -226,7 +226,7 @@ defmodule ShopWeb.ShopLive do
       {:noreply,
        socket
        |> put_payment(payment)
-       |> assign(lookup: nil)
+       |> assign(lookup: nil, lookup_failure: nil)
        |> assign_last()
        |> select(payment.id)
        |> flash(
@@ -238,7 +238,7 @@ defmodule ShopWeb.ShopLive do
         {:noreply,
          socket
          |> close_other(payment_id)
-         |> assign(lookup: payment_id)
+         |> assign(lookup: payment_id, lookup_failure: MishkaPay.Ash.provider_error(error))
          |> flash(:error, MishkaPay.Ash.message(error))}
     end
   end
@@ -480,6 +480,7 @@ defmodule ShopWeb.ShopLive do
             </button>
           </form>
         </div>
+        <.request_id :if={@lookup_failure} error={@lookup_failure} />
         <.stats stats={@stats} filter={@filter} statuses={@statuses} />
         <.payments_table payments={@streams.payments} names={@names} />
       </section>

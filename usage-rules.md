@@ -311,6 +311,19 @@ Match the error's struct. Show people plain words, never `inspect(error)`:
 | `MishkaPay.Errors.UnknownProvider` | no such provider installed | supervise the provider |
 | `MishkaPay.Errors.Unreachable` | no answer from the provider | retry later; nothing was charged twice |
 
+`Rejected` and `Declined` keep the provider's id of the failed request as `request_id` (Stripe's
+`Request-Id`, `req_...`; PayPal's debug id) and its page about the error as `doc_url`. Log them and
+quote the id to the provider's support; never show them to a buyer (`Exception.message/1` and
+`MishkaPay.Ash.message/1` leave them out). Behind an Ash action, `MishkaPay.Ash.provider_error(error)`
+finds the provider's error inside the Ash error:
+
+```elixir
+with {:error, error} <- MishkaPay.refund(attrs) do
+  Logger.warning("refund failed", request_id: Map.get(error, :request_id))
+  {:error, MishkaPay.Ash.message(error)}
+end
+```
+
 ## Refunds
 
 ```elixir

@@ -28,11 +28,20 @@ defmodule MishkaPay.Errors.Rejected do
       `"subscription_of_another"` a subscription that belongs to another customer.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
+    * `:request_id`: the provider's id of the request that failed (Stripe's `Request-Id` header,
+      PayPal's debug id), when it gave one. Quote it to the provider's support, or find the request
+      in its dashboard log.
+    * `:doc_url`: the provider's page about the error, when it named one.
+
+  The request id and the page are for support and the log only: `Exception.message/1` never shows
+  them.
   """
 
   alias MishkaPay.Messages
 
-  use Splode.Error, fields: [:provider, :status, :code, :param, :message], class: :provider
+  use Splode.Error,
+    fields: [:provider, :status, :code, :param, :message, :request_id, :doc_url],
+    class: :provider
 
   @impl true
   def message(%{code: "idempotency_error"}), do: Messages.text(:reference_reused)

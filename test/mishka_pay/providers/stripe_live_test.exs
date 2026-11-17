@@ -571,6 +571,19 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {status, answer}
   end
 
+  test "a refusal keeps Stripe's request id and error page, and its words show neither" do
+    assert {:error,
+            %Errors.Rejected{
+              status: 404,
+              code: "resource_missing",
+              request_id: "req_" <> _ = request_id,
+              doc_url: "https://" <> _ = doc_url
+            } = error} = MishkaPay.fetch_payment("stripe", "pi_doesnotexist")
+
+    refute Exception.message(error) =~ request_id
+    refute Exception.message(error) =~ doc_url
+  end
+
   test "a customer is made, changed, found by email and read on Stripe, and its portal opens" do
     run = run_id()
     email = "live-#{run}@example.com"

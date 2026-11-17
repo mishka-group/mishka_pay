@@ -1918,6 +1918,16 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(Map.put(@checkout, :metadata, many))
     end
 
+    test "a request stripe-mock refuses keeps the request id it answered with" do
+      assert {:error, %Errors.Rejected{status: 400, request_id: "req_" <> _}} =
+               MishkaPay.Providers.Stripe.request(
+                 :post,
+                 "/v1/customers",
+                 %{"phone" => %{"a" => "b"}},
+                 %MishkaPay.Credentials{provider: "stripe", secret_key: "sk_test_123"}
+               )
+    end
+
     test "keys Stripe does not accept are a rejection with its status" do
       MishkaPay.Test.put_keys("stripe", %{secret_key: "not-a-key"})
 
@@ -2030,19 +2040,77 @@ defmodule MishkaPay.Providers.StripeTest do
     test "Stripe's 402 for a card it declined is a decline with Stripe's code" do
       MishkaPay.Test.stub_http(fn conn ->
         conn
+        |> Plug.Conn.put_resp_header("request-id", "req_decline1")
         |> Plug.Conn.put_status(402)
         |> Req.Test.json(%{
           "error" => %{
             "type" => "card_error",
             "code" => "card_declined",
             "decline_code" => "insufficient_funds",
+            "doc_url" => "https://stripe.com/docs/error-codes/card-declined",
             "message" => "Your card has insufficient funds."
           }
         })
       end)
 
-      assert {:error, %Errors.Declined{provider: "stripe", reason: "insufficient_funds"}} =
+      assert {:error,
+              %Errors.Declined{
+                provider: "stripe",
+                reason: "insufficient_funds",
+                request_id: "req_decline1",
+                doc_url: "https://stripe.com/docs/error-codes/card-declined"
+              } = error} =
                MishkaPay.refund(%{provider: "stripe", tenant: "site-a", payment_id: "pi_123"})
+
+      assert %Errors.Declined{request_id: "req_decline1"} =
+               error |> MishkaPay.Ash.to_ash_error() |> MishkaPay.Ash.provider_error()
+
+      for text <- [Exception.message(error), MishkaPay.Ash.message(error)] do
+        refute text =~ "req_decline1"
+        refute text =~ "stripe.com/docs"
+      end
+    end
+
+    test "a refusal keeps Stripe's request id and error page for support, never in its words" do
+      MishkaPay.Test.stub_http(fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("request-id", "req_refused1")
+        |> Plug.Conn.put_status(404)
+        |> Req.Test.json(%{
+          "error" => %{
+            "type" => "invalid_request_error",
+            "code" => "resource_missing",
+            "param" => "id",
+            "doc_url" => "https://stripe.com/docs/error-codes/resource-missing",
+            "message" => "No such payment_intent: 'pi_gone'"
+          }
+        })
+      end)
+
+      assert {:error,
+              %Errors.Rejected{
+                status: 404,
+                code: "resource_missing",
+                request_id: "req_refused1",
+                doc_url: "https://stripe.com/docs/error-codes/resource-missing"
+              } = error} = MishkaPay.fetch_payment("stripe", "pi_gone", "site-a")
+
+      ash_error = error |> MishkaPay.Ash.to_ash_error() |> Ash.Error.to_error_class()
+
+      assert %Errors.Rejected{request_id: "req_refused1"} =
+               MishkaPay.Ash.provider_error(ash_error)
+
+      for text <- [
+            Exception.message(error),
+            MishkaPay.Ash.message(error),
+            MishkaPay.Ash.message(ash_error),
+            Exception.message(ash_error)
+          ] do
+        refute text =~ "req_refused1"
+        refute text =~ "stripe.com/docs"
+      end
+
+      assert MishkaPay.Ash.provider_error(%Errors.Unsupported{}) == nil
     end
 
     test "a file Stripe would not take, or a file field that holds no file id, is refused before any request" do

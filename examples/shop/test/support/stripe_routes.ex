@@ -7,7 +7,8 @@ defmodule ShopWeb.StripeRoutes do
   of the request's params giving either. Every request is sent to the test as
   `{:stripe, method, path, params}`, so a test asserts what was asked. A read with no route is an
   empty list (the page's other parts read Stripe's lists when it opens); any other call with no
-  route is answered 404 the way Stripe answers it.
+  route is answered 404 the way Stripe answers it. Every answer names its request, as Stripe's do:
+  `Request-Id: req_shop_test`.
   """
 
   @doc "Answers Stripe's calls of this test from `routes`, with keys for the demo site."
@@ -23,6 +24,7 @@ defmodule ShopWeb.StripeRoutes do
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       params = Plug.Conn.Query.decode(Enum.join([conn.query_string, body], "&"))
       send(test, {:stripe, conn.method, conn.request_path, params})
+      conn = Plug.Conn.put_resp_header(conn, "request-id", "req_shop_test")
 
       case answer(conn.method, Map.get(routes, {conn.method, conn.request_path}), params) do
         {status, json} -> conn |> Plug.Conn.put_status(status) |> Req.Test.json(json)
