@@ -204,12 +204,10 @@ defmodule ShopWeb.PayComponents do
             <dt class="opacity-70">Webhook secret</dt>
             <dd data-testid="site-webhook-secret">
               {if @local_webhook_secret?, do: "the simulator's own", else: "from stripe listen"}
-              <span
-                :if={@keys.webhook_secrets != []}
-                class="block text-xs opacity-70"
-                data-testid="site-webhook-old-secrets"
-              >
-                + {length(@keys.webhook_secrets)} from before a roll, still accepted
+              <span class="block text-xs opacity-70" data-testid="site-webhook-old-secrets">
+                + {length(@keys.webhook_secrets)} from before a roll, still accepted<span :if={
+                  @keys.webhook_secrets == []
+                }> (set <code>STRIPE_WEBHOOK_SECRET_OLD</code> to keep one)</span>
               </span>
             </dd>
             <dt class="opacity-70">Refunds</dt>

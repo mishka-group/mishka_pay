@@ -1,6 +1,8 @@
 defmodule Shop.Pay.KeysTest do
   # Changes the process environment the keys are read from.
-  use ExUnit.Case, async: false
+  use ShopWeb.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
 
   alias Shop.Pay.{Keys, WebhookSimulator}
 
@@ -34,5 +36,25 @@ defmodule Shop.Pay.KeysTest do
     assert [old] = Keys.old_webhook_secrets()
     refute old == Keys.webhook_secret()
     assert List.keymember?(WebhookSimulator.situations(), :rolled_secret, 0)
+  end
+
+  test "the Site card always says how many secrets from before a roll are taken, 0 when none",
+       %{conn: conn} do
+    ShopWeb.StripeStub.stub(fn _method, _path, _params -> nil end)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert view |> element("[data-testid=site-webhook-old-secrets]") |> render() =~
+             "0 from before"
+
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_shop", webhook_secret: "whsec_new", webhook_secrets: ["whsec_old"]},
+      "demo"
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert view |> element("[data-testid=site-webhook-old-secrets]") |> render() =~
+             "1 from before"
   end
 end
