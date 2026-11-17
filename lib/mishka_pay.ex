@@ -2082,8 +2082,8 @@ defmodule MishkaPay do
 
   @doc """
   One page of `provider`'s events for `tenant`, newest first (`MishkaPay.Page`), each a
-  `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, plus `limit:` and
-  `after:`. At a provider with two kinds of events, `events:` (`:thin` or `:snapshot`, else the
+  `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, `object_id:` only the
+  events about that object (thin events only), plus `limit:` and `after:`. At a provider with two kinds of events, `events:` (`:thin` or `:snapshot`, else the
   tenant's `:events`) picks which are read: Stripe's thin events come from API v2
   (`/v2/core/events`, 20 a page), each the same Event its webhook gives, named as its snapshot
   event (`invoice.paid`), and `types:` takes those names or Stripe's thin ones

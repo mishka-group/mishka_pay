@@ -1588,24 +1588,43 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Customer{id: customer_id}} =
              MishkaPay.create_customer(%{
                provider: "stripe",
+               api: :v1,
                email: "thin-#{run}@example.com",
                reference: "thin-#{run}"
              })
 
     since = DateTime.add(DateTime.utc_now(), -600)
 
-    assert {:ok, %MishkaPay.Page{items: events}} =
-             MishkaPay.list_events("stripe", nil,
-               since: since,
-               types: ["v1.customer.created"],
-               limit: 20
-             )
-
+    # Other live tests make customers in the same minutes, so every page of the window is read.
     assert %MishkaPay.Event{id: "evt_" <> _, object_type: "customer"} =
-             Enum.find(events, &(&1.customer_id == customer_id))
+             created_event(customer_id, since, nil)
+
+    # Stripe's index by object trails new events by a few seconds, so this checks the filter only.
+    assert {:ok, %MishkaPay.Page{items: about}} =
+             MishkaPay.list_events("stripe", nil, since: since, object_id: customer_id)
+
+    assert Enum.all?(about, &(&1.object_id == customer_id))
+
+    assert {:error, %MishkaPay.Errors.Invalid{}} =
+             MishkaPay.list_events("stripe", nil, object_id: customer_id, events: :snapshot)
 
     assert {:ok, %MishkaPay.Page{items: [_ | _]}} =
              MishkaPay.list_events("stripe", nil, since: since, events: :snapshot)
+  end
+
+  defp created_event(customer_id, since, cursor) do
+    assert {:ok, %MishkaPay.Page{items: events, next: next}} =
+             MishkaPay.list_events("stripe", nil,
+               since: since,
+               types: ["v1.customer.created"],
+               after: cursor
+             )
+
+    case {Enum.find(events, &(&1.customer_id == customer_id)), next} do
+      {nil, nil} -> nil
+      {nil, next} -> created_event(customer_id, since, next)
+      {event, _next} -> event
+    end
   end
 
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do

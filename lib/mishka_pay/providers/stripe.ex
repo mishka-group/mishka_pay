@@ -2980,10 +2980,17 @@ defmodule MishkaPay.Providers.Stripe do
     types = List.wrap(opts[:types])
 
     with :ok <- event_types(types),
-         {:ok, kind} <- events_kind(opts[:events], keys) do
+         {:ok, kind} <- events_kind(opts[:events], keys),
+         :ok <- object_filter(kind, opts[:object_id]) do
       events_page(kind, types, opts, keys)
     end
   end
+
+  # Only API v2's thin events are listed by the object they are about.
+  defp object_filter(:snapshot, object_id) when is_binary(object_id),
+    do: invalid(:object_id, Messages.text(:stripe_event_object))
+
+  defp object_filter(_kind, _object_id), do: :ok
 
   defp event_types(types) do
     case Enum.drop(types, 20) do
@@ -2995,7 +3002,8 @@ defmodule MishkaPay.Providers.Stripe do
   defp events_page(:thin, types, opts, keys) do
     filters = %{
       "types" => Enum.map(types, &thin_type/1),
-      "created" => opts[:since] && %{"gte" => DateTime.to_iso8601(opts[:since])}
+      "created" => opts[:since] && %{"gte" => DateTime.to_iso8601(opts[:since])},
+      "object_id" => opts[:object_id]
     }
 
     v2_page("/v2/core/events", filters, opts, keys, &listed_event(&1, keys))

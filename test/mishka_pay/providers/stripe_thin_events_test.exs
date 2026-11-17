@@ -338,7 +338,8 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
       assert {:ok, %MishkaPay.Page{items: [refunded, _issuing], has_more: true, next: next}} =
                MishkaPay.list_events("stripe", "site-a",
                  since: since,
-                 types: ["charge.refunded", "v1.issuing_card.created"]
+                 types: ["charge.refunded", "v1.issuing_card.created"],
+                 object_id: "ch_7"
                )
 
       assert %Event{id: "evt_test_2", payment_id: "pi_7", type: "charge.refunded"} = refunded
@@ -348,6 +349,7 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
                "created[gte]" => "2026-11-17T11:00:00Z",
                "types[0]" => "v1.charge.refunded",
                "types[1]" => "v1.issuing_card.created",
+               "object_id" => "ch_7",
                "limit" => "10"
              } = query
 
@@ -389,6 +391,11 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
 
       assert {:error, %MishkaPay.Errors.Invalid{errors: [%{field: :events}]}} =
                MishkaPay.list_events("stripe", "site-a", events: :fat)
+
+      assert {:error, %MishkaPay.Errors.Invalid{errors: [%{field: :object_id}]}} =
+               MishkaPay.list_events("stripe", "site-a", object_id: "cus_1")
+
+      refute_received {:path, _path}
     end
   end
 end

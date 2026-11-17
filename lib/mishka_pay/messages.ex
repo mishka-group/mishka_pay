@@ -127,6 +127,7 @@ defmodule MishkaPay.Messages do
           | :evidence_page_limit
           | :due_sent_only
           | :stripe_event_types
+          | :stripe_event_object
           | :search_needs
           | :subscription_search_needs
           | :subscription_status
@@ -895,6 +896,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
+
+  defp msgid(:stripe_event_object),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Only thin events are listed by the object they are about; read them with events: :thin"
+      )
 
   defp msgid(:meter_interval),
     do: dgettext_noop("mishka_pay", "A price on a meter needs an interval to bill its usage")
