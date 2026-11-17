@@ -5,43 +5,93 @@ defmodule ShopWeb.ConnectTest do
 
   alias ShopWeb.StripeStub
 
+  # An account as Stripe's API v2 answers it: a list holds its own fields only; a read or a make
+  # adds its configurations and requirements.
   defp account(id, extra \\ %{}),
     do:
       Map.merge(
         %{
-          "object" => "account",
+          "object" => "v2.core.account",
           "id" => id,
-          "email" => "#{id}@example.com",
-          "controller" => %{"stripe_dashboard" => %{"type" => "express"}},
-          "charges_enabled" => false,
-          "payouts_enabled" => false,
-          "requirements" => %{"currently_due" => ["external_account", "tos_acceptance.date"]},
+          "contact_email" => "#{id}@example.com",
+          "applied_configurations" => ["merchant", "recipient"],
+          "dashboard" => "express",
+          "closed" => false,
           "metadata" => %{},
-          "created" => 1_790_000_000
+          "created" => "2026-11-17T11:27:06.000Z"
         },
         extra
       )
+
+  defp read_account(id, extra \\ %{}),
+    do:
+      account(
+        id,
+        Map.merge(
+          %{
+            "configuration" => %{
+              "merchant" => %{
+                "capabilities" => %{
+                  "card_payments" => %{"status" => "active", "status_details" => []}
+                }
+              },
+              "recipient" => %{
+                "capabilities" => %{
+                  "stripe_balance" => %{
+                    "stripe_transfers" => %{"status" => "pending", "status_details" => []}
+                  }
+                }
+              }
+            },
+            "requirements" => %{
+              "entries" => [
+                %{
+                  "awaiting_action_from" => "user",
+                  "description" => "external_account",
+                  "minimum_deadline" => %{"status" => "currently_due"}
+                },
+                %{
+                  "awaiting_action_from" => "user",
+                  "description" => "identity.attestations.terms_of_service.account.date",
+                  "minimum_deadline" => %{"status" => "past_due"}
+                }
+              ]
+            }
+          },
+          extra
+        )
+      )
+
+  defp v2_list(data), do: %{"data" => data, "next_page_url" => nil, "previous_page_url" => nil}
 
   setup do
     test = self()
 
     StripeStub.stub(fn
-      "GET", "/v1/accounts", _params ->
+      "GET", "/v2/core/accounts", _params ->
         send(test, :accounts_read)
-        StripeStub.list([account("acct_1", %{"charges_enabled" => true})])
+        v2_list([account("acct_1")])
 
-      "POST", "/v1/accounts", params ->
+      "GET", "/v2/core/accounts/acct_1", params ->
+        send(test, {:read, params})
+        read_account("acct_1")
+
+      "POST", "/v2/core/accounts", params ->
         send(test, {:made, params})
-        account("acct_new", %{"email" => params["email"]})
+        read_account("acct_new", %{"contact_email" => params["contact_email"]})
 
-      "POST", "/v1/account_links", %{"account" => "acct_1"} = params ->
+      "POST", "/v2/core/accounts/acct_1/close", params ->
+        send(test, {:closed, params})
+        account("acct_1", %{"closed" => true})
+
+      "POST", "/v2/core/account_links", %{"account" => "acct_1"} = params ->
         send(test, {:linked, params})
 
         %{
-          "object" => "account_link",
+          "object" => "v2.core.account_link",
           "url" => "https://connect.stripe.com/setup/e/acct_1/abc",
-          "expires_at" => 1_790_000_300,
-          "created" => 1_790_000_000
+          "expires_at" => "2026-11-17T11:32:34.000Z",
+          "created" => "2026-11-17T11:27:34.000Z"
         }
 
       "GET", "/v1/payouts", _params ->
@@ -162,7 +212,9 @@ defmodule ShopWeb.ConnectTest do
     assert has_element?(view, "[data-testid=connect-country] option[value=DE][selected]")
 
     view |> form(make) |> render_submit()
-    assert_received {:made, %{"country" => "DE", "email" => "ava@example.com"}}
+
+    assert_received {:made,
+                     %{"identity" => %{"country" => "DE"}, "contact_email" => "ava@example.com"}}
 
     view |> form(send_money) |> render_submit()
 
@@ -171,8 +223,8 @@ defmodule ShopWeb.ConnectTest do
 
   test "a transfer Stripe refuses says so and adds no row", %{conn: conn} do
     StripeStub.stub(fn
-      "GET", "/v1/accounts", _params ->
-        StripeStub.list([account("acct_1")])
+      "GET", "/v2/core/accounts", _params ->
+        v2_list([account("acct_1")])
 
       "POST", "/v1/transfers", _params ->
         StripeStub.error("No such destination: 'acct_1'", "resource_missing")
@@ -199,7 +251,7 @@ defmodule ShopWeb.ConnectTest do
     assert has_element?(view, "[data-testid=connect-error]", "more than zero")
   end
 
-  test "nothing is read until shown; then the accounts list, one is made and one onboarded",
+  test "nothing is read until shown; then the accounts list, one is read, one is made with its choices, one onboarded and one closed",
        %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     refute_received :accounts_read
@@ -209,53 +261,86 @@ defmodule ShopWeb.ConnectTest do
     render_async(view)
     assert_received :accounts_read
 
+    row = "[data-account-id=acct_1]"
+
     assert has_element?(
              view,
-             "[data-account-id=acct_1] [data-testid=connect-account-charges]",
-             "yes"
+             "#{row} [data-testid=connect-account-configurations]",
+             "merchant, recipient"
            )
 
-    assert has_element?(view, "[data-account-id=acct_1] [data-testid=connect-account-due]", "2")
+    assert has_element?(view, "#{row} [data-testid=connect-account-dashboard]", "express")
+    assert has_element?(view, "#{row} [data-testid=connect-account-charges]", "–")
+    refute_received {:read, _params}
+
+    view |> element("#{row} [data-testid=connect-account-fetch]") |> render_click()
+    assert_received {:read, %{"include" => %{"0" => _}}}
+    assert has_element?(view, "#{row} [data-testid=connect-account-charges]", "yes")
+    assert has_element?(view, "#{row} [data-testid=connect-account-transfers]", "no")
+    assert has_element?(view, "#{row} [data-testid=connect-account-due]", "2")
 
     view
-    |> form("[data-testid=connect-create-form]", %{email: "ava@example.com", country: "DE"})
+    |> form("[data-testid=connect-create-form]", %{
+      email: "ava@example.com",
+      country: "DE",
+      dashboard: "none",
+      configurations: ["", "merchant"]
+    })
     |> render_submit()
 
     assert_received {:made, made}
 
     assert %{
-             "country" => "DE",
-             "email" => "ava@example.com",
-             "controller" => %{"stripe_dashboard" => %{"type" => "express"}},
-             "capabilities" => %{"transfers" => %{"requested" => "true"}}
+             "identity" => %{"country" => "DE"},
+             "contact_email" => "ava@example.com",
+             "dashboard" => "none",
+             "configuration" => %{
+               "merchant" => %{"capabilities" => %{"card_payments" => %{"requested" => true}}}
+             }
            } = made
 
+    refute Map.has_key?(made["configuration"], "recipient")
     assert has_element?(view, "[data-testid=connect-notice]", "acct_new")
     assert has_element?(view, "[data-testid=connect-account-row][data-account-id=acct_new]")
 
-    view
-    |> element("[data-account-id=acct_1] [data-testid=connect-account-onboard]")
-    |> render_click()
+    assert has_element?(
+             view,
+             "[data-account-id=acct_new] [data-testid=connect-account-charges]",
+             "yes"
+           )
 
-    assert_received {:linked, %{"type" => "account_onboarding", "return_url" => "http" <> _}}
+    view |> element("#{row} [data-testid=connect-account-onboard]") |> render_click()
+
+    assert_received {:linked,
+                     %{
+                       "use_case" => %{
+                         "type" => "account_onboarding",
+                         "account_onboarding" => %{"return_url" => "http" <> _}
+                       }
+                     }}
 
     assert has_element?(
              view,
              "[data-testid=connect-link-url][href='https://connect.stripe.com/setup/e/acct_1/abc']"
            )
+
+    view |> element("#{row} [data-testid=connect-account-close]") |> render_click()
+    assert_received {:closed, %{"applied_configurations" => ["merchant", "recipient"]}}
+    refute has_element?(view, "[data-testid=connect-account-row]#{row}")
+    assert has_element?(view, "[data-testid=connect-notice]", "closed")
   end
 
   test "a sandbox that has not signed up for Connect says so, and a failed link changes nothing",
        %{conn: conn} do
     StripeStub.stub(fn
-      "POST", "/v1/accounts", _params ->
+      "POST", "/v2/core/accounts", _params ->
         StripeStub.error(
-          "You can only create new accounts if you've signed up for Connect, which you can do at https://dashboard.stripe.com/connect.",
-          nil
+          "The platform has not signed up for Connect.",
+          "platform_registration_required"
         )
 
-      "GET", "/v1/accounts", _params ->
-        StripeStub.list([account("acct_2")])
+      "GET", "/v2/core/accounts", _params ->
+        v2_list([account("acct_2")])
 
       _method, _path, _params ->
         nil

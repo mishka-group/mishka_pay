@@ -1,26 +1,35 @@
 defmodule ShopWeb.ConnectComponent do
   @moduledoc """
   Stripe Connect, in the demo shop: the shop acts as a platform whose sellers each have a
-  connected account. Make a test Express account (`MishkaPay.create_connected_account/1`), list
-  the platform's accounts (`MishkaPay.list_connected_accounts/3`) and open one's onboarding page
-  (`MishkaPay.account_link/1`), where the seller fills in what Stripe needs. Send one money
-  from the platform's balance (`MishkaPay.create_transfer/1`) and take it back
-  (`MishkaPay.reverse_transfer/4`); read the platform's payouts (`MishkaPay.list_payouts/3`) and
-  its cut of sellers' sales (`MishkaPay.list_application_fees/3`).
+  connected account, made on Stripe's Accounts v2 (the library's default). Make a test account
+  with its configurations and dashboard (`MishkaPay.create_connected_account/1`), list the
+  platform's accounts (`MishkaPay.list_connected_accounts/3`), read one's states
+  (`MishkaPay.fetch_connected_account/4`), open its onboarding page (`MishkaPay.account_link/1`),
+  where the seller fills in what Stripe needs, and close it
+  (`MishkaPay.close_connected_account/4`). Send one money from the platform's balance
+  (`MishkaPay.create_transfer/1`) and take it back (`MishkaPay.reverse_transfer/4`); read the
+  platform's payouts (`MishkaPay.list_payouts/3`) and its cut of sellers' sales
+  (`MishkaPay.list_application_fees/3`).
 
   A site of a real platform would then answer the platform's key with that account as its
   `:account_id` (`MishkaPay.Credentials`), so its payments run on the seller's account.
 
-  Nothing is read when the page opens: "Show Connect" reads the accounts in the background
-  (`start_async`), and "Read again" reads them once more. A sandbox that has not signed up for
-  Connect says so plainly.
+  Nothing is read when the page opens: "Show Connect" reads the lists in the background
+  (`start_async`), and "Read again" reads them once more. A v2 list holds each account's own
+  fields only, so a row's states are read when "Read" is pressed. A sandbox that has not signed
+  up for Connect says so plainly.
   """
 
   use ShopWeb, :live_component
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
-  @create_form %{"email" => "", "country" => "US"}
+  @create_form %{
+    "email" => "",
+    "country" => "US",
+    "dashboard" => "express",
+    "configurations" => ["merchant", "recipient"]
+  }
   @transfer_form %{
     "destination" => "",
     "amount" => "5.00",
@@ -30,28 +39,33 @@ defmodule ShopWeb.ConnectComponent do
 
   @impl true
   def mount(socket) do
-    {:ok,
-     assign(socket,
-       create_form: @create_form,
-       transfer_form: @transfer_form,
-       open?: false,
-       reading?: false,
-       accounts: [],
-       transfers: [],
-       payouts: [],
-       fees: [],
-       link: nil,
-       notice: nil,
-       error: nil
-     )}
+    new_socket =
+      assign(socket,
+        create_form: @create_form,
+        transfer_form: @transfer_form,
+        open?: false,
+        reading?: false,
+        accounts: [],
+        read: %{},
+        transfers: [],
+        payouts: [],
+        fees: [],
+        link: nil,
+        notice: nil,
+        error: nil
+      )
+
+    {:ok, new_socket}
   end
 
   @impl true
   def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
   @impl true
-  def handle_event("show", _params, socket),
-    do: {:noreply, socket |> assign(open?: true) |> read()}
+  def handle_event("show", _params, socket) do
+    new_socket = socket |> assign(open?: true) |> read()
+    {:noreply, new_socket}
+  end
 
   def handle_event("read", _params, socket), do: {:noreply, read(socket)}
 
@@ -63,102 +77,149 @@ defmodule ShopWeb.ConnectComponent do
     do: {:noreply, assign(socket, transfer_form: kept(@transfer_form, params))}
 
   def handle_event("create", params, socket) do
-    socket = assign(socket, create_form: kept(@create_form, params))
+    form = kept(@create_form, params)
+    socket = assign(socket, create_form: form)
 
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
-      type: :express,
-      country: params["country"],
-      email: blank(params["email"]),
-      capabilities: ["card_payments", "transfers"],
+      configurations: form["configurations"],
+      dashboard: form["dashboard"],
+      country: form["country"],
+      email: blank(form["email"]),
       reference: "shop-seller-#{System.unique_integer([:positive])}"
     }
 
-    case MishkaPay.create_connected_account(attrs) do
-      {:ok, account} ->
-        {:noreply,
-         socket
-         |> update(
-           :accounts,
-           &[account | Enum.reject(&1, fn known -> known.id == account.id end)]
-         )
-         |> done("Account #{account.id} made. Open its onboarding page to fill it in.")}
+    new_socket =
+      case MishkaPay.create_connected_account(attrs) do
+        {:ok, account} ->
+          socket
+          |> put_account(account)
+          |> done("Account #{account.id} made. Open its onboarding page to fill it in.")
 
-      {:error, error} ->
-        {:noreply, failed(socket, error)}
-    end
+        {:error, error} ->
+          failed(socket, error)
+      end
+
+    {:noreply, new_socket}
+  end
+
+  def handle_event("fetch", %{"id" => id}, socket) do
+    new_socket =
+      case MishkaPay.fetch_connected_account("stripe", id, socket.assigns.tenant) do
+        {:ok, account} -> socket |> put_account(account) |> done("Read #{id} from Stripe.")
+        {:error, error} -> failed(socket, error)
+      end
+
+    {:noreply, new_socket}
   end
 
   def handle_event("onboard", %{"id" => id}, socket) do
     base = ShopWeb.Endpoint.url()
 
-    case MishkaPay.account_link(%{
-           provider: "stripe",
-           tenant: socket.assigns.tenant,
-           account_id: id,
-           refresh_url: base <> "/?connect=again",
-           return_url: base <> "/?connect=done"
-         }) do
-      {:ok, link} ->
-        {:noreply, socket |> assign(link: link) |> done("Onboarding link for #{id}.")}
+    new_socket =
+      case MishkaPay.account_link(%{
+             provider: "stripe",
+             tenant: socket.assigns.tenant,
+             account_id: id,
+             refresh_url: base <> "/?connect=again",
+             return_url: base <> "/?connect=done"
+           }) do
+        {:ok, link} -> socket |> assign(link: link) |> done("Onboarding link for #{id}.")
+        {:error, error} -> failed(socket, error)
+      end
 
-      {:error, error} ->
-        {:noreply, failed(socket, error)}
-    end
+    {:noreply, new_socket}
+  end
+
+  def handle_event("close", %{"id" => id}, socket) do
+    new_socket =
+      case MishkaPay.close_connected_account("stripe", id, socket.assigns.tenant) do
+        {:ok, _closed} ->
+          socket
+          |> update(:accounts, fn all -> Enum.reject(all, &(&1.id == id)) end)
+          |> update(:read, &Map.delete(&1, id))
+          |> done("Account #{id} closed on Stripe.")
+
+        {:error, error} ->
+          failed(socket, error)
+      end
+
+    {:noreply, new_socket}
   end
 
   def handle_event("transfer", params, socket) do
     socket = assign(socket, transfer_form: kept(@transfer_form, params))
 
-    case MishkaPay.create_transfer(%{
-           provider: "stripe",
-           tenant: socket.assigns.tenant,
-           amount: %{amount: String.trim(params["amount"] || ""), currency: params["currency"]},
-           destination: params["destination"],
-           description: blank(params["description"]),
-           reference: "shop-transfer-#{System.unique_integer([:positive])}"
-         }) do
-      {:ok, transfer} ->
-        {:noreply,
-         socket
-         |> update(:transfers, &[transfer | &1])
-         |> done("Sent #{money(transfer.amount)} to #{transfer.destination} (#{transfer.id}).")}
+    new_socket =
+      case MishkaPay.create_transfer(%{
+             provider: "stripe",
+             tenant: socket.assigns.tenant,
+             amount: %{amount: String.trim(params["amount"] || ""), currency: params["currency"]},
+             destination: params["destination"],
+             description: blank(params["description"]),
+             reference: "shop-transfer-#{System.unique_integer([:positive])}"
+           }) do
+        {:ok, transfer} ->
+          socket
+          |> update(:transfers, &[transfer | &1])
+          |> done("Sent #{money(transfer.amount)} to #{transfer.destination} (#{transfer.id}).")
 
-      {:error, error} ->
-        {:noreply, failed(socket, error)}
-    end
+        {:error, error} ->
+          failed(socket, error)
+      end
+
+    {:noreply, new_socket}
   end
 
   def handle_event("reverse", %{"id" => id}, socket) do
-    case MishkaPay.reverse_transfer("stripe", id, socket.assigns.tenant,
-           reference: "shop-undo-#{id}"
-         ) do
-      {:ok, transfer} ->
-        {:noreply,
-         socket
-         |> update(:transfers, fn all -> Enum.map(all, &((&1.id == id && transfer) || &1)) end)
-         |> done("Took back #{money(transfer.amount_reversed)} of #{id}.")}
+    new_socket =
+      case MishkaPay.reverse_transfer("stripe", id, socket.assigns.tenant,
+             reference: "shop-undo-#{id}"
+           ) do
+        {:ok, transfer} ->
+          socket
+          |> update(:transfers, fn all -> Enum.map(all, &((&1.id == id && transfer) || &1)) end)
+          |> done("Took back #{money(transfer.amount_reversed)} of #{id}.")
 
-      {:error, error} ->
-        {:noreply, failed(socket, error)}
-    end
+        {:error, error} ->
+          failed(socket, error)
+      end
+
+    {:noreply, new_socket}
   end
 
   @impl true
   def handle_async(:connect, {:ok, {:ok, lists}}, socket),
     do: {:noreply, assign(socket, Map.put(lists, :reading?, false))}
 
-  def handle_async(:connect, {:ok, {:error, error}}, socket),
-    do: {:noreply, socket |> assign(reading?: false) |> failed(error)}
+  def handle_async(:connect, {:ok, {:error, error}}, socket) do
+    new_socket = socket |> assign(reading?: false) |> failed(error)
+    {:noreply, new_socket}
+  end
 
   def handle_async(:connect, {:exit, reason}, socket),
     do: {:noreply, assign(socket, reading?: false, error: inspect(reason), notice: nil)}
 
-  # The platform's sellers, the money it sent them, its payouts and its cut, read in the
-  # background, one page each.
+  # A hidden empty value keeps the configurations' key in the form when every box is unticked.
+  defp kept(defaults, params) do
+    merged = Map.merge(defaults, Map.take(params, Map.keys(defaults)))
 
-  defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
+    case merged do
+      %{"configurations" => names} ->
+        %{merged | "configurations" => Enum.reject(names, &(&1 == ""))}
+
+      other ->
+        other
+    end
+  end
+
+  # An account made or read: its row shows what was read of it, at the top when it is new.
+  defp put_account(socket, account) do
+    socket
+    |> update(:accounts, &[account | Enum.reject(&1, fn known -> known.id == account.id end)])
+    |> update(:read, &Map.put(&1, account.id, account))
+  end
 
   # The seller picked, or the first one listed while none is picked.
   defp destination(%{"destination" => id}, accounts) do
@@ -168,6 +229,8 @@ defmodule ShopWeb.ConnectComponent do
     end
   end
 
+  # The platform's sellers, the money it sent them, its payouts and its cut, read in the
+  # background, one page each.
   defp read(socket) do
     tenant = socket.assigns.tenant
 
@@ -215,8 +278,8 @@ defmodule ShopWeb.ConnectComponent do
         its account_id takes payments on it.
       </p>
       <.hint>
-        MishkaPay.create_connected_account/1, list_connected_accounts/3, account_link/1,
-        create_transfer/1, reverse_transfer/4, list_transfers/3, list_payouts/3,
+        MishkaPay.create_connected_account/1, list_connected_accounts/3,
+        fetch_connected_account/4, account_link/1, close_connected_account/4, create_transfer/1, reverse_transfer/4, list_transfers/3, list_payouts/3,
         list_application_fees/3
       </.hint>
 
@@ -242,8 +305,8 @@ defmodule ShopWeb.ConnectComponent do
           data-testid="connect-create-form"
         >
           <div class="card-body gap-3">
-            <h3 class="font-medium">A test Express account</h3>
-            <div class="grid gap-3 sm:grid-cols-3">
+            <h3 class="font-medium">A test seller account (Accounts v2)</h3>
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               <label class="fieldset">
                 <span class="fieldset-legend">Seller's email</span>
                 <input
@@ -263,7 +326,8 @@ defmodule ShopWeb.ConnectComponent do
                       {code, name} <- [
                         {"US", "United States"},
                         {"GB", "United Kingdom"},
-                        {"DE", "Germany"}
+                        {"DE", "Germany"},
+                        {"NL", "Netherlands"}
                       ]
                     }
                     value={code}
@@ -273,6 +337,47 @@ defmodule ShopWeb.ConnectComponent do
                   </option>
                 </select>
               </label>
+              <label class="fieldset">
+                <span class="fieldset-legend">Seller's dashboard</span>
+                <select name="dashboard" class="select select-sm" data-testid="connect-dashboard">
+                  <option
+                    :for={
+                      {value, name} <- [
+                        {"express", "Express"},
+                        {"full", "Full"},
+                        {"none", "None"}
+                      ]
+                    }
+                    value={value}
+                    selected={@create_form["dashboard"] == value}
+                  >
+                    {name}
+                  </option>
+                </select>
+              </label>
+              <fieldset class="fieldset" data-testid="connect-configurations">
+                <span class="fieldset-legend">What it does</span>
+                <input type="hidden" name="configurations[]" value="" />
+                <label
+                  :for={
+                    {value, name} <- [
+                      {"merchant", "Takes payments"},
+                      {"recipient", "Takes transfers"}
+                    ]
+                  }
+                  class="label text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    name="configurations[]"
+                    value={value}
+                    checked={value in @create_form["configurations"]}
+                    class="checkbox checkbox-sm"
+                    data-testid={"connect-configuration-#{value}"}
+                  />
+                  {name}
+                </label>
+              </fieldset>
               <div class="flex items-end">
                 <button
                   class="btn btn-sm btn-primary"
@@ -305,15 +410,18 @@ defmodule ShopWeb.ConnectComponent do
               <tr>
                 <th>Account</th>
                 <th>Email</th>
+                <th>Does</th>
+                <th>Dashboard</th>
                 <th>Payments</th>
                 <th>Payouts</th>
+                <th>Transfers</th>
                 <th>Stripe still needs</th>
                 <th></th>
               </tr>
             </thead>
             <tbody data-testid="connect-account-rows">
               <tr :if={@accounts == []}>
-                <td colspan="6" class="text-center opacity-70" data-testid="connect-accounts-empty">
+                <td colspan="9" class="text-center opacity-70" data-testid="connect-accounts-empty">
                   No connected accounts yet.
                 </td>
               </tr>
@@ -324,12 +432,33 @@ defmodule ShopWeb.ConnectComponent do
               >
                 <td class="font-mono text-xs">{account.id}</td>
                 <td>{account.email}</td>
-                <td data-testid="connect-account-charges">{yes_no(account.charges_enabled)}</td>
-                <td data-testid="connect-account-payouts">{yes_no(account.payouts_enabled)}</td>
-                <td class="text-xs" data-testid="connect-account-due">
-                  {length(account.requirements_due)} item(s)
+                <td class="text-xs" data-testid="connect-account-configurations">
+                  {Enum.join(account.configurations || [], ", ")}
                 </td>
-                <td>
+                <td data-testid="connect-account-dashboard">{account.dashboard}</td>
+                <td data-testid="connect-account-charges">
+                  {state(@read[account.id], :charges_enabled)}
+                </td>
+                <td data-testid="connect-account-payouts">
+                  {state(@read[account.id], :payouts_enabled)}
+                </td>
+                <td data-testid="connect-account-transfers">
+                  {state(@read[account.id], :transfers_enabled)}
+                </td>
+                <td class="text-xs" data-testid="connect-account-due">
+                  {due(@read[account.id])}
+                </td>
+                <td class="flex flex-wrap gap-1">
+                  <button
+                    class="btn btn-xs btn-ghost"
+                    phx-click="fetch"
+                    phx-value-id={account.id}
+                    phx-target={@myself}
+                    phx-disable-with="Asking Stripe..."
+                    data-testid="connect-account-fetch"
+                  >
+                    Read
+                  </button>
                   <button
                     class="btn btn-xs btn-outline"
                     phx-click="onboard"
@@ -339,6 +468,17 @@ defmodule ShopWeb.ConnectComponent do
                     data-testid="connect-account-onboard"
                   >
                     Onboarding link
+                  </button>
+                  <button
+                    class="btn btn-xs btn-ghost text-error"
+                    phx-click="close"
+                    phx-value-id={account.id}
+                    phx-target={@myself}
+                    phx-disable-with="Asking Stripe..."
+                    data-confirm="Close this seller's account on Stripe for good?"
+                    data-testid="connect-account-close"
+                  >
+                    Close
                   </button>
                 </td>
               </tr>
@@ -536,8 +676,12 @@ defmodule ShopWeb.ConnectComponent do
   defp money(%Money{} = money), do: Money.to_string!(money)
   defp money(_none), do: "–"
 
-  defp yes_no(true), do: "yes"
-  defp yes_no(_no), do: "no"
+  # A row's states show once the account was read; a list holds none.
+  defp state(nil, _field), do: "–"
+  defp state(account, field), do: (Map.fetch!(account, field) && "yes") || "no"
+
+  defp due(nil), do: "–"
+  defp due(account), do: "#{length(account.requirements_due)} item(s)"
 
   defp blank(value) when is_binary(value) do
     case String.trim(value) do

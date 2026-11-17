@@ -3,7 +3,7 @@ defmodule ShopWeb.StripeStub do
   Stripe's answers for the shop's LiveView tests: the demo site gets test keys
   (`MishkaPay.Test.put_keys/3`) and every Mishka Pay HTTP call is answered by `answer`
   (`MishkaPay.Test.stub_http/1`), a function of the method, the path and the params (query and
-  form body together). It answers a map (200), `{status, map}`, or `nil` for the default: an
+  form or JSON body together). It answers a map (200), `{status, map}`, or `nil` for the default: an
   empty list on a `GET`, else Stripe's "no such object".
   """
 
@@ -37,10 +37,12 @@ defmodule ShopWeb.StripeStub do
      %{"error" => %{"type" => "invalid_request_error", "message" => message, "code" => code}}}
   end
 
-  # A form body as params; a file upload (multipart) only by its parts' names.
+  # A form body as params, an API v2 JSON body as its object; a file upload (multipart) only by
+  # its parts' names.
   defp form(conn, body) do
     case Plug.Conn.get_req_header(conn, "content-type") do
       ["application/x-www-form-urlencoded" <> _rest] -> Plug.Conn.Query.decode(body)
+      ["application/json" <> _rest] -> JSON.decode!(body)
       ["multipart/form-data" <> _rest] -> %{"multipart" => body}
       _other -> %{}
     end
