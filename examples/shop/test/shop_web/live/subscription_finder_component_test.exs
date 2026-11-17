@@ -81,7 +81,7 @@ defmodule ShopWeb.SubscriptionFinderComponentTest do
     |> render_submit()
 
     refute_received {:stripe, "GET", "/v1/subscriptions", _params}
-    assert view |> element("#flash-error") |> render() =~ "cus_"
+    assert has_element?(view, "[data-testid=sub-finder-error]", "cus_")
     refute has_element?(view, "[data-testid=sub-finder-rows]")
   end
 
@@ -97,9 +97,14 @@ defmodule ShopWeb.SubscriptionFinderComponentTest do
     view |> form(form, %{"mode" => "search"}) |> render_change()
     refute has_element?(view, "[data-testid=sub-finder-customer]")
 
+    refute has_element?(view, "[data-testid=sub-finder-error]")
     view |> form(form, %{"mode" => "search", "metadata" => "novalue"}) |> render_submit()
     refute_received {:stripe, "GET", "/v1/subscriptions/search", _params}
-    assert view |> element("#flash-error") |> render() =~ "key=value"
+    assert has_element?(view, "[data-testid=sub-finder-error]", "key=value")
+    assert has_element?(view, "[data-testid=sub-finder-metadata][value=novalue]")
+
+    view |> form(form, %{"mode" => "search", "metadata" => "plan"}) |> render_change()
+    refute has_element?(view, "[data-testid=sub-finder-error]")
 
     view |> form(form, %{"mode" => "list"}) |> render_change()
     assert has_element?(view, "[data-testid=sub-finder-customer]")

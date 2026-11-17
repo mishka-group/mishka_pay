@@ -3,7 +3,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
   Finds subscriptions on Stripe, beside the ones the shop keeps: a list by customer, price and
   status (`MishkaPay.list_subscriptions/3`), or Stripe's search by status, reference and metadata
   (`MishkaPay.search_subscriptions/3`), a page at a time with "Next page". The form shows only the
-  chosen way's own filters, and metadata typed without `=` is refused here. "Open" keeps the one
+  chosen way's own filters, and metadata typed without `=` is refused here. A refusal, here or
+  Stripe's, shows under the form until the next change or a page found. "Open" keeps the one
   found in the shop (the subscriptions part's `read`, given as `open_target`) and shows it.
   """
 
@@ -21,7 +22,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
        form: %{"mode" => "list", "status" => "", "limit" => "5"},
        items: [],
        next: nil,
-       page: 0
+       page: 0,
+       error: nil
      )}
   end
 
@@ -30,14 +32,15 @@ defmodule ShopWeb.SubscriptionFinderComponent do
     do: {:ok, assign(socket, tenant: assigns.tenant, open_target: assigns.open_target)}
 
   @impl true
-  def handle_event("draft", params, socket), do: {:noreply, assign(socket, form: params)}
+  def handle_event("draft", params, socket),
+    do: {:noreply, assign(socket, form: params, error: nil)}
 
   def handle_event("find", %{"mode" => "search", "metadata" => metadata} = params, socket)
       when metadata != "" do
     case pair(params) do
       nil ->
-        send(self(), {:flash, :error, "Metadata is a key=value pair, like plan=pro."})
-        {:noreply, assign(socket, form: params)}
+        {:noreply,
+         assign(socket, form: params, error: "Metadata is a key=value pair, like plan=pro.")}
 
       _pair ->
         {:noreply, socket |> assign(form: params, page: 0) |> read(nil)}
@@ -140,6 +143,10 @@ defmodule ShopWeb.SubscriptionFinderComponent do
         </button>
       </form>
 
+      <div :if={@error} role="alert" class="alert alert-error py-2" data-testid="sub-finder-error">
+        {@error}
+      </div>
+
       <div
         :if={@page > 0}
         class="flex flex-wrap items-center gap-2 text-sm"
@@ -206,11 +213,10 @@ defmodule ShopWeb.SubscriptionFinderComponent do
 
     case find(form, tenant, cursor) do
       {:ok, %MishkaPay.Page{items: items, next: next}} ->
-        assign(socket, items: items, next: next, page: socket.assigns.page + 1)
+        assign(socket, items: items, next: next, page: socket.assigns.page + 1, error: nil)
 
       {:error, error} ->
-        send(self(), {:flash, :error, MishkaPay.Ash.message(error)})
-        assign(socket, items: [], next: nil, page: 0)
+        assign(socket, items: [], next: nil, page: 0, error: MishkaPay.Ash.message(error))
     end
   end
 
