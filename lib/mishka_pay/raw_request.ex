@@ -67,5 +67,5 @@ defmodule MishkaPay.RawRequest do
 
   @doc false
   def method(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(get post put patch delete))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(get post put patch delete)a)
 end

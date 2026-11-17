@@ -7,11 +7,12 @@ defmodule MishkaPay.Helpers.Choice do
 
   # A choice from JSON or a form comes as a string; it becomes the atom the struct's enum checks.
   # Anything else is left for the enum to refuse.
-  @spec atom(atom(), term(), [String.t()]) :: {:ok, atom(), term()}
+  # The choices are atoms the caller writes, so each one exists when its string is matched.
+  @spec atom(atom(), term(), [atom()]) :: {:ok, atom(), term()}
   def atom(field, value, choices) when is_binary(value) do
-    case value in choices do
-      true -> {:ok, field, String.to_existing_atom(value)}
-      false -> {:ok, field, value}
+    case Enum.find(choices, &(Atom.to_string(&1) == value)) do
+      nil -> {:ok, field, value}
+      choice -> {:ok, field, choice}
     end
   end
 

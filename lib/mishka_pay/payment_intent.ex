@@ -97,5 +97,5 @@ defmodule MishkaPay.PaymentIntent do
 
   @doc false
   def usage(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(on_session off_session))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(on_session off_session)a)
 end

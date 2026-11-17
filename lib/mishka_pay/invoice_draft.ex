@@ -65,7 +65,7 @@ defmodule MishkaPay.InvoiceDraft do
 
   @doc false
   def collection(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(charge_automatically send_invoice))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(charge_automatically send_invoice)a)
 
   # Items in one currency, none recurring; days to pay only for a bill that is sent. It runs on
   # the caller's map, before the fields are built.

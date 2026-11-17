@@ -86,14 +86,14 @@ defmodule MishkaPay.Price do
 
   # An interval from JSON or a form comes as a string.
   @doc false
-  def interval(:interval, interval) when interval in ["day", "week", "month", "year"],
-    do: {:ok, :interval, String.to_existing_atom(interval)}
+  def interval(:interval, interval) when is_binary(interval),
+    do: MishkaPay.Helpers.Choice.atom(:interval, interval, ~w(day week month year)a)
 
   def interval(:interval, interval), do: {:ok, :interval, interval}
 
   @doc false
   def tax_behavior(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inclusive exclusive))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inclusive exclusive)a)
 
   # A price on a meter bills each period's usage, so it needs the period.
   @doc false

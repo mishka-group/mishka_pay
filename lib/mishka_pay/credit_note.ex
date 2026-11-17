@@ -37,7 +37,7 @@ defmodule MishkaPay.CreditNote do
 
   use GuardedStruct
 
-  @reasons ~w(duplicate fraudulent order_change product_unsatisfactory)
+  @reasons ~w(duplicate fraudulent order_change product_unsatisfactory)a
   @money [:amount, :refund_amount, :credit_amount, :out_of_band_amount]
 
   guardedstruct authorized_fields: true, main_validator: {__MODULE__, :credits} do

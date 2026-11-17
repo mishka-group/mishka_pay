@@ -52,7 +52,8 @@ defmodule MishkaPay.FileUpload do
   end
 
   @doc false
-  def purpose(field, value), do: MishkaPay.Helpers.Choice.atom(field, value, ~w(dispute_evidence))
+  def purpose(field, value),
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(dispute_evidence)a)
 
   # A name only: no folder, no control character, so it can never point anywhere.
   @doc false

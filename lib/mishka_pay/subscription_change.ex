@@ -68,10 +68,10 @@ defmodule MishkaPay.SubscriptionChange do
   # Choices from JSON or a form come as strings.
   @doc false
   def proration(field, value),
-    do: Choice.atom(field, value, ~w(create_prorations always_invoice none))
+    do: Choice.atom(field, value, ~w(create_prorations always_invoice none)a)
 
   @doc false
-  def anchor(field, value), do: Choice.atom(field, value, ~w(now unchanged))
+  def anchor(field, value), do: Choice.atom(field, value, ~w(now unchanged)a)
 
   @doc false
   def payment_behavior(field, value),
@@ -79,7 +79,7 @@ defmodule MishkaPay.SubscriptionChange do
       Choice.atom(
         field,
         value,
-        ~w(allow_incomplete error_if_incomplete pending_if_incomplete default_incomplete)
+        ~w(allow_incomplete error_if_incomplete pending_if_incomplete default_incomplete)a
       )
 
   # A change changes something: the plan, the quantity, or at least starts a new period.

@@ -88,7 +88,7 @@ defmodule MishkaPay.SubscriptionSchedule do
 
   @doc false
   def end_behavior(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(release cancel))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(release cancel)a)
 
   @doc """
   The fields a new schedule cannot go without: none more from a subscription, its customer and

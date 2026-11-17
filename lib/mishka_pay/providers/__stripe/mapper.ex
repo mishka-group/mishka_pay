@@ -676,8 +676,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
   end
 
-  @subscription_statuses ~w(incomplete incomplete_expired trialing active past_due unpaid paused canceled)
-  @invoice_statuses ~w(draft open paid uncollectible void)
+  @subscription_statuses ~w(incomplete incomplete_expired trialing active past_due unpaid paused canceled)a
+  @invoice_statuses ~w(draft open paid uncollectible void)a
 
   @doc """
   A Subscription, with its customer and its items' products expanded, as a
@@ -740,9 +740,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp subscription_item(_no_price), do: []
 
-  defp interval(interval) when interval in ["day", "week", "month", "year"],
-    do: String.to_existing_atom(interval)
-
+  defp interval(interval) when is_binary(interval), do: known(interval, ~w(day week month year)a)
   defp interval(_none), do: nil
 
   @customer_includes ~w(configuration.customer identity)
@@ -995,11 +993,20 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
+  @address_fields %{
+    "country" => :country,
+    "postal_code" => :postal_code,
+    "line1" => :line1,
+    "line2" => :line2,
+    "city" => :city,
+    "state" => :state
+  }
+
   # A Stripe address, its empty fields left out; none without a country.
   defp address(%{"country" => country} = address) when is_binary(country) do
     address
-    |> Map.take(~w(country postal_code line1 line2 city state))
-    |> Map.new(fn {field, value} -> {String.to_existing_atom(field), blank(value)} end)
+    |> Map.take(Map.keys(@address_fields))
+    |> Map.new(fn {field, value} -> {Map.fetch!(@address_fields, field), blank(value)} end)
     |> reject_nil()
   end
 
@@ -1333,7 +1340,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       pdf_url: invoice["invoice_pdf"],
       payment_id: id_of(invoice["payment_intent"]) || paid_by(invoice),
       number: invoice["number"],
-      collection: known(invoice["collection_method"], ~w(charge_automatically send_invoice)),
+      collection: known(invoice["collection_method"], ~w(charge_automatically send_invoice)a),
       due_at: time(invoice["due_date"]),
       description: invoice["description"],
       reference: get_in(invoice, ["metadata", @reference]),
@@ -1566,8 +1573,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       customer_id: customer_ref(schedule),
       subscription_id: id_of(schedule["subscription"]),
       released_subscription_id: id_of(schedule["released_subscription"]),
-      status: known(schedule["status"], ~w(not_started active completed released canceled)),
-      end_behavior: known(schedule["end_behavior"], ~w(release cancel)),
+      status: known(schedule["status"], ~w(not_started active completed released canceled)a),
+      end_behavior: known(schedule["end_behavior"], ~w(release cancel)a),
       phases: phases,
       current_phase: current && Enum.find_index(phases, &(&1.start_at == time(current))),
       reference: get_in(schedule, ["metadata", @reference]),
@@ -1590,7 +1597,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       start_at: time(phase["start_date"]),
       end_at: time(phase["end_date"]),
       trial_end_at: time(phase["trial_end"]),
-      proration: known(phase["proration_behavior"], ~w(create_prorations always_invoice none))
+      proration: known(phase["proration_behavior"], ~w(create_prorations always_invoice none)a)
     }
   end
 
@@ -1662,12 +1669,13 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         |> get_in(["lines", "data"])
         |> List.wrap()
         |> Enum.map(&credit_line(&1, currency)),
-      reason: known(note["reason"], ~w(duplicate fraudulent order_change product_unsatisfactory)),
+      reason:
+        known(note["reason"], ~w(duplicate fraudulent order_change product_unsatisfactory)a),
       out_of_band_amount: money(note["out_of_band_amount"], currency),
       memo: blank(note["memo"]),
       number: note["number"],
-      status: known(note["status"], ~w(issued void)),
-      type: known(note["type"], ~w(pre_payment post_payment mixed)),
+      status: known(note["status"], ~w(issued void)a),
+      type: known(note["type"], ~w(pre_payment post_payment mixed)a),
       refund_ids:
         note["refunds"] |> List.wrap() |> Enum.map(&id_of(&1["refund"])) |> Enum.reject(&is_nil/1),
       pdf_url: note["pdf"],
@@ -1759,12 +1767,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp known(value, values) when is_binary(value) do
-    case value in values do
-      true -> String.to_existing_atom(value)
-      false -> nil
-    end
-  end
+  # Stripe's word as one of the atoms given (written here, so each one exists), or nil.
+  defp known(value, atoms) when is_binary(value),
+    do: Enum.find(atoms, &(Atom.to_string(&1) == value))
 
   defp known(_value, _values), do: nil
 
@@ -2022,7 +2027,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp customer_of(_event, _other), do: nil
 
-  @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)
+  @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)a
 
   @doc "A Stripe PaymentMethod as a `MishkaPay.PaymentMethod`, with its card when it is one."
   @spec payment_method(map()) :: {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
@@ -2130,7 +2135,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     %{
       provider: "stripe",
       id: file["id"],
-      purpose: known(file["purpose"], ~w(dispute_evidence)) || :other,
+      purpose: known(file["purpose"], ~w(dispute_evidence)a) || :other,
       filename: file["filename"],
       size: file["size"],
       type: file["type"],
@@ -2373,8 +2378,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   # Stripe's third choice, "unspecified", is a price that never said.
-  defp tax_behavior(behavior) when behavior in ["inclusive", "exclusive"],
-    do: String.to_existing_atom(behavior)
+  defp tax_behavior(behavior) when is_binary(behavior),
+    do: known(behavior, ~w(inclusive exclusive)a)
 
   defp tax_behavior(_unspecified), do: nil
 
@@ -2542,8 +2547,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       id: meter["id"],
       name: meter["display_name"],
       event_name: meter["event_name"],
-      aggregation: known(get_in(meter, ["default_aggregation", "formula"]), ~w(sum count last)),
-      status: known(meter["status"], ~w(active inactive)),
+      aggregation: known(get_in(meter, ["default_aggregation", "formula"]), ~w(sum count last)a),
+      status: known(meter["status"], ~w(active inactive)a),
       created_at: time(meter["created"])
     }
     |> reject_nil()
@@ -2621,7 +2626,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec usage_cancellation(map(), MishkaPay.UsageCancellation.t()) ::
           {:ok, MishkaPay.UsageCancellation.t()}
   def usage_cancellation(answer, cancel),
-    do: {:ok, %{cancel | status: known(answer["status"], ~w(pending complete))}}
+    do: {:ok, %{cancel | status: known(answer["status"], ~w(pending complete)a)}}
 
   @doc """
   Params of `GET /v1/billing/meters/:id/event_summaries` for one customer: Stripe counts from and
@@ -2741,7 +2746,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       net: signed_money(txn["net"], currency),
       type: txn["type"],
       source_id: id_of(txn["source"]),
-      status: known(txn["status"], ~w(available pending)),
+      status: known(txn["status"], ~w(available pending)a),
       description: txn["description"],
       available_at: time(txn["available_on"]),
       created_at: time(txn["created"])
@@ -2931,7 +2936,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Map.new(names, &{&1, %{"requested" => true}})
   end
 
-  @capability_states ~w(active pending restricted rejected unsupported inactive)
+  @capability_states ~w(active pending restricted rejected unsupported inactive)a
   @v1_dashboards %{"express" => :express, "standard" => :full, "custom" => :none}
 
   @doc """
@@ -2950,14 +2955,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> account_common()
     |> Map.merge(%{
       api: :v2,
-      dashboard: known(account["dashboard"], ~w(express full none)),
+      dashboard: known(account["dashboard"], ~w(express full none)a),
       configurations:
         Enum.map(
           account["applied_configurations"] || [],
-          &known(&1, ~w(merchant recipient customer))
+          &known(&1, ~w(merchant recipient customer)a)
         ),
-      fees_collector: known(responsibilities["fees_collector"], ~w(application stripe)),
-      losses_collector: known(responsibilities["losses_collector"], ~w(application stripe)),
+      fees_collector: known(responsibilities["fees_collector"], ~w(application stripe)a),
+      losses_collector: known(responsibilities["losses_collector"], ~w(application stripe)a),
       country: get_in(account, ["identity", "country"]),
       email: account["contact_email"],
       business_name: account["display_name"],
@@ -2990,7 +2995,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Map.merge(%{
       api: :v1,
       dashboard:
-        known(get_in(controller, ["stripe_dashboard", "type"]), ~w(express full none)) ||
+        known(get_in(controller, ["stripe_dashboard", "type"]), ~w(express full none)a) ||
           @v1_dashboards[account["type"]],
       configurations:
         for(
@@ -2999,7 +3004,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
           do: name
         ),
       fees_collector: v1_payer(get_in(controller, ["fees", "payer"])),
-      losses_collector: known(get_in(controller, ["losses", "payments"]), ~w(application stripe)),
+      losses_collector:
+        known(get_in(controller, ["losses", "payments"]), ~w(application stripe)a),
       country: account["country"],
       email: account["email"],
       business_name: get_in(account, ["business_profile", "name"]),
@@ -3183,7 +3189,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       provider: "stripe",
       id: payout["id"],
       amount: money(payout["amount"], payout["currency"]),
-      status: known(payout["status"], ~w(pending in_transit paid failed canceled)),
+      status: known(payout["status"], ~w(pending in_transit paid failed canceled)a),
       arrival_at: time(payout["arrival_date"]),
       automatic: payout["automatic"] == true,
       method: payout["method"],

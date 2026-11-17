@@ -3027,7 +3027,7 @@ defmodule MishkaPay.Providers.Stripe do
   @doc false
   def choice(field, value, setting, keys, [recommended | _] = choices) do
     named = value || Map.get(keys, setting) || recommended
-    {:ok, _field, chosen} = Choice.atom(field, named, Enum.map(choices, &Atom.to_string/1))
+    {:ok, _field, chosen} = Choice.atom(field, named, choices)
 
     case chosen in choices do
       true ->

@@ -90,6 +90,8 @@ defmodule MishkaPay.Credentials do
   `inspect/1` shows only the provider, the tenant and the mode, so a key never reaches a log line.
   """
 
+  alias MishkaPay.Helpers.Choice
+
   use GuardedStruct
 
   alias MishkaPay.{Errors, Events}
@@ -315,22 +317,22 @@ defmodule MishkaPay.Credentials do
 
   # A plugin that reads its keys from JSON or settings answers the mode as a string.
   @doc false
-  def mode(:mode, mode) when mode in ["test", "live"],
-    do: {:ok, :mode, String.to_existing_atom(mode)}
+  def mode(:mode, mode) when is_binary(mode),
+    do: Choice.atom(:mode, mode, ~w(test live)a)
 
   def mode(:mode, mode), do: {:ok, :mode, mode}
 
   @doc false
-  def refunds(:refunds, refunds) when refunds in ["once", "many"],
-    do: {:ok, :refunds, String.to_existing_atom(refunds)}
+  def refunds(:refunds, refunds) when is_binary(refunds),
+    do: Choice.atom(:refunds, refunds, ~w(once many)a)
 
   def refunds(:refunds, refunds), do: {:ok, :refunds, refunds}
 
   @doc false
-  def api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
+  def api(field, api), do: Choice.atom(field, api, ~w(v2 v1)a)
 
   @doc false
-  def events(field, kind), do: MishkaPay.Helpers.Choice.atom(field, kind, ~w(thin snapshot))
+  def events(field, kind), do: Choice.atom(field, kind, ~w(thin snapshot)a)
 
   defp missing(provider, tenant, reason),
     do:

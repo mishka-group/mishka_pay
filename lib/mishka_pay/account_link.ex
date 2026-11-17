@@ -71,7 +71,7 @@ defmodule MishkaPay.AccountLink do
   end
 
   @doc false
-  def type(field, value), do: Choice.atom(field, value, ~w(onboarding update login))
+  def type(field, value), do: Choice.atom(field, value, ~w(onboarding update login)a)
 
   # An onboarding or update link needs both pages to send the seller back to; a login link none.
   @doc false

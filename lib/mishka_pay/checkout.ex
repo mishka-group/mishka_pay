@@ -279,31 +279,31 @@ defmodule MishkaPay.Checkout do
   # Choices from JSON or a form come as strings.
   @doc false
   def customer_creation(field, value),
-    do: Choice.atom(field, value, ~w(always if_required))
+    do: Choice.atom(field, value, ~w(always if_required)a)
 
   @doc false
   def submit_type(field, value),
-    do: Choice.atom(field, value, ~w(auto pay book donate))
+    do: Choice.atom(field, value, ~w(auto pay book donate)a)
 
   @doc false
   def billing_address(field, value),
-    do: Choice.atom(field, value, ~w(auto required))
+    do: Choice.atom(field, value, ~w(auto required)a)
 
   @doc false
   def ui_mode(field, value),
-    do: Choice.atom(field, value, ~w(hosted embedded))
+    do: Choice.atom(field, value, ~w(hosted embedded)a)
 
   @doc false
   def capture(field, value),
-    do: Choice.atom(field, value, ~w(automatic automatic_sync manual))
+    do: Choice.atom(field, value, ~w(automatic automatic_sync manual)a)
 
   @doc false
   def billing_mode(field, value),
-    do: Choice.atom(field, value, ~w(flexible classic))
+    do: Choice.atom(field, value, ~w(flexible classic)a)
 
   @doc false
   def proration_discounts(field, value),
-    do: Choice.atom(field, value, ~w(itemized included))
+    do: Choice.atom(field, value, ~w(itemized included)a)
 
   @doc """
   Whether `attrs` (a caller's map) asks for proration discounts only with the flexible billing
@@ -394,8 +394,8 @@ defmodule MishkaPay.Checkout do
 
   # A mode from JSON or a form comes as a string.
   @doc false
-  def mode(:mode, mode) when mode in ["payment", "subscription", "setup"],
-    do: {:ok, :mode, String.to_existing_atom(mode)}
+  def mode(:mode, mode) when is_binary(mode),
+    do: MishkaPay.Helpers.Choice.atom(:mode, mode, ~w(payment subscription setup)a)
 
   def mode(:mode, mode), do: {:ok, :mode, mode}
 

@@ -72,5 +72,5 @@ defmodule MishkaPay.Subscription do
   # A provider names the behavior as a string.
   @doc false
   def pause_behavior(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(void keep_as_draft mark_uncollectible))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(void keep_as_draft mark_uncollectible)a)
 end
