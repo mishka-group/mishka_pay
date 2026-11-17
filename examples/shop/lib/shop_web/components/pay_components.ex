@@ -213,10 +213,15 @@ defmodule ShopWeb.PayComponents do
   attr :max_quantity, :integer, required: true
   attr :paypal?, :boolean, default: false
   attr :buyer?, :boolean, default: false
+  attr :typed, :map, default: %{}, doc: "what the buyer typed, kept so a reconnect gives it back"
 
   def checkout_options(assigns) do
     ~H"""
-    <details class="collapse collapse-arrow bg-base-200" data-testid="checkout-options">
+    <details
+      class="collapse collapse-arrow bg-base-200"
+      open={@typed != %{}}
+      data-testid="checkout-options"
+    >
       <summary class="collapse-title font-medium">
         Checkout options
         <span class="text-sm opacity-60">
@@ -227,8 +232,8 @@ defmodule ShopWeb.PayComponents do
         <label class="fieldset">
           <span class="fieldset-legend">Pay with</span>
           <select name="provider" class="select select-sm" data-testid="option-provider">
-            <option value="stripe">Stripe</option>
-            <option value="paypal" disabled={!@paypal?}>
+            <option value="stripe" selected={@typed["provider"] == "stripe"}>Stripe</option>
+            <option value="paypal" selected={@typed["provider"] == "paypal"} disabled={!@paypal?}>
               {if @paypal?, do: "PayPal", else: "PayPal (no keys)"}
             </option>
           </select>
@@ -241,7 +246,7 @@ defmodule ShopWeb.PayComponents do
             min="1"
             max={@max_quantity}
             step="1"
-            value="1"
+            value={@typed["quantity"] || "1"}
             class="input input-sm"
             data-testid="option-quantity"
           />
@@ -250,6 +255,7 @@ defmodule ShopWeb.PayComponents do
           <span class="fieldset-legend">Buyer email</span>
           <input
             name="email"
+            value={@typed["email"]}
             type="email"
             placeholder="filled on the payment page"
             class="input input-sm"
@@ -266,9 +272,9 @@ defmodule ShopWeb.PayComponents do
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Merchant of record, this checkout</span>
           <select name="merchant_of_record" class="select select-sm" data-testid="option-merchant">
-            <option value="">The site's setting</option>
-            <option value="on">On</option>
-            <option value="off">Off</option>
+            <option value="" selected={@typed["merchant_of_record"] == ""}>The site's setting</option>
+            <option value="on" selected={@typed["merchant_of_record"] == "on"}>On</option>
+            <option value="off" selected={@typed["merchant_of_record"] == "off"}>Off</option>
           </select>
         </label>
         <div class="fieldset">
@@ -276,12 +282,14 @@ defmodule ShopWeb.PayComponents do
           <div class="join">
             <input
               name="meta_key"
+              value={@typed["meta_key"]}
               placeholder="key"
               class="input input-sm join-item w-24"
               data-testid="option-meta-key"
             />
             <input
               name="meta_value"
+              value={@typed["meta_value"]}
               placeholder="value"
               class="input input-sm join-item w-28"
               data-testid="option-meta-value"
@@ -291,16 +299,23 @@ defmodule ShopWeb.PayComponents do
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Discount</span>
           <select name="discount_mode" class="select select-sm" data-testid="option-discount-mode">
-            <option value="">None</option>
-            <option value="typed">Buyer types a promotion code</option>
-            <option value="code">Apply a promotion code (promo_...)</option>
-            <option value="coupon">Apply a coupon (its id)</option>
+            <option value="" selected={@typed["discount_mode"] == ""}>None</option>
+            <option value="typed" selected={@typed["discount_mode"] == "typed"}>
+              Buyer types a promotion code
+            </option>
+            <option value="code" selected={@typed["discount_mode"] == "code"}>
+              Apply a promotion code (promo_...)
+            </option>
+            <option value="coupon" selected={@typed["discount_mode"] == "coupon"}>
+              Apply a coupon (its id)
+            </option>
           </select>
         </label>
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Code or coupon id to apply</span>
           <input
             name="discount_id"
+            value={@typed["discount_id"]}
             placeholder="promo_... or SPRING"
             class="input input-sm"
             data-testid="option-discount-id"
@@ -309,19 +324,20 @@ defmodule ShopWeb.PayComponents do
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Page language</span>
           <select name="locale" class="select select-sm" data-testid="option-locale">
-            <option value="">Stripe's choice</option>
-            <option value="auto">The buyer's browser</option>
-            <option value="en">English</option>
-            <option value="de">German</option>
-            <option value="fr">French</option>
-            <option value="es">Spanish</option>
-            <option value="ja">Japanese</option>
+            <option value="" selected={@typed["locale"] == ""}>Stripe's choice</option>
+            <option value="auto" selected={@typed["locale"] == "auto"}>The buyer's browser</option>
+            <option value="en" selected={@typed["locale"] == "en"}>English</option>
+            <option value="de" selected={@typed["locale"] == "de"}>German</option>
+            <option value="fr" selected={@typed["locale"] == "fr"}>French</option>
+            <option value="es" selected={@typed["locale"] == "es"}>Spanish</option>
+            <option value="ja" selected={@typed["locale"] == "ja"}>Japanese</option>
           </select>
         </label>
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Expires in minutes, 30 to 1440</span>
           <input
             name="expires_in"
+            value={@typed["expires_in"]}
             type="number"
             min="30"
             max="1440"
@@ -333,8 +349,10 @@ defmodule ShopWeb.PayComponents do
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Billing address</span>
           <select name="billing_address" class="select select-sm" data-testid="option-billing-address">
-            <option value="">Only when needed</option>
-            <option value="required">Always ask</option>
+            <option value="" selected={@typed["billing_address"] == ""}>Only when needed</option>
+            <option value="required" selected={@typed["billing_address"] == "required"}>
+              Always ask
+            </option>
           </select>
         </label>
         <label class={["fieldset", stripe_only()]}>
@@ -344,18 +362,20 @@ defmodule ShopWeb.PayComponents do
             class="select select-sm"
             data-testid="option-customer-creation"
           >
-            <option value="">Stripe's choice</option>
-            <option value="always">Always</option>
-            <option value="if_required">Only if needed</option>
+            <option value="" selected={@typed["customer_creation"] == ""}>Stripe's choice</option>
+            <option value="always" selected={@typed["customer_creation"] == "always"}>Always</option>
+            <option value="if_required" selected={@typed["customer_creation"] == "if_required"}>
+              Only if needed
+            </option>
           </select>
         </label>
         <div class={["fieldset gap-1", stripe_only()]}>
           <label class="fieldset">
             <span class="fieldset-legend">Stripe Tax, this checkout</span>
             <select name="automatic_tax" class="select select-sm" data-testid="option-automatic-tax">
-              <option value="">The site's setting</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
+              <option value="" selected={@typed["automatic_tax"] == ""}>The site's setting</option>
+              <option value="on" selected={@typed["automatic_tax"] == "on"}>On</option>
+              <option value="off" selected={@typed["automatic_tax"] == "off"}>Off</option>
             </select>
           </label>
           <label class="label gap-2 text-sm">
@@ -363,6 +383,7 @@ defmodule ShopWeb.PayComponents do
               type="checkbox"
               name="invoice"
               value="true"
+              checked={@typed["invoice"] == "true"}
               class="checkbox checkbox-sm"
               data-testid="option-invoice"
             /> Make an invoice (one-time only)
@@ -372,6 +393,7 @@ defmodule ShopWeb.PayComponents do
               type="checkbox"
               name="tax_id_collection"
               value="true"
+              checked={@typed["tax_id_collection"] == "true"}
               class="checkbox checkbox-sm"
               data-testid="option-tax-id"
             /> Business buyers give their tax id
@@ -381,6 +403,7 @@ defmodule ShopWeb.PayComponents do
               type="checkbox"
               name="hold"
               value="true"
+              checked={@typed["hold"] == "true"}
               class="checkbox checkbox-sm"
               data-testid="option-hold"
             /> Open it here, go to Stripe later
