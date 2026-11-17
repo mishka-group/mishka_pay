@@ -541,7 +541,7 @@ defmodule MishkaPay.Providers.StripeTest do
               %MishkaPay.Page{
                 items: [%MishkaPay.ConnectedAccount{id: "acct_v2", charges_enabled: false}],
                 has_more: true,
-                next: "page_abc"
+                next: "page=page_abc&limit=1"
               }} =
                MishkaPay.list_connected_accounts("stripe", "site-a",
                  limit: 1,
@@ -559,9 +559,13 @@ defmodule MishkaPay.Providers.StripeTest do
       refute Map.has_key?(first, "page")
 
       assert {:ok, %MishkaPay.Page{}} =
-               MishkaPay.list_connected_accounts("stripe", "site-a", after: "page_abc", limit: 50)
+               MishkaPay.list_connected_accounts("stripe", "site-a",
+                 after: "page=page_abc&closed=true&limit=1",
+                 limit: 50
+               )
 
-      assert_received {:listed, %{"page" => "page_abc", "limit" => "20"}}
+      assert_received {:listed, later}
+      assert later == %{"page" => "page_abc", "closed" => "true", "limit" => "1"}
     end
 
     test "a site acting for a connected account sends it as Stripe-Context on an API v2 call" do

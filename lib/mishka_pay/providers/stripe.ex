@@ -2755,14 +2755,10 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  # One page of an API v2 list: `limit` (at most 20, API v2's own limit) and the `page` token of
-  # the page before (`after:`), the filters set, each item mapped; the next token is the `page` of
-  # Stripe's `next_page_url`.
+  # One page of an API v2 list, each item mapped; the cursor of the next page is the query of
+  # Stripe's `next_page_url`, which a later page sends back as it is.
   defp v2_page(path, filters, opts, keys, map) do
-    params =
-      %{"limit" => opts[:limit] && min(opts[:limit], 20), "page" => opts[:after]}
-      |> Map.merge(filters)
-      |> Map.reject(fn {_name, value} -> is_nil(value) end)
+    params = v2_page_params(opts[:after], filters, opts[:limit])
 
     with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
          {:ok, items} <- data |> Enum.map(map) |> all_ok() do
@@ -2772,9 +2768,17 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  defp page_token(url) when is_binary(url) do
-    url |> URI.parse() |> Map.get(:query) |> to_string() |> URI.decode_query() |> Map.get("page")
+  # The first page sends `limit` (at most 20, API v2's own limit) and the filters set. A later
+  # page sends the cursor's parameters as Stripe gave them: its `page` token with the limit and
+  # filters it was made for (Stripe refuses the token with any others, or alone).
+  defp v2_page_params(nil, filters, limit) do
+    params = Map.put(filters, "limit", limit && min(limit, 20))
+    Map.reject(params, fn {_name, value} -> is_nil(value) end)
   end
+
+  defp v2_page_params(cursor, _filters, _limit), do: URI.decode_query(cursor)
+
+  defp page_token(url) when is_binary(url), do: URI.parse(url).query
 
   defp page_token(_last_page), do: nil
 
