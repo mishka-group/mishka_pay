@@ -1593,13 +1593,16 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                reference: "thin-#{run}"
              })
 
-    since = DateTime.add(DateTime.utc_now(), -600)
+    # Stripe's event list is eventually consistent: a new event may be missing for a moment, so
+    # this checks how the day's listed events map, not that one just made is there yet.
+    since = DateTime.add(DateTime.utc_now(), -86_400)
 
-    # Other live tests make customers in the same minutes, so every page of the window is read.
-    assert %MishkaPay.Event{id: "evt_" <> _, object_type: "customer"} =
-             created_event(customer_id, since, nil)
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = events}} =
+             MishkaPay.list_events("stripe", nil, since: since, types: ["v1.customer.created"])
 
-    # Stripe's index by object trails new events by a few seconds, so this checks the filter only.
+    # A customer made on Accounts v2 is named by its account; a v1 one by itself.
+    assert Enum.all?(events, &listed_customer_event?/1)
+
     assert {:ok, %MishkaPay.Page{items: about}} =
              MishkaPay.list_events("stripe", nil, since: since, object_id: customer_id)
 
@@ -1612,20 +1615,16 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.list_events("stripe", nil, since: since, events: :snapshot)
   end
 
-  defp created_event(customer_id, since, cursor) do
-    assert {:ok, %MishkaPay.Page{items: events, next: next}} =
-             MishkaPay.list_events("stripe", nil,
-               since: since,
-               types: ["v1.customer.created"],
-               after: cursor
-             )
+  defp listed_customer_event?(%MishkaPay.Event{
+         id: "evt_" <> _,
+         type: "customer.created",
+         object_type: "customer",
+         object_id: "cus_" <> _ = object_id,
+         customer_id: customer_id
+       }),
+       do: customer_id == object_id or match?("acct_" <> _, customer_id)
 
-    case {Enum.find(events, &(&1.customer_id == customer_id)), next} do
-      {nil, nil} -> nil
-      {nil, next} -> created_event(customer_id, since, next)
-      {event, _next} -> event
-    end
-  end
+  defp listed_customer_event?(_event), do: false
 
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do
     run = run_id()
