@@ -70,6 +70,9 @@ defmodule ShopWeb.AccessComponentTest do
     row = seed_subscription(member, :active, cancel_at_period_end: true)
     send(view.pid, {:mishka_pay, :subscription, %{record: row}})
 
+    # The page hands the row to the part with send_update, a message of its own: this render
+    # waits for the page to take the row, so the next one sees the part after it.
+    render(view)
     assert has_element?(view, "[data-testid=members-post-text]")
     assert view |> element("[data-testid=member-sub-active]") |> render() =~ "yes"
     assert view |> element("[data-testid=member-sub-on-trial]") |> render() =~ "no"
