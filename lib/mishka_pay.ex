@@ -87,6 +87,9 @@ defmodule MishkaPay do
     * entitlements: `:feature_create`, `:feature_attach`, `:entitlement_list`;
     * money views: `:balance`, `:balance_transaction_list`, `:customer_balance_adjust`,
       `:customer_balance_list`;
+    * a platform's sellers: `:connected_account_create`, `:connected_account`,
+      `:connected_account_update`, `:connected_account_list`, `:connected_account_reject`,
+      `:account_link`, `:login_link`;
     * events: `:event_list`;
     * a call to the provider's own API: `:raw_request`.
   """
@@ -1193,6 +1196,121 @@ defmodule MishkaPay do
       tenant,
       & &1.list_customer_balance(opts, &2)
     )
+  end
+
+  @doc """
+  Makes a connected account for a seller from `attrs` (see `MishkaPay.ConnectedAccount`), with
+  the platform's keys: `:type` (`:express` by default), `:country`, `:email`, `:capabilities`
+  and a `:reference` that makes it once. Then send the seller to `account_link/1`, and give the
+  seller's site its id as `:account_id` in its keys.
+  """
+  @spec create_connected_account(map()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def create_connected_account(attrs) when is_map(attrs) do
+    made(
+      :connected_account_create,
+      :connect,
+      attrs,
+      MishkaPay.ConnectedAccount,
+      [:provider],
+      :create_connected_account
+    )
+  end
+
+  @doc """
+  Reads connected account `account_id` (`MishkaPay.ConnectedAccount`): whether it can take
+  payments and payouts yet, and what the provider still needs from the seller.
+  """
+  @spec fetch_connected_account(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def fetch_connected_account(provider, account_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(account_id) do
+    capable(
+      :connect,
+      :connected_account,
+      provider,
+      tenant,
+      & &1.fetch_connected_account(account_id, &2)
+    )
+  end
+
+  @doc """
+  Changes the connected account `attrs` names by `:id`: the `:email`, `:business_name`,
+  `:capabilities` (asked for on top of those it has) or `:metadata` given. Answers it after.
+  """
+  @spec update_connected_account(map()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def update_connected_account(attrs) when is_map(attrs) do
+    made(
+      :connected_account_update,
+      :connect,
+      attrs,
+      MishkaPay.ConnectedAccount,
+      [:provider, :id],
+      :update_connected_account
+    )
+  end
+
+  @doc """
+  One page of the platform's connected accounts, newest first (`MishkaPay.Page` of
+  `MishkaPay.ConnectedAccount`), with `limit:` and `after:`.
+  """
+  @spec list_connected_accounts(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_connected_accounts(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :connect,
+      :connected_account_list,
+      provider,
+      tenant,
+      & &1.list_connected_accounts(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Turns connected account `account_id` down for good: it takes no more payments or payouts.
+  `reason:` is the provider's word for why (Stripe: `"fraud_other"`, `"terms_of_service"`,
+  `"credit"`, `"other"`...; `"other"` when left out). Answers the account after.
+  """
+  @spec reject_connected_account(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def reject_connected_account(provider, account_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(account_id) do
+    capable(
+      :connect,
+      :connected_account_reject,
+      provider,
+      tenant,
+      & &1.reject_connected_account(account_id, opts, &2)
+    )
+  end
+
+  @doc """
+  Makes a one-time link (`MishkaPay.AccountLink`) that sends a seller to the provider's pages for
+  their connected account: `:account_id`, `:type` (`:onboarding` or `:update`), `:refresh_url`
+  and `:return_url`. Redirect the seller to its `:url` at once; it runs out in minutes.
+  """
+  @spec account_link(map()) :: {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  def account_link(attrs) when is_map(attrs) do
+    made(
+      :account_link,
+      :connect,
+      attrs,
+      MishkaPay.AccountLink,
+      [:provider, :account_id],
+      :account_link
+    )
+  end
+
+  @doc """
+  Makes a one-time link into connected account `account_id`'s own dashboard at the provider
+  (`MishkaPay.AccountLink`, `type: :login`), for a seller who finished onboarding.
+  """
+  @spec login_link(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  def login_link(provider, account_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(account_id) do
+    capable(:connect, :login_link, provider, tenant, & &1.login_link(account_id, &2))
   end
 
   # A struct built from the caller's map and handed to the provider's `callback`.

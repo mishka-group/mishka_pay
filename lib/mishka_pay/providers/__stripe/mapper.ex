@@ -2205,6 +2205,115 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  # What each kind of connected account is at Stripe, as its `controller`: the dashboard the
+  # seller gets, who pays Stripe's fees, who answers for losses and who collects the seller's
+  # details. Stripe's own `type` is deprecated in favour of these.
+  @controllers %{
+    express: %{
+      "stripe_dashboard" => %{"type" => "express"},
+      "fees" => %{"payer" => "application"},
+      "losses" => %{"payments" => "application"}
+    },
+    standard: %{"stripe_dashboard" => %{"type" => "full"}},
+    custom: %{
+      "stripe_dashboard" => %{"type" => "none"},
+      "fees" => %{"payer" => "application"},
+      "losses" => %{"payments" => "application"},
+      "requirement_collection" => "application"
+    }
+  }
+
+  @doc """
+  Params of `POST /v1/accounts`: the account's `controller` for its `:type`, its country, email,
+  business name, the capabilities it asks for, and the reference in its metadata.
+  """
+  @spec connected_account_params(MishkaPay.ConnectedAccount.t()) :: map()
+  def connected_account_params(account) do
+    account
+    |> connected_account_update_params()
+    |> Map.merge(
+      reject_nil(%{"controller" => @controllers[account.type], "country" => account.country})
+    )
+  end
+
+  @doc "Params of `POST /v1/accounts/:id`: only the details given."
+  @spec connected_account_update_params(MishkaPay.ConnectedAccount.t()) :: map()
+  def connected_account_update_params(account) do
+    reject_nil(%{
+      "email" => account.email,
+      "business_profile" => account.business_name && %{"name" => account.business_name},
+      "capabilities" =>
+        account.capabilities && Map.new(account.capabilities, &{&1, %{"requested" => true}}),
+      "metadata" => with_reference(account.metadata, account.reference)
+    })
+  end
+
+  @dashboards %{"express" => :express, "full" => :standard, "none" => :custom}
+  @capability_states %{"active" => :active, "inactive" => :inactive, "pending" => :pending}
+
+  @doc """
+  A Stripe Account as a `MishkaPay.ConnectedAccount`: its kind (Stripe's `type`, else its
+  dashboard), whether it takes payments and payouts, and what Stripe still needs.
+  """
+  @spec connected_account(map()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def connected_account(account) do
+    metadata = account["metadata"] || %{}
+    states = account["capabilities"] || %{}
+
+    %{
+      provider: "stripe",
+      id: account["id"],
+      type:
+        Map.get(@dashboards, get_in(account, ["controller", "stripe_dashboard", "type"])) ||
+          known(account["type"], ~w(express standard custom)),
+      country: account["country"],
+      email: account["email"],
+      business_name: get_in(account, ["business_profile", "name"]),
+      capabilities: Map.keys(states),
+      capability_status:
+        Map.new(states, fn {name, state} -> {name, @capability_states[state]} end),
+      charges_enabled: account["charges_enabled"] == true,
+      payouts_enabled: account["payouts_enabled"] == true,
+      details_submitted: account["details_submitted"] == true,
+      requirements_due: get_in(account, ["requirements", "currently_due"]) || [],
+      disabled_reason: get_in(account, ["requirements", "disabled_reason"]),
+      default_currency: account["default_currency"],
+      reference: metadata[@reference],
+      metadata: Map.delete(metadata, @reference),
+      created_at: time(account["created"])
+    }
+    |> Map.reject(fn {key, value} -> key == :type and is_nil(value) end)
+    |> MishkaPay.ConnectedAccount.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @link_types %{onboarding: "account_onboarding", update: "account_update"}
+
+  @doc "Params of `POST /v1/account_links`: the account, its kind of link and the two pages."
+  @spec account_link_params(MishkaPay.AccountLink.t()) :: map()
+  def account_link_params(link) do
+    %{
+      "account" => link.account_id,
+      "type" => @link_types[link.type],
+      "refresh_url" => link.refresh_url,
+      "return_url" => link.return_url
+    }
+  end
+
+  @doc "A Stripe account link or login link as the `MishkaPay.AccountLink` asked for, with its URL."
+  @spec account_link(map(), MishkaPay.AccountLink.t()) ::
+          {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  def account_link(answer, link) do
+    {:ok,
+     %{
+       link
+       | url: answer["url"],
+         expires_at: time(answer["expires_at"]),
+         created_at: time(answer["created"])
+     }}
+  end
+
   defp positive(number) when is_integer(number) and number > 0, do: number
   defp positive(_none), do: nil
 

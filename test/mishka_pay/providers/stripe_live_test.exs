@@ -1907,5 +1907,66 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     refute Exception.message(error) =~ "sk_test"
   end
 
+  # Stripe makes connected accounts only for a platform that signed up for Connect in its
+  # Dashboard; a sandbox that has not is told so plainly, and that is all this test can check there.
+  test "an express account is made once per reference, read, changed, listed and onboarded by link" do
+    run = run_id()
+
+    attrs = %{
+      provider: "stripe",
+      type: :express,
+      country: "US",
+      email: "seller-#{run}@example.com",
+      capabilities: ["card_payments", "transfers"],
+      reference: "site-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.Page{items: listed}} =
+             MishkaPay.list_connected_accounts("stripe", nil, limit: 5)
+
+    assert Enum.all?(listed, &match?(%MishkaPay.ConnectedAccount{id: "acct_" <> _}, &1))
+
+    case MishkaPay.create_connected_account(attrs) do
+      {:ok, %MishkaPay.ConnectedAccount{id: "acct_" <> _ = id, type: :express} = account} ->
+        with_account(id, fn -> onboarded_by_link(account, attrs, run) end)
+
+      {:error, %Errors.Rejected{code: "connect_not_set_up"} = error} ->
+        assert Exception.message(error) =~ "signed up for Connect"
+    end
+  end
+
+  # A test account is deleted when the test is done with it, whatever happened.
+  defp with_account(id, fun) do
+    fun.()
+  after
+    MishkaPay.request(%{provider: "stripe", method: :delete, path: "/v1/accounts/#{id}"})
+  end
+
+  defp onboarded_by_link(%{id: id} = account, attrs, run) do
+    assert account.reference == "site-#{run}"
+    assert account.charges_enabled == false
+    assert {:ok, %{id: ^id}} = MishkaPay.create_connected_account(attrs)
+
+    name = "Shop #{run}"
+
+    assert {:ok, %MishkaPay.ConnectedAccount{id: ^id, business_name: ^name}} =
+             MishkaPay.update_connected_account(%{
+               provider: "stripe",
+               id: id,
+               business_name: name
+             })
+
+    assert {:ok, %MishkaPay.AccountLink{url: "https://connect.stripe.com/" <> _}} =
+             MishkaPay.account_link(%{
+               provider: "stripe",
+               account_id: id,
+               refresh_url: "https://shop.test/connect/again",
+               return_url: "https://shop.test/connect/done"
+             })
+
+    # A login link needs an account that finished onboarding.
+    assert {:error, %Errors.Rejected{}} = MishkaPay.login_link("stripe", id)
+  end
+
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

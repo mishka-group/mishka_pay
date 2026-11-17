@@ -62,6 +62,7 @@ webhook endpoint to these:
 | `subscription_schedule.created`, `.updated`, `.released`, `.canceled`, `.completed`, `.aborted`, `.expiring` | the subscription it runs (or let go); `:object_id` is the schedule |
 | `radar.early_fraud_warning.created`, `.updated` | its payment (synced again); `:object_id` is the warning (`:object_type` `"radar.early_fraud_warning"`), read with `fetch_fraud_warning/3` |
 | `review.opened`, `.closed` | its payment (synced again); `:object_id` is the review (`:object_type` `"review"`), read with `fetch_fraud_review/3` |
+| `account.updated`, `account.application.deauthorized` | nothing kept: the connected account is `event.account` (`:object_id` is the account, or the platform's application when it left), read with `fetch_connected_account/3` |
 | `credit_note.created`, `.updated`, `.voided` | nothing kept: `:object_id` is the note (`:object_type` `"credit_note"`), read with `fetch_credit_note/3` |
 
 Any other event is verified and stored, and changes nothing.

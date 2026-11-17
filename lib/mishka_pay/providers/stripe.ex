@@ -102,6 +102,14 @@ defmodule MishkaPay.Providers.Stripe do
       balance transactions (`txn_...`), by payout (`po_...`) or type.
     * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
       (`cbtxn_...`): below zero is credit.
+    * `create_connected_account/2`, `fetch_connected_account/2`, `update_connected_account/2`,
+      `list_connected_accounts/2` and `reject_connected_account/3` keep Connect accounts
+      (`acct_...`): an `:express`, `:standard` or `:custom` account is made with the matching
+      `controller` (Stripe's `type` is deprecated), and its reference makes the idempotency key
+      and is kept in its metadata. `account_link/2` makes an `account_onboarding` or
+      `account_update` Account Link, and `login_link/2` an Express dashboard login link. Stripe
+      sends `account.updated` and `account.application.deauthorized` about them. A platform that
+      has not signed up for Connect is refused with code `"connect_not_set_up"`.
     * `raw_request/2` calls any path of `api.stripe.com` with the tenant's key, the pinned
       version or the call's own `api_version` (`Stripe-Version`) and its `expand[]`, and answers
       Stripe's JSON as it is; a write's reference, with its method and path, makes the
@@ -174,6 +182,7 @@ defmodule MishkaPay.Providers.Stripe do
       :entitlement,
       :balance,
       :customer_balance,
+      :connect,
       :raw_request,
       :webhook,
       :event_list
@@ -302,7 +311,9 @@ defmodule MishkaPay.Providers.Stripe do
     "entitlements.active_entitlement_summary.updated" => [:customer],
     "customer.tax_id.created" => [:customer],
     "customer.tax_id.updated" => [:customer],
-    "customer.tax_id.deleted" => [:customer]
+    "customer.tax_id.deleted" => [:customer],
+    "account.updated" => [:account],
+    "account.application.deauthorized" => [:account]
   }
 
   @doc """
@@ -310,7 +321,8 @@ defmodule MishkaPay.Providers.Stripe do
   (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
   `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`; or the
   provider object it is about (`:credit_note`; `:subscription_schedule`, which names its
-  subscription too; `:fraud_warning` and `:fraud_review`, which name their payment too). Each is mapped to its
+  subscription too; `:fraud_warning` and `:fraud_review`, which name their payment too;
+  `:account`, a connected account, which the event names as its `:account`). Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -1888,6 +1900,94 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  @impl MishkaPay.Provider
+  def create_connected_account(%MishkaPay.ConnectedAccount{} = account, keys) do
+    with :ok <- metadata(account.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/accounts", Mapper.connected_account_params(account), keys,
+             key:
+               ProviderKit.idempotency_key("connected-account", account.tenant, account.reference)
+           ) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_connected_account(account_id, keys) do
+    with :ok <- stripe_id(account_id, "acct_", :account_id),
+         {:ok, answer} <- request(:get, "/v1/accounts/#{account_id}", [], keys) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  # Only what is given changes; the type and country are set once, when the account is made.
+  @impl MishkaPay.Provider
+  def update_connected_account(%MishkaPay.ConnectedAccount{id: id} = account, keys) do
+    with :ok <- stripe_id(id, "acct_", :id),
+         :ok <- metadata(account.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/accounts/#{id}",
+             Mapper.connected_account_update_params(account),
+             keys
+           ) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_connected_accounts(opts, keys),
+    do: page("/v1/accounts", [], opts, keys, &Mapper.connected_account/1)
+
+  @reject_reasons ~w(credit fraud_no_intent_to_fulfill fraud_other fraud_payment_method_casher fraud_payment_method_tester other terms_of_service)
+
+  @impl MishkaPay.Provider
+  def reject_connected_account(account_id, opts, keys) do
+    reason = opts |> Keyword.get(:reason, "other") |> to_string()
+
+    with :ok <- stripe_id(account_id, "acct_", :account_id),
+         :ok <- reject_reason(reason),
+         {:ok, answer} <-
+           request(:post, "/v1/accounts/#{account_id}/reject", %{"reason" => reason}, keys) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  defp reject_reason(reason) when reason in @reject_reasons, do: :ok
+
+  defp reject_reason(_reason),
+    do:
+      invalid(
+        :reason,
+        Messages.text(:choices, field: :reason, choices: Enum.join(@reject_reasons, ", "))
+      )
+
+  # An account link is never sent twice by mistake: each one is new, and runs out in minutes.
+  @impl MishkaPay.Provider
+  def account_link(%MishkaPay.AccountLink{type: :login, account_id: account_id}, keys),
+    do: login_link(account_id, keys)
+
+  def account_link(%MishkaPay.AccountLink{} = link, keys) do
+    with :ok <- stripe_id(link.account_id, "acct_", :account_id),
+         {:ok, answer} <-
+           request(:post, "/v1/account_links", Mapper.account_link_params(link), keys) do
+      Mapper.account_link(answer, link)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def login_link(account_id, keys) do
+    with :ok <- stripe_id(account_id, "acct_", :account_id),
+         {:ok, answer} <- request(:post, "/v1/accounts/#{account_id}/login_links", %{}, keys) do
+      Mapper.account_link(answer, %MishkaPay.AccountLink{
+        provider: "stripe",
+        account_id: account_id,
+        type: :login
+      })
+    end
+  end
+
   defp link_prices(items) do
     case Enum.find(items, &(not stripe_price?(&1.id))) do
       nil -> :ok
@@ -2242,6 +2342,7 @@ defmodule MishkaPay.Providers.Stripe do
     {"must pass a recurring price", "recurring_only"},
     {"separate authorization and capture", "capture_invoice"},
     {"Stripe Tax has not been activated", "tax_not_set_up"},
+    {"signed up for Connect", "connect_not_set_up"},
     {"feature in the portal configuration is disabled", "portal_feature_off"},
     {"customer does not match the subscription's customer", "subscription_of_another"}
   ]

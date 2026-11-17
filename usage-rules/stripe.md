@@ -34,6 +34,24 @@
   Connect endpoint at a site's URL when the platform has more than one connected account: it
   receives every account's events, refuses the others, and Stripe retries them until it turns
   the endpoint off.
+- `create_connected_account/1` is `POST /v1/accounts` with the platform's keys. Stripe's `type`
+  is deprecated on this API version: `:express` is sent as `controller` (Express dashboard, the
+  platform pays fees and answers for losses), `:standard` as a full dashboard, `:custom` as no
+  dashboard with the platform collecting requirements. Its `:reference` makes the idempotency key
+  and is kept in metadata. A platform that has not signed up for Connect in the Dashboard is
+  `Errors.Rejected` with code `"connect_not_set_up"`.
+- `account_link/1` is `POST /v1/account_links` (`account_onboarding` or `account_update`); its
+  URL runs out in minutes and works once, so make it per click and redirect at once. Both pages
+  are `https` (or `http` on `localhost`). Coming back to `return_url` does not mean the account
+  is ready: read it (`:details_submitted`, `:charges_enabled`, `:requirements_due`). `login_link/3`
+  works only for an Express account that finished onboarding.
+- `reject_connected_account/4` is for good; Stripe's reasons on this API version are `credit`,
+  `fraud_no_intent_to_fulfill`, `fraud_other`, `fraud_payment_method_casher`,
+  `fraud_payment_method_tester`, `terms_of_service` and `other` (the default). Account ids start
+  with `acct_`.
+- Stripe sends `account.updated` (onboarding moved on, a capability turned on or off) and
+  `account.application.deauthorized` (a Standard account left the platform) to the platform's
+  Connect endpoint; `event.account` names the account.
 
 ## Retries and rate limits
 

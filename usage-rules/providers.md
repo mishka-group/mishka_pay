@@ -77,6 +77,10 @@ end
   - `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
   - `:fraud`: `fetch_fraud_warning/2`, `list_fraud_warnings/2` (`:payment_id`, `:charge_id`),
     `fetch_fraud_review/2`, `list_fraud_reviews/2` (open ones), `approve_fraud_review/2`;
+  - `:connect`: `create_connected_account/2`, `fetch_connected_account/2`,
+    `update_connected_account/2`, `list_connected_accounts/2`, `reject_connected_account/3`
+    (`:reason`), `account_link/2`, `login_link/2`; the tenant's keys' `:account_id` is the account
+    every request acts for, and its webhooks take only that account's events;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

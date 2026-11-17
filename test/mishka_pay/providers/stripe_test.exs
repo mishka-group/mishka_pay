@@ -179,6 +179,169 @@ defmodule MishkaPay.Providers.StripeTest do
       refute Map.has_key?(platform, "stripe-account")
     end
 
+    test "connected accounts are made, read, changed, listed and turned down, and their links made, as Stripe's spec accepts" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.method, conn.request_path})
+        StripeMock.forward(conn)
+      end)
+
+      account = %{
+        provider: "stripe",
+        tenant: "site-a",
+        type: :express,
+        country: "us",
+        email: "Seller@Shop.test",
+        business_name: "Ava's books",
+        capabilities: ["card_payments", "transfers"],
+        reference: "site-42"
+      }
+
+      assert {:ok,
+              %MishkaPay.ConnectedAccount{
+                id: "acct_" <> _,
+                capability_status: %{"transfers" => :active},
+                requirements_due: [_ | _]
+              }} = MishkaPay.create_connected_account(account)
+
+      assert_received {:sent, "POST", "/v1/accounts"}
+
+      for type <- [:standard, :custom] do
+        assert {:ok, %MishkaPay.ConnectedAccount{}} =
+                 MishkaPay.create_connected_account(%{account | type: type})
+      end
+
+      assert {:ok, %MishkaPay.ConnectedAccount{id: "acct_123", charges_enabled: false}} =
+               MishkaPay.fetch_connected_account("stripe", "acct_123", "site-a")
+
+      assert {:ok, %MishkaPay.ConnectedAccount{}} =
+               MishkaPay.update_connected_account(%{
+                 provider: "stripe",
+                 id: "acct_123",
+                 email: "new@shop.test",
+                 metadata: %{"plan" => "pro"}
+               })
+
+      assert_received {:sent, "POST", "/v1/accounts/acct_123"}
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.ConnectedAccount{} | _]}} =
+               MishkaPay.list_connected_accounts("stripe", "site-a", limit: 3)
+
+      assert {:ok, %MishkaPay.ConnectedAccount{}} =
+               MishkaPay.reject_connected_account("stripe", "acct_123", "site-a",
+                 reason: "terms_of_service"
+               )
+
+      assert_received {:sent, "POST", "/v1/accounts/acct_123/reject"}
+
+      assert {:ok,
+              %MishkaPay.AccountLink{
+                type: :onboarding,
+                account_id: "acct_123",
+                url: "https://" <> _,
+                expires_at: %DateTime{}
+              }} =
+               MishkaPay.account_link(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 account_id: "acct_123",
+                 refresh_url: "https://shop.test/connect/again",
+                 return_url: "https://shop.test/connect/done"
+               })
+
+      assert_received {:sent, "POST", "/v1/account_links"}
+
+      assert {:ok, %MishkaPay.AccountLink{type: :login, url: "https://" <> _}} =
+               MishkaPay.login_link("stripe", "acct_123", "site-a")
+
+      assert_received {:sent, "POST", "/v1/accounts/acct_123/login_links"}
+    end
+
+    test "a connected account goes to Stripe as its controller, and one reference makes it once" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        key = Plug.Conn.get_req_header(conn, "idempotency-key")
+        send(test, {:stripe, conn.request_path, URI.decode_query(body), key})
+
+        Req.Test.json(conn, %{
+          "object" => "account",
+          "id" => "acct_9",
+          "controller" => %{"stripe_dashboard" => %{"type" => "express"}},
+          "metadata" => %{"mishka_pay_reference" => "site-42", "plan" => "pro"},
+          "requirements" => %{"currently_due" => ["external_account"], "disabled_reason" => nil}
+        })
+      end)
+
+      account = %{
+        provider: "stripe",
+        tenant: "site-a",
+        country: "de",
+        email: "seller@shop.test",
+        capabilities: ["transfers"],
+        reference: "site-42",
+        metadata: %{"plan" => "pro"}
+      }
+
+      assert {:ok,
+              %MishkaPay.ConnectedAccount{
+                id: "acct_9",
+                type: :express,
+                reference: "site-42",
+                metadata: %{"plan" => "pro"},
+                requirements_due: ["external_account"]
+              }} = MishkaPay.create_connected_account(account)
+
+      assert {:ok, _again} = MishkaPay.create_connected_account(account)
+
+      assert_received {:stripe, "/v1/accounts", params, [key]}
+      assert_received {:stripe, "/v1/accounts", ^params, [^key]}
+
+      assert params == %{
+               "controller[stripe_dashboard][type]" => "express",
+               "controller[fees][payer]" => "application",
+               "controller[losses][payments]" => "application",
+               "country" => "DE",
+               "email" => "seller@shop.test",
+               "capabilities[transfers][requested]" => "true",
+               "metadata[mishka_pay_reference]" => "site-42",
+               "metadata[plan]" => "pro"
+             }
+
+      assert {:ok, _changed} =
+               MishkaPay.update_connected_account(%{
+                 provider: "stripe",
+                 id: "acct_9",
+                 business_name: "Ava's books"
+               })
+
+      assert_received {:stripe, "/v1/accounts/acct_9",
+                       %{"business_profile[name]" => "Ava's books"} = only, _key}
+
+      assert map_size(only) == 1
+    end
+
+    test "a platform that has not signed up for Connect is told so plainly" do
+      MishkaPay.Test.stub_http(fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{
+          "error" => %{
+            "type" => "invalid_request_error",
+            "message" =>
+              "You can only create new accounts if you've signed up for Connect, which you can do at https://dashboard.stripe.com/connect."
+          }
+        })
+      end)
+
+      assert {:error, %Errors.Rejected{code: "connect_not_set_up"} = error} =
+               MishkaPay.create_connected_account(%{provider: "stripe", country: "US"})
+
+      assert Exception.message(error) =~ "signed up for Connect"
+    end
+
     test "a reference reused with other details is a plain rejection that never shows the key" do
       MishkaPay.Test.stub_http(fn conn ->
         conn
@@ -2933,6 +3096,45 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a connected account or link that cannot be right never reaches Stripe" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      link = %{provider: "stripe", account_id: "acct_1", return_url: "https://shop.test/done"}
+
+      for {call, field} <- [
+            {fn -> MishkaPay.fetch_connected_account("stripe", "cus_1") end, :account_id},
+            {fn -> MishkaPay.fetch_connected_account("stripe", "acct_1/../../v1/charges") end,
+             :account_id},
+            {fn -> MishkaPay.update_connected_account(%{provider: "stripe", id: "../x"}) end,
+             :id},
+            {fn -> MishkaPay.update_connected_account(%{provider: "stripe"}) end, :id},
+            {fn -> MishkaPay.login_link("stripe", "acct_1?x=y") end, :account_id},
+            {fn ->
+               MishkaPay.reject_connected_account("stripe", "acct_1", nil, reason: "boring")
+             end, :reason},
+            {fn -> MishkaPay.account_link(link) end, :refresh_url},
+            {fn ->
+               MishkaPay.account_link(Map.put(link, :refresh_url, "http://evil.test/again"))
+             end, :refresh_url},
+            {fn ->
+               MishkaPay.account_link(
+                 Map.merge(link, %{refresh_url: "https://shop.test/a", account_id: "ca_1"})
+               )
+             end, :account_id},
+            {fn ->
+               MishkaPay.create_connected_account(%{
+                 provider: "stripe",
+                 capabilities: ["card_payments][x"]
+               })
+             end, :capabilities},
+            {fn -> MishkaPay.create_connected_account(%{provider: "stripe", country: "USA"}) end,
+             :country},
+            {fn -> MishkaPay.create_connected_account(%{provider: "stripe", type: :platform}) end,
+             :type}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} = call.()
+      end
+    end
+
     test "a raw call has no way to set a header, so it cannot act for another account" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
 
@@ -4212,7 +4414,9 @@ defmodule MishkaPay.Providers.StripeTest do
       "id" => "prv_1",
       "charge" => "ch_1",
       "payment_intent" => "pi_1"
-    }
+    },
+    "account" => %{"object" => "account", "id" => "acct_1"},
+    "account.application" => %{"object" => "application", "id" => "ca_1"}
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do
@@ -4259,6 +4463,11 @@ defmodule MishkaPay.Providers.StripeTest do
 
   defp named?(event, :fraud_review),
     do: {event.object_type, event.object_id} == {"review", "prv_1"}
+
+  # An account's own change, or the platform it left (an `application`); the event's `account`
+  # names it at Stripe.
+  defp named?(event, :account),
+    do: event.object_type in ["account", "application"] and is_binary(event.object_id)
 
   defp named?(event, kind),
     do: event.object_type == Atom.to_string(kind) and is_binary(event.object_id)

@@ -154,6 +154,8 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_balance(provider, tenant)` | `%MishkaPay.Balance{available: [money], pending: [money]}`, one money per currency |
 | `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` | a `MishkaPay.Page` of `%MishkaPay.BalanceTransaction{}` (amount, fee, net, type, source) |
 | `MishkaPay.adjust_customer_balance(provider, customer_id, money, tenant, description: d, reference: r)`, `list_customer_balance/4` | `%MishkaPay.CustomerBalanceTransaction{}`: below zero is store credit |
+| `MishkaPay.create_connected_account(attrs)` (`MishkaPay.ConnectedAccount`: `:type` `:express`/`:standard`/`:custom`, `:country`, `:email`, `:business_name`, `:capabilities`, `:reference`), `fetch_connected_account/3`, `update_connected_account/1`, `list_connected_accounts/3`, `reject_connected_account(p, id, tenant, reason: "fraud_other")` | `%MishkaPay.ConnectedAccount{}`: a seller's account under the platform, with `:charges_enabled`, `:payouts_enabled`, `:requirements_due`; the provider needs `:connect`. The site's keys then name it as `account_id` |
+| `MishkaPay.account_link(%{provider:, account_id:, refresh_url:, return_url:, type: :onboarding})`, `login_link(provider, account_id, tenant)` | `%MishkaPay.AccountLink{url: url}`: redirect the seller to it at once; it runs out in minutes |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every

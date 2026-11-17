@@ -739,6 +739,14 @@ defmodule MishkaPayTest do
                MishkaPay.reactivate_meter("acme", "m1", "site-a")
     end
 
+    test "a provider without connected accounts refuses them and their links" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
+               MishkaPay.list_connected_accounts("acme", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
+               MishkaPay.login_link("acme", "a1", "site-a")
+    end
+
     test "a provider without fraud reviews refuses them" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :fraud}} =
                MishkaPay.list_fraud_reviews("acme", "site-a")

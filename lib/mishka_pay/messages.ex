@@ -79,6 +79,8 @@ defmodule MishkaPay.Messages do
           | :webhook_secrets
           | :account_id_plain
           | :account_invalid
+          | :capability_names
+          | :connect_not_set_up
           | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
@@ -437,6 +439,20 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "%{provider} does not know this site's connected account, or the platform's key has no access to it"
+      )
+
+  defp msgid(:capability_names),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field must be a list of names in lowercase letters, digits and underscores"
+      )
+
+  defp msgid(:connect_not_set_up),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes connected accounts only once the platform has signed up for Connect in its dashboard"
       )
 
   defp msgid(:shipping_countries),

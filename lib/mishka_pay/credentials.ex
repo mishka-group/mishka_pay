@@ -50,7 +50,8 @@ defmodule MishkaPay.Credentials do
       header), and a webhook message about any other account is refused. Left out, the tenant is
       the account that owns the secret key (the platform itself, or a plain site). It comes only
       from these keys: no call, request option or raw request can set the header. A provider
-      without connected accounts (PayPal) never reads it.
+      without `:connect` (PayPal) never reads it. `MishkaPay.create_connected_account/1`
+      makes one with the platform's keys.
 
   These are read at runtime on every call, never from `config.exs`, so each tenant of a
   multi-site project carries its own and a change in its settings applies to the next call.
