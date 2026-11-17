@@ -250,6 +250,21 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no usage billing: reading, renaming, turning a meter on and cancelling usage are refused before any request" do
+      for call <- [
+            fn -> MishkaPay.fetch_meter("paypal", "M1", "site-a") end,
+            fn -> MishkaPay.update_meter(%{provider: "paypal", id: "M1", name: "Calls"}) end,
+            fn -> MishkaPay.reactivate_meter("paypal", "M1", "site-a") end,
+            fn ->
+              MishkaPay.cancel_usage(%{provider: "paypal", event_name: "api", usage_id: "u1"})
+            end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :usage}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal has no credit notes: every credit note call is refused before any request" do
       note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
 

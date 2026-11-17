@@ -1,10 +1,11 @@
 defmodule ShopWeb.UsageComponent do
   @moduledoc """
   Usage billing, read live from Stripe: make a meter (`MishkaPay.create_meter/1`), list them
-  (`list_meters/3`) and turn one off (`deactivate_meter/3`); report what a customer used
-  (`report_usage/1`, with a reference so it never counts twice) and read what a meter counted for
-  them (`usage_summary/6`); and a price that bills a meter's count each period (`create_price/1`
-  with `meter_id` and an interval).
+  (`list_meters/3`), turn one off (`deactivate_meter/3`) and on again (`reactivate_meter/3`);
+  report what a customer used (`report_usage/1`, with a reference so it never counts twice), take
+  a report sent by mistake back (`cancel_usage/1`) and read what a meter counted for them
+  (`usage_summary/6`); and a price that bills a meter's count each period (`create_price/1` with
+  `meter_id` and an interval).
   """
 
   use ShopWeb, :live_component
@@ -19,6 +20,7 @@ defmodule ShopWeb.UsageComponent do
      assign(socket,
        meters: nil,
        reported: nil,
+       cancelled: nil,
        summary: nil,
        price: nil,
        reference: reference(),
@@ -52,13 +54,45 @@ defmodule ShopWeb.UsageComponent do
   def handle_event("deactivate", %{"id" => id}, socket) do
     case MishkaPay.deactivate_meter("stripe", id, socket.assigns.tenant) do
       {:ok, meter} ->
-        # Stripe's list can lag a moment behind: the row takes the meter Stripe answered.
         {:noreply,
          socket
-         |> update(:meters, fn meters ->
-           Enum.map(meters || [], &if(&1.id == meter.id, do: meter, else: &1))
-         end)
+         |> put_meter(meter)
          |> done("Meter #{meter.id} is off: it takes no more usage.")}
+
+      {:error, error} ->
+        {:noreply, failed(socket, error)}
+    end
+  end
+
+  def handle_event("reactivate", %{"id" => id}, socket) do
+    case MishkaPay.reactivate_meter("stripe", id, socket.assigns.tenant) do
+      {:ok, meter} ->
+        {:noreply,
+         socket
+         |> put_meter(meter)
+         |> done("Meter #{meter.id} is on again: it takes usage.")}
+
+      {:error, error} ->
+        {:noreply, failed(socket, error)}
+    end
+  end
+
+  def handle_event("cancel_usage", _params, %{assigns: %{reported: %MishkaPay.Usage{}}} = socket) do
+    %{reported: usage, tenant: tenant} = socket.assigns
+
+    attrs = %{
+      provider: "stripe",
+      tenant: tenant,
+      event_name: usage.event_name,
+      usage_id: usage.id
+    }
+
+    case MishkaPay.cancel_usage(attrs) do
+      {:ok, cancel} ->
+        {:noreply,
+         socket
+         |> assign(cancelled: cancel)
+         |> done("Report #{cancel.usage_id} taken back (#{cancel.status}): it no longer counts.")}
 
       {:error, error} ->
         {:noreply, failed(socket, error)}
@@ -79,7 +113,7 @@ defmodule ShopWeb.UsageComponent do
       {:ok, usage} ->
         {:noreply,
          socket
-         |> assign(reported: usage, reference: reference())
+         |> assign(reported: usage, cancelled: nil, reference: reference())
          |> done("Usage reported. Stripe counts it within a few minutes.")}
 
       {:error, error} ->
@@ -127,6 +161,13 @@ defmodule ShopWeb.UsageComponent do
     end
   end
 
+  # Stripe's list can lag a moment behind: the row takes the meter Stripe answered.
+  defp put_meter(socket, meter) do
+    update(socket, :meters, fn meters ->
+      Enum.map(meters || [], &if(&1.id == meter.id, do: meter, else: &1))
+    end)
+  end
+
   defp list_meters(socket) do
     case MishkaPay.list_meters("stripe", socket.assigns.tenant, limit: 20) do
       {:ok, %MishkaPay.Page{items: meters}} -> assign(socket, meters: meters)
@@ -154,7 +195,7 @@ defmodule ShopWeb.UsageComponent do
         A meter counts what customers use; a price on it bills that count each period.
       </p>
       <.hint>
-        MishkaPay.create_meter/1, list_meters/3, report_usage/1, usage_summary/6, deactivate_meter/3
+        MishkaPay.create_meter/1, list_meters/3, report_usage/1, cancel_usage/1, usage_summary/6, deactivate_meter/3, reactivate_meter/3
       </.hint>
 
       <div :if={@notice} role="status" class="alert alert-success py-2" data-testid="usage-notice">
@@ -260,6 +301,16 @@ defmodule ShopWeb.UsageComponent do
                 >
                   Turn off
                 </button>
+                <button
+                  :if={meter.status == :inactive}
+                  class="btn btn-xs btn-outline"
+                  phx-click="reactivate"
+                  phx-value-id={meter.id}
+                  phx-target={@myself}
+                  data-testid="meter-reactivate"
+                >
+                  Turn on
+                </button>
               </td>
             </tr>
           </tbody>
@@ -301,6 +352,25 @@ defmodule ShopWeb.UsageComponent do
             </div>
             <p :if={@reported} class="text-sm" data-testid="usage-reported">
               Reported {to_string(@reported.value)} for {@reported.customer_id} as <code>{@reported.id}</code>.
+            </p>
+            <div :if={@reported && !@cancelled}>
+              <button
+                type="button"
+                class="btn btn-xs btn-outline btn-warning"
+                phx-click="cancel_usage"
+                phx-target={@myself}
+                phx-disable-with="Asking Stripe..."
+                data-confirm="Take this report back? It will not be counted."
+                data-testid="usage-cancel"
+              >
+                Take back this report
+              </button>
+            </div>
+            <p :if={@cancelled} class="text-sm" data-testid="usage-cancelled">
+              Taken back: <code>{@cancelled.usage_id}</code>
+              <span class="badge badge-sm" data-testid="usage-cancel-status">
+                {@cancelled.status}
+              </span>
             </p>
           </div>
         </form>

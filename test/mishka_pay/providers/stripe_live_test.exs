@@ -1653,6 +1653,62 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.deactivate_meter("stripe", meter_id)
   end
 
+  test "a meter is read and renamed, a wrong report is taken back once, and the meter is turned off and on again",
+       %{key: key} do
+    run = run_id()
+    event = "mishka_pay_fix_#{run}"
+
+    {:ok, %MishkaPay.Meter{id: meter_id}} =
+      MishkaPay.create_meter(%{provider: "stripe", name: "Fix #{run}", event_name: event})
+
+    on_exit(fn ->
+      cleanup(key, fn keys ->
+        case Stripe.deactivate_meter(meter_id, keys) do
+          {:error, %Errors.Rejected{}} -> {:ok, :inactive}
+          answer -> answer
+        end
+      end)
+    end)
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "fix-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer_id, &1)) end)
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, name: "Fix " <> _, event_name: ^event}} =
+             MishkaPay.fetch_meter("stripe", meter_id)
+
+    renamed = "Renamed #{run}"
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, name: ^renamed, event_name: ^event}} =
+             MishkaPay.update_meter(%{provider: "stripe", id: meter_id, name: renamed})
+
+    {:ok, %MishkaPay.Usage{id: usage_id}} =
+      MishkaPay.report_usage(%{
+        provider: "stripe",
+        event_name: event,
+        customer_id: customer_id,
+        value: 5,
+        reference: "wrong-#{run}"
+      })
+
+    cancel = %{provider: "stripe", event_name: event, usage_id: usage_id}
+
+    assert {:ok, %MishkaPay.UsageCancellation{status: status, usage_id: ^usage_id}} =
+             MishkaPay.cancel_usage(cancel)
+
+    assert status in [:pending, :complete]
+
+    assert {:ok, %MishkaPay.UsageCancellation{usage_id: ^usage_id}} =
+             MishkaPay.cancel_usage(cancel)
+
+    assert {:ok, %MishkaPay.Meter{status: :inactive}} =
+             MishkaPay.deactivate_meter("stripe", meter_id)
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, status: :active}} =
+             MishkaPay.reactivate_meter("stripe", meter_id)
+  end
+
   test "a feature is attached to a product, and a customer who bought nothing has no entitlements",
        %{key: key} do
     run = run_id()

@@ -83,11 +83,14 @@ defmodule MishkaPay.Providers.Stripe do
       `fetch_file/2` reads one, and `file_link/3` makes a FileLink, a public address of it.
       `update_dispute/2` takes only a file id (`file_...`) in the evidence fields that hold a
       file, such as `receipt` and `uncategorized_file`.
-    * `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2` and
-      `usage_summary/3` use Billing Meters (`mtr_...`) and meter events, Stripe's basic usage
-      billing; a price with `:meter_id` is a metered price on one. A report's reference makes its
-      `identifier`; Stripe takes reports from the last 35 days and up to 5 minutes ahead, and
-      counts summaries from and to whole minutes.
+    * `create_meter/2`, `fetch_meter/2`, `update_meter/2` (its display name only),
+      `list_meters/2`, `deactivate_meter/2`, `reactivate_meter/2`, `report_usage/2`,
+      `cancel_usage/2` and `usage_summary/3` use Billing Meters (`mtr_...`) and meter events,
+      Stripe's basic usage billing; a price with `:meter_id` is a metered price on one. A
+      report's reference makes its `identifier`; Stripe takes reports from the last 35 days and
+      up to 5 minutes ahead, and counts summaries from and to whole minutes. A cancel is a meter
+      event adjustment (`type: cancel`) of one identifier, within 24 hours of the report; the
+      identifier makes its idempotency key.
     * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
       (`feat_...`) on products, and the active entitlements of a customer.
     * `fetch_balance/1` reads the payments balance, and `list_balance_transactions/2` its
@@ -1649,6 +1652,54 @@ defmodule MishkaPay.Providers.Stripe do
          {:ok, answer} <-
            request(:post, "/v1/billing/meters/#{meter_id}/deactivate", %{}, keys) do
       Mapper.meter(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def reactivate_meter(meter_id, keys) do
+    with :ok <- stripe_id(meter_id, "mtr_", :meter_id),
+         {:ok, answer} <-
+           request(:post, "/v1/billing/meters/#{meter_id}/reactivate", %{}, keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_meter(meter_id, keys) do
+    with :ok <- stripe_id(meter_id, "mtr_", :meter_id),
+         {:ok, answer} <- request(:get, "/v1/billing/meters/#{meter_id}", [], keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  # Stripe changes only a meter's display name; its event name and aggregation stay.
+  @impl MishkaPay.Provider
+  def update_meter(%MishkaPay.Meter{id: id, name: name}, keys) do
+    with :ok <- stripe_id(id, "mtr_", :id),
+         {:ok, answer} <-
+           request(:post, "/v1/billing/meters/#{id}", %{"display_name" => name}, keys) do
+      Mapper.meter(answer)
+    end
+  end
+
+  # One cancel per report: the report's identifier makes the idempotency key.
+  @impl MishkaPay.Provider
+  def cancel_usage(%MishkaPay.UsageCancellation{} = cancel, keys) do
+    key =
+      ProviderKit.idempotency_key("usage-cancel", cancel.tenant, {
+        cancel.event_name,
+        cancel.usage_id
+      })
+
+    with {:ok, answer} <-
+           request(
+             :post,
+             "/v1/billing/meter_event_adjustments",
+             Mapper.usage_cancellation_params(cancel),
+             keys,
+             key: key
+           ) do
+      Mapper.usage_cancellation(answer, cancel)
     end
   end
 

@@ -85,7 +85,8 @@ defmodule MishkaPay.Provider do
       `update_payment_link/2`;
     * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
     * `:file`: `upload_file/2`, `fetch_file/2`, `file_link/3`;
-    * `:usage`: `create_meter/2`, `list_meters/2`, `deactivate_meter/2`, `report_usage/2`,
+    * `:usage`: `create_meter/2`, `fetch_meter/2`, `update_meter/2`, `list_meters/2`,
+      `deactivate_meter/2`, `reactivate_meter/2`, `report_usage/2`, `cancel_usage/2`,
       `usage_summary/3`;
     * `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
     * `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
@@ -186,7 +187,8 @@ defmodule MishkaPay.Provider do
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
     * `:file`: keeps files, such as dispute evidence, and makes public links to them.
-    * `:usage`: counts what customers use on meters, for prices billed by usage.
+    * `:usage`: counts what customers use on meters, for prices billed by usage, and takes back
+      a report sent by mistake.
     * `:entitlement`: attaches features to products and tells which ones a customer may use.
     * `:balance`: reads the seller's balance and the movements that made it.
     * `:customer_balance`: keeps a customer's store credit, taken off their next bills.
@@ -758,6 +760,25 @@ defmodule MishkaPay.Provider do
   @callback deactivate_meter(meter_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:usage`. Turns a meter that was off on again."
+  @callback reactivate_meter(meter_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. Reads one meter again."
+  @callback fetch_meter(meter_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:usage`. Renames the meter whose `:id` it carries; how it counts never changes."
+  @callback update_meter(MishkaPay.Meter.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:usage`. Takes back one usage report by its id (`:usage_id`) under `:event_name`, once
+  for each report, and answers it with its `:status`.
+  """
+  @callback cancel_usage(MishkaPay.UsageCancellation.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.UsageCancellation.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:usage`. Reports one use by a customer, once for each reference."
   @callback report_usage(MishkaPay.Usage.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Usage.t()} | {:error, Splode.Error.t()}
@@ -931,6 +952,10 @@ defmodule MishkaPay.Provider do
                       create_meter: 2,
                       list_meters: 2,
                       deactivate_meter: 2,
+                      reactivate_meter: 2,
+                      fetch_meter: 2,
+                      update_meter: 2,
+                      cancel_usage: 2,
                       report_usage: 2,
                       usage_summary: 3,
                       create_feature: 2,
@@ -1051,9 +1076,13 @@ defmodule MishkaPay.Provider do
     ],
     usage: [
       create_meter: 2,
+      fetch_meter: 2,
+      update_meter: 2,
       list_meters: 2,
       deactivate_meter: 2,
+      reactivate_meter: 2,
       report_usage: 2,
+      cancel_usage: 2,
       usage_summary: 3
     ],
     entitlement: [create_feature: 2, attach_feature: 3, list_entitlements: 2],

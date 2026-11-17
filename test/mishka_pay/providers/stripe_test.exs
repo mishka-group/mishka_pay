@@ -2142,6 +2142,59 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Exception.message(error) =~ "merchant_of_record to false"
     end
 
+    test "a meter is read, renamed, turned on again, and a wrong report is taken back once, as Stripe's spec accepts" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.method, conn.request_path, Map.new(conn.req_headers)})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok, %MishkaPay.Meter{id: "mtr_123", status: :active}} =
+               MishkaPay.fetch_meter("stripe", "mtr_123", "site-a")
+
+      assert {:ok, %MishkaPay.Meter{id: "mtr_123", name: "Calls"}} =
+               MishkaPay.update_meter(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: "mtr_123",
+                 name: "Calls"
+               })
+
+      # stripe-mock answers a fixture of its own for a reactivated meter.
+      assert {:ok, %MishkaPay.Meter{status: :active}} =
+               MishkaPay.reactivate_meter("stripe", "mtr_123", "site-a")
+
+      assert_received {:sent, "POST", "/v1/billing/meters/mtr_123/reactivate", _headers}
+
+      cancel = %{provider: "stripe", tenant: "site-a", event_name: "api_call", usage_id: "use-1"}
+
+      assert %{"type" => "cancel", "cancel" => %{"identifier" => "use-1"}} =
+               Stripe.Mapper.usage_cancellation_params(%MishkaPay.UsageCancellation{
+                 provider: "stripe",
+                 event_name: "api_call",
+                 usage_id: "use-1"
+               })
+
+      assert {:ok, %MishkaPay.UsageCancellation{status: :complete, usage_id: "use-1"}} =
+               MishkaPay.cancel_usage(cancel)
+
+      assert_received {:sent, "POST", "/v1/billing/meter_event_adjustments",
+                       %{"idempotency-key" => "mishka_pay-usage-cancel-" <> _ = key}}
+
+      assert {:ok, %MishkaPay.UsageCancellation{}} = MishkaPay.cancel_usage(cancel)
+
+      assert_received {:sent, "POST", "/v1/billing/meter_event_adjustments",
+                       %{"idempotency-key" => ^key}}
+
+      refute key ==
+               MishkaPay.ProviderKit.idempotency_key(
+                 "usage-cancel",
+                 "site-a",
+                 {"api_call", "use-2"}
+               )
+    end
+
     test "a meter is made, listed and turned off, usage is reported and summed, and a price bills it, as Stripe's spec accepts" do
       # stripe-mock makes its own ids (`meter_...`); Stripe's start with `mtr_`.
       assert {:ok, %MishkaPay.Meter{provider: "stripe", id: "meter_" <> _}} =
@@ -2444,6 +2497,12 @@ defmodule MishkaPay.Providers.StripeTest do
             {MishkaPay.usage_summary("stripe", "evt_1", "cus_1", now, DateTime.add(now, 60)),
              :meter_id},
             {MishkaPay.deactivate_meter("stripe", "../charges"), :meter_id},
+            {MishkaPay.reactivate_meter("stripe", "mtr_1/../x"), :meter_id},
+            {MishkaPay.fetch_meter("stripe", "evt_1"), :meter_id},
+            {MishkaPay.update_meter(%{provider: "stripe", id: "mtr_1"}), :name},
+            {MishkaPay.update_meter(%{provider: "stripe", id: "../x", name: "N"}), :id},
+            {MishkaPay.cancel_usage(%{provider: "stripe", event_name: "api_call"}), :usage_id},
+            {MishkaPay.cancel_usage(%{provider: "stripe", usage_id: "u1"}), :event_name},
             {MishkaPay.create_price(%{
                provider: "stripe",
                product_id: "prod_1",

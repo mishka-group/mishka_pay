@@ -269,6 +269,13 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
   is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
   corrects usage reported by mistake.
+- `cancel_usage/1` is a meter event adjustment (`POST /v1/billing/meter_event_adjustments`,
+  `type: cancel`) of the report's identifier (the `MishkaPay.Usage`'s `:id`), within 24 hours of
+  the report; its idempotency key comes from the event name and identifier, so it cancels once.
+  Its `:status` is `:pending` until Stripe has taken the report out. Later, report the value
+  again below zero.
+- `update_meter/1` changes the display name only (`POST /v1/billing/meters/:id`);
+  `reactivate_meter/3` turns a deactivated meter on again.
 - `usage_summary/6` counts whole minutes: `from` rounds down, `to` rounds up. Stripe counts a
   report a little after it comes in, so a summary read at once may not show it yet.
 - A metered price is a recurring price with `meter_id`: Stripe's `recurring[usage_type]=metered`

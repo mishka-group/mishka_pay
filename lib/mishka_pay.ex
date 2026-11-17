@@ -79,7 +79,8 @@ defmodule MishkaPay do
       `:payment_link_list`;
     * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`;
     * files: `:file_upload`, `:file`, `:file_link`;
-    * usage billing: `:meter_create`, `:meter_list`, `:meter_deactivate`, `:usage_report`,
+    * usage billing: `:meter_create`, `:meter`, `:meter_update`, `:meter_list`,
+      `:meter_deactivate`, `:meter_reactivate`, `:usage_report`, `:usage_cancel`,
       `:usage_summary`;
     * entitlements: `:feature_create`, `:feature_attach`, `:entitlement_list`;
     * money views: `:balance`, `:balance_transaction_list`, `:customer_balance_adjust`,
@@ -939,6 +940,31 @@ defmodule MishkaPay do
     capable(:usage, :meter_deactivate, provider, tenant, & &1.deactivate_meter(meter_id, &2))
   end
 
+  @doc "Turns meter `meter_id` on again after `deactivate_meter/3`: it takes usage and prices again."
+  @spec reactivate_meter(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+  def reactivate_meter(provider, meter_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(meter_id) do
+    capable(:usage, :meter_reactivate, provider, tenant, & &1.reactivate_meter(meter_id, &2))
+  end
+
+  @doc "Reads meter `meter_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_meter(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+  def fetch_meter(provider, meter_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(meter_id) do
+    capable(:usage, :meter, provider, tenant, & &1.fetch_meter(meter_id, &2))
+  end
+
+  @doc """
+  Renames meter `:id` to `:name` (see `MishkaPay.Meter`). Its event name and how it adds up never
+  change: make a new meter for that.
+  """
+  @spec update_meter(map()) :: {:ok, MishkaPay.Meter.t()} | {:error, Splode.Error.t()}
+  def update_meter(attrs) when is_map(attrs) do
+    made(:meter_update, :usage, attrs, MishkaPay.Meter, [:provider, :id, :name], :update_meter)
+  end
+
   @doc """
   Reports what a customer used, from `attrs` (see `MishkaPay.Usage`): the meter's
   `:event_name`, the `:customer_id`, a `:value`, when it happened (`:at`) and a `:reference`, so
@@ -947,6 +973,22 @@ defmodule MishkaPay do
   @spec report_usage(map()) :: {:ok, MishkaPay.Usage.t()} | {:error, Splode.Error.t()}
   def report_usage(attrs) when is_map(attrs) do
     made(:usage_report, :usage, attrs, MishkaPay.Usage, [:provider], :report_usage)
+  end
+
+  @doc """
+  Takes back a usage report sent by mistake, from `attrs` (see `MishkaPay.UsageCancellation`):
+  the meter's `:event_name` and the report's `:usage_id` (the `:id` `report_usage/1` answered).
+  The same cancel sent again is one cancel. A provider takes a report back only for a while
+  (Stripe: 24 hours); after that, report the value again below zero.
+
+      {:ok, usage} = MishkaPay.report_usage(%{..., reference: "req-42"})
+      MishkaPay.cancel_usage(%{provider: "stripe", tenant: site_id, event_name: "api_call",
+                               usage_id: usage.id})
+  """
+  @spec cancel_usage(map()) ::
+          {:ok, MishkaPay.UsageCancellation.t()} | {:error, Splode.Error.t()}
+  def cancel_usage(attrs) when is_map(attrs) do
+    made(:usage_cancel, :usage, attrs, MishkaPay.UsageCancellation, [:provider], :cancel_usage)
   end
 
   @doc """

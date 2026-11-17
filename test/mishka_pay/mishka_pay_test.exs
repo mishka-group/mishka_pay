@@ -728,6 +728,17 @@ defmodule MishkaPayTest do
       assert call.(%{method: :post, path: "/v1/customers"}) == nil
     end
 
+    test "a provider without usage billing refuses a usage cancel, after it is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :usage}} =
+               MishkaPay.cancel_usage(%{provider: "acme", event_name: "api", usage_id: "u1"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :usage_id}]}} =
+               MishkaPay.cancel_usage(%{provider: "acme", event_name: "api"})
+
+      assert {:error, %Errors.Unsupported{operation: :usage}} =
+               MishkaPay.reactivate_meter("acme", "m1", "site-a")
+    end
+
     test "a provider without credit notes refuses them, after the note is checked" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
                MishkaPay.list_credit_notes("acme", "site-a", invoice_id: "acme_in_1")

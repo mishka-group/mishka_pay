@@ -1989,6 +1989,22 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec usage(map(), MishkaPay.Usage.t()) :: MishkaPay.Usage.t()
   def usage(answer, usage), do: %{usage | id: answer["identifier"]}
 
+  @doc "Params of `POST /v1/billing/meter_event_adjustments`: cancel the report by its identifier."
+  @spec usage_cancellation_params(MishkaPay.UsageCancellation.t()) :: map()
+  def usage_cancellation_params(cancel) do
+    %{
+      "event_name" => cancel.event_name,
+      "type" => "cancel",
+      "cancel" => %{"identifier" => cancel.usage_id}
+    }
+  end
+
+  @doc "The cancel with Stripe's answer: the adjustment's `status`."
+  @spec usage_cancellation(map(), MishkaPay.UsageCancellation.t()) ::
+          {:ok, MishkaPay.UsageCancellation.t()}
+  def usage_cancellation(answer, cancel),
+    do: {:ok, %{cancel | status: known(answer["status"], ~w(pending complete))}}
+
   @doc """
   Params of `GET /v1/billing/meters/:id/event_summaries` for one customer: Stripe counts from and
   to whole minutes, so the window widens to them, `to` rounded up.

@@ -31,6 +31,21 @@ defmodule ShopWeb.UsageTest do
         Process.put(:meter, "inactive")
         meter("inactive")
 
+      "POST", "/v1/billing/meters/mtr_1/reactivate", _params ->
+        Process.put(:meter, "active")
+        meter("active")
+
+      "POST", "/v1/billing/meter_event_adjustments", %{"cancel" => cancel} = params ->
+        send(test, {:cancelled, params["event_name"], cancel["identifier"]})
+
+        %{
+          "object" => "billing.meter_event_adjustment",
+          "event_name" => params["event_name"],
+          "cancel" => cancel,
+          "status" => "pending",
+          "type" => "cancel"
+        }
+
       "POST", "/v1/billing/meter_events", %{"payload" => payload} = params ->
         send(test, {:reported, payload})
         %{"identifier" => params["identifier"], "event_name" => "api_call"}
@@ -74,6 +89,32 @@ defmodule ShopWeb.UsageTest do
     view |> element("[data-meter-id=mtr_1] [data-testid=meter-deactivate]") |> render_click()
     assert has_element?(view, "[data-meter-id=mtr_1] [data-testid=meter-status]", "inactive")
     refute has_element?(view, "[data-meter-id=mtr_1] [data-testid=meter-deactivate]")
+
+    view |> element("[data-meter-id=mtr_1] [data-testid=meter-reactivate]") |> render_click()
+    assert has_element?(view, "[data-meter-id=mtr_1] [data-testid=meter-status]", "active")
+    assert has_element?(view, "[data-testid=usage-notice]", "on again")
+    refute has_element?(view, "[data-meter-id=mtr_1] [data-testid=meter-reactivate]")
+  end
+
+  test "a report sent by mistake is taken back once", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    refute has_element?(view, "[data-testid=usage-cancel]")
+
+    view
+    |> form("[data-testid=usage-report-form]", %{
+      event_name: "api_call",
+      customer_id: "cus_1",
+      value: "9",
+      reference: "use-oops"
+    })
+    |> render_submit()
+
+    assert_received {:reported, %{"value" => "9"}}
+    view |> element("[data-testid=usage-cancel]") |> render_click()
+
+    assert_received {:cancelled, "api_call", "mishka_pay-usage-" <> _}
+    assert has_element?(view, "[data-testid=usage-cancel-status]", "pending")
+    refute has_element?(view, "[data-testid=usage-cancel]")
   end
 
   test "reports usage, reads the summary, and makes a metered price", %{conn: conn} do
