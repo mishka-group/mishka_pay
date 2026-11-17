@@ -70,7 +70,7 @@ defmodule MishkaPay.TaxCalculation do
 
   @doc false
   def address_source(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(billing shipping))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(billing shipping)a)
 
   # Lines in one currency (shipping too), each named once, at most 100; and somewhere to count the
   # tax for. It runs on the caller's map, before the fields are built.

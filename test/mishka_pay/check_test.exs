@@ -18,9 +18,16 @@ defmodule MishkaPay.CheckTest do
         "/v1/customers" ->
           Req.Test.json(conn, %{"data" => [], "has_more" => false})
 
-        "/v1/webhook_endpoints" ->
-          endpoint = %{"id" => "we_1", "url" => @url, "enabled_events" => endpoint_events}
-          Req.Test.json(conn, %{"data" => [endpoint], "has_more" => false})
+        "/v2/core/event_destinations" ->
+          destination = %{
+            "id" => "ed_test_1",
+            "object" => "v2.core.event_destination",
+            "event_payload" => "thin",
+            "webhook_endpoint" => %{"url" => @url},
+            "enabled_events" => endpoint_events
+          }
+
+          Req.Test.json(conn, %{"data" => [destination], "next_page_url" => nil})
       end
     end)
   end
@@ -34,7 +41,7 @@ defmodule MishkaPay.CheckTest do
     assert [{:provider, :ok}, {:keys, {:error, _no_keys}}] = Check.run(tenant: "nowhere")
 
     MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a"}, "site-a")
-    stripe(["invoice.paid"])
+    stripe(["v1.invoice.paid"])
 
     results = Check.run(tenant: "site-a", webhook_url: @url)
 

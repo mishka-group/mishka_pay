@@ -1178,13 +1178,15 @@ defmodule MishkaPay.Providers.StripeTest do
                "trial_days goes only with a plan, a price charged on a schedule"
     end
 
-    test "a customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
-      assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id}} =
+    test "a v1 customer is made, changed, read and listed as Stripe's spec accepts, and a portal opened" do
+      assert {:ok, %MishkaPay.Customer{id: "cus_" <> _ = id, api: :v1}} =
                MishkaPay.create_customer(%{
                  provider: "stripe",
                  tenant: "site-a",
+                 api: :v1,
                  email: "ava@example.com",
                  name: "Ava Martin",
+                 address: %{country: "nl", postal_code: "1012 AB", city: "Amsterdam"},
                  reference: "user-1",
                  metadata: %{"plan" => "pro"}
                })
@@ -1194,11 +1196,14 @@ defmodule MishkaPay.Providers.StripeTest do
                  provider: "stripe",
                  tenant: "site-a",
                  id: id,
-                 name: "Ava M."
+                 name: "Ava M.",
+                 default_payment_method: "pm_123"
                })
 
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _}} =
                MishkaPay.fetch_customer("stripe", id, "site-a")
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", customer_api: :v1})
 
       assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{} | _]}} =
                MishkaPay.list_customers("stripe", "site-a", email: "ava@example.com", limit: 3)
@@ -1215,18 +1220,264 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_customer("stripe", "pi_123", "site-a")
     end
 
+    test "on Accounts v2, a customer is an account with the customer configuration, made, read and changed" do
+      stub_customers(self())
+
+      customer = %{
+        provider: "stripe",
+        tenant: "site-a",
+        email: "ava@example.com",
+        name: "Ava Martin",
+        phone: "+31201234567",
+        address: %{country: "nl", postal_code: "1012 AB", city: "Amsterdam", line1: "Dam 1"},
+        reference: "user-1",
+        metadata: %{"plan" => "pro"}
+      }
+
+      assert {:ok,
+              %MishkaPay.Customer{
+                id: "acct_c1",
+                api: :v2,
+                email: "ava@example.com",
+                name: "Ava Martin",
+                phone: "+31201234567",
+                address: %MishkaPay.Address{country: "NL", city: "Amsterdam", line1: "Dam 1"},
+                default_payment_method: "pm_1",
+                reference: "user-1",
+                metadata: %{"plan" => "pro"},
+                created_at: %DateTime{year: 2026}
+              }} = MishkaPay.create_customer(customer)
+
+      assert {:ok, _again} = MishkaPay.create_customer(customer)
+
+      assert_received {:stripe, "POST", "/v2/core/accounts", "", body}
+      assert_received {:stripe, "POST", "/v2/core/accounts", "", ^body}
+
+      assert JSON.decode!(body) == %{
+               "contact_email" => "ava@example.com",
+               "display_name" => "Ava Martin",
+               "identity" => %{
+                 "country" => "NL",
+                 "individual" => %{
+                   "phone" => "+31201234567",
+                   "address" => %{
+                     "country" => "NL",
+                     "postal_code" => "1012 AB",
+                     "city" => "Amsterdam",
+                     "line1" => "Dam 1"
+                   }
+                 }
+               },
+               "configuration" => %{"customer" => %{}},
+               "metadata" => %{"mishka_pay_reference" => "user-1", "plan" => "pro"},
+               "include" => Stripe.Mapper.customer_includes()
+             }
+
+      assert {:ok, %MishkaPay.Customer{id: "acct_c1"}} =
+               MishkaPay.fetch_customer("stripe", "acct_c1", "site-a")
+
+      assert_received {:stripe, "GET", "/v2/core/accounts/acct_c1", query, ""}
+
+      assert URI.decode_query(query) == %{
+               "include[0]" => "configuration.customer",
+               "include[1]" => "identity"
+             }
+
+      assert {:ok, %MishkaPay.Customer{}} =
+               MishkaPay.set_default_payment_method("stripe", "acct_c1", "pm_2", "site-a")
+
+      assert_received {:stripe, "POST", "/v2/core/accounts/acct_c1", "", update}
+
+      assert JSON.decode!(update) == %{
+               "configuration" => %{
+                 "customer" => %{"billing" => %{"default_payment_method" => "pm_2"}}
+               },
+               "include" => Stripe.Mapper.customer_includes()
+             }
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", customer_api: :v1})
+
+      assert {:ok, %MishkaPay.Customer{id: "cus_linked", api: :v1}} =
+               MishkaPay.create_customer(customer)
+
+      assert_received {:stripe, "POST", "/v1/customers", "", _form}
+    end
+
+    test "on Accounts v2, customers are listed without an email filter, searched, and closed" do
+      stub_customers(self())
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{id: "acct_c1", api: :v2}]}} =
+               MishkaPay.list_customers("stripe", "site-a", limit: 50)
+
+      assert_received {:stripe, "GET", "/v2/core/accounts", list, ""}
+
+      assert URI.decode_query(list) == %{
+               "applied_configurations[0]" => "customer",
+               "limit" => "20"
+             }
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :email}]}} =
+               MishkaPay.list_customers("stripe", "site-a", email: "ava@example.com")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{id: "acct_c1", api: :v2}]}} =
+               MishkaPay.search_customers("stripe", "site-a", reference: "user-1")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{id: "cus_linked", api: :v1}]}} =
+               MishkaPay.search_customers("stripe", "site-a", reference: "user-1", api: :v1)
+
+      assert :ok = MishkaPay.delete_customer("stripe", "acct_c1", "site-a")
+      assert_received {:stripe, "POST", "/v2/core/accounts/acct_c1/close", "", close}
+      assert JSON.decode!(close) == %{"applied_configurations" => ["customer"]}
+
+      assert {:error, %Errors.Rejected{code: "customer_deleted"}} =
+               MishkaPay.fetch_customer("stripe", "acct_closed", "site-a")
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} =
+               MishkaPay.fetch_customer("stripe", "acct_seller", "site-a")
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} =
+               MishkaPay.fetch_customer("stripe", "acct_seller_closed", "site-a")
+    end
+
     test "a customer is deleted as Stripe's spec accepts, and an id of another kind never reaches a path" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
 
       assert :ok = MishkaPay.delete_customer("stripe", "cus_123", "site-a")
       assert_received {_, ^ref, _, %{method: :delete, path: "/v1/customers/cus_123"}}
 
-      for id <- ["pi_123", "cus_1/../../v1/charges"] do
+      for id <- ["pi_123", "cus_1/../../v1/charges", "acct_1/../../v1/charges"] do
         assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
                  MishkaPay.delete_customer("stripe", id, "site-a")
       end
 
       refute_received {_, ^ref, _, _meta}
+    end
+
+    test "a customer account is sold to and billed by customer_account, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+      buyer = "acct_buyer1"
+      known = %{provider: "stripe", tenant: "site-a", customer_id: buyer}
+
+      assert {:ok, %Checkout{id: "cs_" <> _}} =
+               MishkaPay.checkout(%{@checkout | customer: %{id: buyer}})
+
+      assert {:ok, %MishkaPay.PaymentIntent{}} =
+               MishkaPay.create_payment_intent(
+                 Map.put(known, :amount, %{amount: "19.99", currency: "EUR"})
+               )
+
+      assert {:ok, %MishkaPay.SetupIntent{}} = MishkaPay.create_setup_intent(known)
+
+      assert {:ok, %Invoice{}} =
+               MishkaPay.create_invoice(
+                 Map.merge(known, %{
+                   reference: "order-10",
+                   items: [%{name: "Setup", amount: %{amount: "120", currency: "USD"}}]
+                 })
+               )
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+               MishkaPay.create_subscription_schedule(
+                 Map.put(known, :phases, [
+                   %{items: [%{id: "price_full"}], iterations: 1, interval: :month}
+                 ])
+               )
+
+      assert {:ok, %MishkaPay.PortalSession{}} =
+               MishkaPay.portal_session(Map.put(known, :return_url, "https://shop.test/account"))
+
+      for list <- [
+            &MishkaPay.list_invoices/3,
+            &MishkaPay.list_subscriptions/3,
+            &MishkaPay.list_subscription_schedules/3,
+            &MishkaPay.list_invoice_items/3,
+            &MishkaPay.list_credit_notes/3,
+            &MishkaPay.list_payments/3
+          ] do
+        assert {:ok, %MishkaPay.Page{}} = list.("stripe", "site-a", customer_id: buyer)
+      end
+
+      sent = collect_sent(%{})
+
+      for {method, path} <- [
+            {"POST", "/v1/checkout/sessions"},
+            {"POST", "/v1/payment_intents"},
+            {"POST", "/v1/setup_intents"},
+            {"POST", "/v1/invoices"},
+            {"POST", "/v1/invoiceitems"},
+            {"POST", "/v1/subscription_schedules"},
+            {"POST", "/v1/billing_portal/sessions"},
+            {"GET", "/v1/invoices"},
+            {"GET", "/v1/subscriptions"},
+            {"GET", "/v1/subscription_schedules"},
+            {"GET", "/v1/invoiceitems"},
+            {"GET", "/v1/credit_notes"},
+            {"GET", "/v1/payment_intents"}
+          ] do
+        params = sent[{method, path}]
+        assert params["customer_account"] == buyer, "#{method} #{path}"
+        refute Map.has_key?(params, "customer"), "#{method} #{path}"
+      end
+
+      assert {:ok, %MishkaPay.TaxId{}} =
+               MishkaPay.create_tax_id("stripe", buyer, %{type: "eu_vat", value: "DE1"}, "site-a")
+
+      assert {:ok, %MishkaPay.Page{}} = MishkaPay.list_tax_ids("stripe", buyer, "site-a")
+
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_payment_methods("stripe", "site-a", customer_id: buyer)
+
+      assert {:ok, %MishkaPay.Page{}} = MishkaPay.list_customer_balance("stripe", buyer, "site-a")
+
+      paths = collect_sent(%{}) |> Map.keys() |> Enum.map(&elem(&1, 1))
+
+      expected =
+        for kind <- ~w(tax_ids tax_ids payment_methods balance_transactions),
+            do: "/v1/customers/#{buyer}/#{kind}"
+
+      assert Enum.sort(paths) == Enum.sort(expected)
+    end
+
+    test "the areas Stripe keeps for v1 Customers refuse a customer account before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      sold = %{@checkout | customer: %{id: "acct_1"}}
+
+      for {checkout, keys} <- [
+            {Map.put(sold, :merchant_of_record, true), %{}},
+            {sold, %{merchant_of_record: true}}
+          ] do
+        MishkaPay.Test.put_keys("stripe", Map.put(keys, :secret_key, "sk_test_123"))
+
+        assert {:error, %Errors.Invalid{errors: [%{field: :customer, message: message}]}} =
+                 MishkaPay.checkout(checkout)
+
+        assert message =~ "customer_account"
+      end
+
+      for refused <- [
+            MishkaPay.list_entitlements("stripe", "acct_1", "site-a"),
+            MishkaPay.usage_summary(
+              "stripe",
+              "mtr_1",
+              "acct_1",
+              ~U[2026-11-01 00:00:00Z],
+              ~U[2026-11-02 00:00:00Z],
+              "site-a"
+            ),
+            MishkaPay.report_usage(%{
+              provider: "stripe",
+              tenant: "site-a",
+              event_name: "api_call",
+              customer_id: "acct_1",
+              value: 1,
+              reference: "call-1"
+            }),
+            MishkaPay.calculate_tax(Map.put(@tax, :customer_id, "acct_1"))
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} = refused
+      end
     end
 
     test "a customer's tax ids are added, listed and removed as Stripe's spec accepts" do
@@ -6061,8 +6312,10 @@ defmodule MishkaPay.Providers.StripeTest do
              })
   end
 
-  test "every thin API v2 event Mishka Pay maps names the connected account it is about" do
-    for {type, [:account]} <- Stripe.thin_events() do
+  test "every thin API v2 event Mishka Pay maps names the account it is about, and a customer account's the customer" do
+    for {"v2." <> _ = type, kinds} <- Stripe.thin_events() do
+      customer_id = if :customer in kinds, do: "acct_1"
+
       assert {:ok,
               %MishkaPay.Event{
                 id: "evt_test_1",
@@ -6070,6 +6323,7 @@ defmodule MishkaPay.Providers.StripeTest do
                 object_id: "acct_1",
                 object_type: "v2.core.account",
                 account: "acct_1",
+                customer_id: ^customer_id,
                 livemode: false,
                 created_at: %DateTime{year: 2026}
               }} =
@@ -6102,6 +6356,47 @@ defmodule MishkaPay.Providers.StripeTest do
              })
 
     refute Enum.any?(Map.keys(Stripe.thin_events()), &is_map_key(Stripe.handled_events(), &1))
+
+    assert Enum.sort(
+             for {"v2." <> _ = type, kinds} <- Stripe.thin_events(), :customer in kinds, do: type
+           ) ==
+             [
+               "v2.core.account.closed",
+               "v2.core.account.updated",
+               "v2.core.account[configuration.customer].capability_status_updated",
+               "v2.core.account[configuration.customer].updated",
+               "v2.core.account[identity].updated"
+             ]
+  end
+
+  test "a snapshot event about a customer made on Accounts v2 names its account, not the linked Customer" do
+    for object <- [
+          %{"object" => "customer", "id" => "cus_linked", "customer_account" => "acct_c1"},
+          %{
+            "object" => "tax_id",
+            "id" => "txi_1",
+            "customer" => "cus_linked",
+            "customer_account" => "acct_c1"
+          },
+          %{"object" => "payment_method", "id" => "pm_1", "customer" => nil}
+        ] do
+      event = %{
+        "id" => "evt_1",
+        "object" => "event",
+        "type" => "#{object["object"]}.updated",
+        "created" => 1_794_825_000,
+        "livemode" => false,
+        "data" => %{
+          "object" => object,
+          "previous_attributes" => %{"customer" => "cus_linked", "customer_account" => "acct_c1"}
+        }
+      }
+
+      assert {:ok, %MishkaPay.Event{customer_id: "acct_c1"}} = Stripe.Mapper.event(event)
+    end
+
+    assert {"customer_account", "acct_c1"} = Stripe.Mapper.customer_param("acct_c1")
+    assert {"customer", "cus_1"} = Stripe.Mapper.customer_param("cus_1")
   end
 
   defp named?(event, :payment), do: event.payment_id == "pi_1"
@@ -6126,6 +6421,114 @@ defmodule MishkaPay.Providers.StripeTest do
 
   defp named?(event, kind),
     do: event.object_type == Atom.to_string(kind) and is_binary(event.object_id)
+
+  # Answers every request with Stripe's answer about customers, after telling the test what it got.
+  defp stub_customers(test) do
+    MishkaPay.Test.stub_http(fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test, {:stripe, conn.method, conn.request_path, conn.query_string, body})
+      Req.Test.json(conn, customer_answer(conn.method, conn.request_path))
+    end)
+  end
+
+  # Stripe's answers about customers, in their own shapes (as Stripe answered them live): an
+  # account with the customer configuration, the list of such accounts, one closed (a closed
+  # account keeps its configurations listed), one that is only a seller, open and closed, and the
+  # Customer Stripe links to an account, which `/v1/customers` answers.
+  defp customer_answer("GET", "/v2/core/accounts"),
+    do: %{
+      "data" => [
+        Map.drop(customer_answer("GET", "/v2/core/accounts/acct_c1"), ~w(identity configuration))
+      ],
+      "next_page_url" => nil,
+      "previous_page_url" => nil
+    }
+
+  defp customer_answer(_method, "/v2/core/accounts/acct_closed"),
+    do: %{
+      "id" => "acct_closed",
+      "object" => "v2.core.account",
+      "applied_configurations" => ["customer"],
+      "closed" => true
+    }
+
+  defp customer_answer(_method, "/v2/core/accounts/acct_seller_closed"),
+    do: %{
+      "id" => "acct_seller_closed",
+      "object" => "v2.core.account",
+      "applied_configurations" => ["merchant"],
+      "closed" => true
+    }
+
+  defp customer_answer(_method, "/v2/core/accounts/acct_seller"),
+    do: %{
+      "id" => "acct_seller",
+      "object" => "v2.core.account",
+      "applied_configurations" => ["merchant"],
+      "closed" => false
+    }
+
+  defp customer_answer(_method, "/v1/customers/search"),
+    do: %{
+      "object" => "search_result",
+      "data" => [customer_answer("POST", "/v1/customers")],
+      "has_more" => false
+    }
+
+  defp customer_answer(_method, "/v1/customers"),
+    do: %{
+      "id" => "cus_linked",
+      "object" => "customer",
+      "customer_account" => "acct_c1",
+      "email" => "ava@example.com",
+      "name" => "Ava Martin",
+      "address" => %{"country" => "NL", "city" => "Amsterdam"},
+      "invoice_settings" => %{"default_payment_method" => nil},
+      "metadata" => %{"mishka_pay_reference" => "user-1"},
+      "created" => 1_794_918_977
+    }
+
+  defp customer_answer(_method, path) do
+    %{
+      "id" => "acct_c1",
+      "object" => "v2.core.account",
+      "applied_configurations" => ["customer"],
+      "closed" => String.ends_with?(path, "/close"),
+      "contact_email" => "ava@example.com",
+      "display_name" => "Ava Martin",
+      "dashboard" => nil,
+      "created" => "2026-11-17T12:36:17.000Z",
+      "livemode" => false,
+      "metadata" => %{"mishka_pay_reference" => "user-1", "plan" => "pro"},
+      "configuration" => %{
+        "customer" => %{
+          "applied" => true,
+          "billing" => %{"default_payment_method" => "pm_1", "invoice" => %{"prefix" => "X1"}},
+          "capabilities" => nil,
+          "shipping" => nil
+        },
+        "merchant" => nil,
+        "recipient" => nil
+      },
+      "identity" => %{
+        "country" => "NL",
+        "entity_type" => "individual",
+        "individual" => %{
+          "object" => "v2.core.account_person",
+          "phone" => "+31201234567",
+          "address" => %{
+            "country" => "NL",
+            "city" => "Amsterdam",
+            "line1" => "Dam 1",
+            "line2" => nil,
+            "postal_code" => "1012 AB",
+            "state" => nil,
+            "town" => nil
+          }
+        }
+      }
+    }
+  end
 
   # Stripe's API v2 answers, in their own shape: an account made with merchant and recipient,
   # its transfers on and card payments held back for a missing bank account; an account link; and
@@ -6401,6 +6804,17 @@ defmodule MishkaPay.Providers.StripeTest do
     assert Stripe.form(%{"a" => %{"b" => [%{"c" => 1}, %{"c" => 2}]}, "skip" => nil, "d" => "x"})
            |> Enum.sort() ==
              [{"a[b][0][c]", "1"}, {"a[b][1][c]", "2"}, {"d", "x"}]
+  end
+
+  # Every request stripe-mock was told about so far, by method and path. Each is told before it
+  # is answered, so all of them are in the mailbox once the calls return.
+  defp collect_sent(sent) do
+    receive do
+      {:stripe_sent, method, path, params, _key} ->
+        collect_sent(Map.put(sent, {method, path}, params))
+    after
+      0 -> sent
+    end
   end
 
   defp params_checkout do

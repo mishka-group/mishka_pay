@@ -38,7 +38,7 @@ defmodule MishkaPay.CheckoutField do
 
   @doc false
   def type(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(text numeric dropdown))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(text numeric dropdown)a)
 
   # A dropdown has from one to two hundred options, each a value and a label; other types none.
   @doc false

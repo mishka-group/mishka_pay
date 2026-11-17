@@ -21,11 +21,13 @@ defmodule Mix.Tasks.MishkaPay.ReplayEvents do
     * `--since`: an ISO 8601 time; required. Stripe keeps 30 days of events.
     * `--type`: only this event type; more than once for several. By default every event Mishka
       Pay acts on.
+    * `--events`: `thin` or `snapshot`, the kind of events to read; by default the tenant's
+      `:events` (thin). Replay the kind the site's webhook takes.
   """
 
   use Mix.Task
 
-  @switches [provider: :string, tenant: :string, since: :string, type: :keep]
+  @switches [provider: :string, tenant: :string, since: :string, type: :keep, events: :string]
 
   @impl Mix.Task
   def run(args) do
@@ -42,7 +44,7 @@ defmodule Mix.Tasks.MishkaPay.ReplayEvents do
     case MishkaPay.replay_events(
            Keyword.get(opts, :provider, "stripe"),
            opts[:tenant],
-           [since: since] ++ types
+           [since: since] ++ types ++ Keyword.take(opts, [:events])
          ) do
       {:ok, %{delivered: delivered, failed: []}} ->
         Mix.shell().info("delivered #{delivered} events")

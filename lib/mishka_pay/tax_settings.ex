@@ -44,5 +44,5 @@ defmodule MishkaPay.TaxSettings do
 
   @doc false
   def tax_behavior(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inclusive exclusive inferred_by_currency))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inclusive exclusive inferred_by_currency)a)
 end

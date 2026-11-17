@@ -50,10 +50,25 @@ defmodule MishkaPay.Providers.Stripe do
       (set in a second request on one made from a subscription, which Stripe makes without
       metadata).
     * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` and
-      `delete_customer/2` keep Customers (`cus_...`), with the reference in their metadata; a
-      delete is for good and cancels the customer's subscriptions at once; `create_tax_id/2`,
-      `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids (`txi_...`);
-      `portal_session/2` opens a
+      `delete_customer/2` keep customers with Accounts v2 (an account with the customer
+      configuration, `acct_...`, the default) or as Customers (`/v1/customers`, `cus_...`), as the
+      customer's `:api` or the tenant's `:customer_api` says; a read, a change and a delete use
+      the API the id belongs to. On v2 the email is `contact_email`, the name `display_name`, the
+      phone and address the identity's individual's, the invoice default the customer
+      configuration's billing; a read includes the configuration and the identity. The reference
+      is kept in the metadata either way. A v2 delete closes the account (every configuration it
+      has, read first); a v1 delete is for good and cancels the customer's subscriptions at once.
+      A v2 list has no email filter and holds at most 20; `search_customers/2` is Stripe's
+      Customer search on either, which finds customers made on v2 by the Customer Stripe links
+      to each, and names them by their account on v2. Every call that names a customer sends an
+      `acct_` id as `customer_account` and a `cus_` one as `customer` (checkout, intents,
+      subscriptions and schedules, invoices, invoice items, credit notes, the portal, payments
+      and promotion codes), and a path under `/v1/customers/:id` takes either (tax ids, payment
+      methods, the customer balance). Usage reports and summaries, entitlements and tax
+      calculations take only a `cus_` id: Stripe takes no `customer_account` there yet. Managed
+      Payments sells to no customer account, so a checkout for one as the merchant of record is
+      refused. `create_tax_id/2`, `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids
+      (`txi_...`); `portal_session/2` opens a
       billing portal session for one, with the portal configuration (`bpc_...`) it names;
       `create_portal_configuration/2`, `update_portal_configuration/2`,
       `fetch_portal_configuration/2` and `list_portal_configurations/2` keep those (Stripe never
@@ -63,8 +78,9 @@ defmodule MishkaPay.Providers.Stripe do
       without a charge, with Managed Payments off (Stripe takes no setup mode with it) and, without
       a known customer, `customer_creation: always`. `list_payment_methods/2`,
       `fetch_payment_method/2`, `detach_payment_method/2` and `set_default_payment_method/3` keep
-      a customer's PaymentMethods (`pm_...`); the default is the customer's
-      `invoice_settings.default_payment_method`.
+      a customer's PaymentMethods (`pm_...`); the default is a change of the customer: a v1
+      Customer's `invoice_settings.default_payment_method`, or a v2 account's
+      `configuration.customer.billing.default_payment_method`.
     * `create_shipping_rate/2` and `list_shipping_rates/2` keep Shipping Rates (`shr_...`). A
       checkout's `:shipping_countries` is `shipping_address_collection` and its `:shipping_rates`
       are `shipping_options` (a rate by id, or `shipping_rate_data`), up to 5, in payment mode
@@ -167,7 +183,12 @@ defmodule MishkaPay.Providers.Stripe do
       `webhook_secrets` while a rolled secret runs out, compared in constant time with every
       `v1` signature in it, signed within the last five minutes
       (`config :mishka_pay, MishkaPay.Providers.Stripe, webhook_tolerance: seconds`), and from the
-      same mode (live or test) as the tenant's keys.
+      same mode (live or test) as the tenant's keys. It takes snapshot and thin events alike; a
+      thin one becomes the Event its snapshot event gives (`thin_events/0`), reading its object
+      when an id it needs sits inside it.
+    * `list_events/2` reads the tenant's kind of events (`:events`, a call's `events:` first):
+      thin ones from API v2's `/v2/core/events`, snapshot ones from `/v1/events`.
+      `MishkaPay.Providers.Stripe.WebhookEndpoint` sets up the endpoint for either kind.
 
   A tenant whose keys name a connected account (`:account_id`, `acct_...`) acts as that account:
   every request carries it in the `Stripe-Account` header (`Stripe-Context` on an API v2 path),
@@ -264,7 +285,7 @@ defmodule MishkaPay.Providers.Stripe do
     SubscriptionSchedule
   }
 
-  alias MishkaPay.Helpers.TokenCache
+  alias MishkaPay.Helpers.{Choice, TokenCache}
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -273,6 +294,8 @@ defmodule MishkaPay.Providers.Stripe do
   @scheme_countries ~w(AE AL AO AU AW BA BB BD BF BH BS CD CH ET GB GN IS JP ME MK MR NO NZ OM RS
                        SG SR UY ZA ZW)
   @reference "mishka_pay_reference"
+  # A customer is a Customer (`cus_`) or an account with the customer configuration (`acct_`).
+  @customer ["cus_", "acct_"]
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
   @meter_events_url "https://meter-events.stripe.com"
@@ -406,30 +429,121 @@ defmodule MishkaPay.Providers.Stripe do
   @spec handled_events() :: %{String.t() => [atom()]}
   def handled_events, do: @handled
 
-  @thin %{
+  @thin_accounts %{
     "v2.core.account.created" => [:account],
-    "v2.core.account.updated" => [:account],
-    "v2.core.account.closed" => [:account],
+    "v2.core.account.updated" => [:account, :customer],
+    "v2.core.account.closed" => [:account, :customer],
     "v2.core.account[requirements].updated" => [:account],
     "v2.core.account[future_requirements].updated" => [:account],
-    "v2.core.account[identity].updated" => [:account],
+    "v2.core.account[identity].updated" => [:account, :customer],
     "v2.core.account[defaults].updated" => [:account],
     "v2.core.account[configuration.merchant].updated" => [:account],
     "v2.core.account[configuration.merchant].capability_status_updated" => [:account],
     "v2.core.account[configuration.recipient].updated" => [:account],
     "v2.core.account[configuration.recipient].capability_status_updated" => [:account],
-    "v2.core.account[configuration.customer].updated" => [:account],
-    "v2.core.account[configuration.customer].capability_status_updated" => [:account]
+    "v2.core.account[configuration.customer].updated" => [:account, :customer],
+    "v2.core.account[configuration.customer].capability_status_updated" => [:account, :customer]
   }
 
+  # Thin events with no snapshot event of their name: what changed, said more exactly, about an
+  # object Mishka Pay already keeps; and the usage reports Stripe refused after answering.
+  @thin_only %{
+    "v1.customer.subscription.active" => [:subscription],
+    "v1.customer.subscription.past_due" => [:subscription],
+    "v1.customer.subscription.unpaid" => [:subscription],
+    "v1.customer.subscription.trialing" => [:subscription],
+    "v1.customer.subscription.incomplete" => [:subscription],
+    "v1.customer.subscription.incomplete_expired" => [:subscription],
+    "v1.customer.subscription.cancel_at_changed" => [:subscription],
+    "v1.customer.subscription.default_payment_method_changed" => [:subscription],
+    "v1.customer.subscription.item_added" => [:subscription],
+    "v1.customer.subscription.item_removed" => [:subscription],
+    "v1.customer.subscription.item_price_changed" => [:subscription],
+    "v1.customer.subscription.item_quantity_changed" => [:subscription],
+    "v1.customer.subscription.item_tax_rates_changed" => [:subscription],
+    "v1.invoice.payment_succeeded" => [:subscription, :invoice],
+    "v1.invoice.payment_attempt_required" => [:subscription, :invoice],
+    "v1.invoice.finalization_failed" => [:subscription, :invoice],
+    "v1.invoice.will_be_due" => [:subscription, :invoice],
+    "v1.invoice.overpaid" => [:subscription, :invoice],
+    "v1.invoice.discount_added" => [:invoice],
+    "v1.invoice.discount_removed" => [:invoice],
+    "v1.invoice.line_item_added" => [:invoice],
+    "v1.invoice.line_item_removed" => [:invoice],
+    "v1.invoice.line_item_pricing_changed" => [:invoice],
+    "v1.invoice.line_item_quantity_changed" => [:invoice],
+    "v1.subscription_schedule.phase_added" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_removed" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_end_date_changed" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_trial_end_changed" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_default_tax_rates_changed" => [
+      :subscription_schedule,
+      :subscription
+    ],
+    "v1.product.activated" => [:product],
+    "v1.product.deactivated" => [:product],
+    "v1.product.default_price_changed" => [:product],
+    "v1.product.tax_code_changed" => [:product],
+    "v1.price.activated" => [:price],
+    "v1.price.deactivated" => [:price],
+    "v1.price.lookup_key_changed" => [:price],
+    "v1.price.tax_behavior_changed" => [:price],
+    "v1.promotion_code.fully_redeemed" => [:promotion_code],
+    "v1.entitlements.active_entitlement_summary.entitlement_added" => [:customer],
+    "v1.entitlements.active_entitlement_summary.entitlement_removed" => [:customer],
+    "v1.billing.meter.error_report_triggered" => [:meter],
+    "v1.billing.meter.no_meter_found" => [:meter]
+  }
+
+  @thin @handled
+        |> Map.new(fn {type, updates} -> {"v1." <> type, updates} end)
+        |> Map.merge(@thin_only)
+        |> Map.merge(@thin_accounts)
+
+  @event_types @thin
+               |> Map.new(fn {type, updates} -> {Mapper.event_type(type), updates} end)
+               |> Map.merge(@handled)
+
   @doc """
-  The thin events Mishka Pay maps, each with what it is about: API v2's connected account events
-  (`v2.core.account.*`), which Stripe sends only to an event destination with the thin payload,
-  never to a `/v1/webhook_endpoints` endpoint. Point that destination at the platform's webhook
-  URL and add its signing secret to the tenant's `:webhook_secrets`: `verify_webhook/3` checks
-  it as it checks any message, and each answers an Event whose `:object_id` and `:account` are
-  the account (read it with `MishkaPay.fetch_connected_account/4`). Stripe sends no state in
-  them; the read is the truth.
+  The events Mishka Pay acts on, by the type their `MishkaPay.Event` carries: `handled_events/0`,
+  and `thin_events/0` named as `Mapper.event_type/1` names them (`invoice.overpaid`,
+  `v2.core.account.updated`). `MishkaPay.replay_events/3` delivers only these.
+  """
+  @spec event_types() :: %{String.t() => [atom()]}
+  def event_types, do: @event_types
+
+  @doc """
+  The thin events Mishka Pay maps, each with what it updates (the words of `handled_events/0`),
+  as an event destination with the thin payload sends them (the default of
+  `MishkaPay.Providers.Stripe.WebhookEndpoint`); Stripe never sends one to a
+  `/v1/webhook_endpoints` endpoint:
+
+    * `v1.<type>` for each of `handled_events/0`, the thin form of the same event;
+    * thin events with no snapshot event of their name, about what Mishka Pay keeps: a
+      subscription that turned `active`, `past_due`, `unpaid`, `trialing` or `incomplete`, or
+      whose items, cancel date or payment method changed; an invoice paid, due, overpaid, or
+      whose lines or discounts changed; a schedule's phases; a product's or a price's activation,
+      tax code, lookup key or default price; a promotion code used up; an entitlement added or
+      removed;
+    * `v1.billing.meter.error_report_triggered` and `v1.billing.meter.no_meter_found`
+      (`:meter`): usage reports Stripe refused after answering (a streamed report). The event's
+      `:object_id` is the meter (`mtr_...`) when Stripe found one; the counts and samples are in
+      the full event, `GET /v2/core/events/:id` (`MishkaPay.request/1`);
+    * API v2's connected account events (`v2.core.account.*`, `:account`): `:object_id` and
+      `:account` are the account (read it with `MishkaPay.fetch_connected_account/4`). The
+      events a customer made on Accounts v2 sends (`v2.core.account.updated` and `.closed`,
+      `[identity].updated`, `[configuration.customer].*`) name the account as its `:customer_id`
+      too, so the Ash customer listener syncs it; for an account that is only a seller, that
+      read answers `resource_missing` and the listener leaves the event done.
+
+  A thin event names its object and no more. `verify_webhook/3` turns one into the same
+  `MishkaPay.Event` a snapshot event gives: an id that sits inside the object (the payment of a
+  charge, the subscription of an invoice, the customer of a tax id, the account a customer made
+  on Accounts v2 is) is read from the object, one request as the event's account; an event
+  whose object is itself the id it names (a PaymentIntent, a subscription, a product) needs none. Its `:type` is the snapshot
+  event's (`invoice.paid` for `v1.invoice.paid`, `invoice.overpaid` for the thin-only
+  `v1.invoice.overpaid`: `Mapper.event_type/1`), so a listener matches one name in either mode;
+  API v2's own events keep Stripe's names (`v2.core.account.updated`).
   """
   @spec thin_events() :: %{String.t() => [atom()]}
   def thin_events, do: @thin
@@ -493,6 +607,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- billing_fits(checkout, keys),
          :ok <- shipping_rates(checkout.shipping_rates),
          :ok <- for_seller(checkout),
+         :ok <- buyer_fits(checkout, keys),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -512,6 +627,21 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp held(_checkout, _keys), do: :ok
+
+  # Stripe sells as the merchant of record (Managed Payments) to no customer account: it answers
+  # such a checkout as if the account did not exist. A setup turns Managed Payments off itself.
+  defp buyer_fits(%Checkout{mode: mode, customer: %{id: "acct_" <> _}} = checkout, keys)
+       when mode != :setup do
+    case Mapper.merchant_of_record(checkout, keys) do
+      true ->
+        invalid(:customer, Messages.text(:merchant_of_record_off, param: "customer_account"))
+
+      _off_or_default ->
+        :ok
+    end
+  end
+
+  defp buyer_fits(_checkout, _keys), do: :ok
 
   # Proration discounts go only with the flexible billing mode, the tenant's own mode included.
   defp billing_fits(%{proration_discounts: discounts} = choice, keys)
@@ -719,8 +849,8 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def list_invoices(opts, keys) do
     with :ok <- maybe_id(opts[:subscription_id], "sub_", :subscription_id),
-         :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
-      filters = [subscription: opts[:subscription_id], customer: opts[:customer_id]]
+         :ok <- maybe_id(opts[:customer_id], @customer, :customer_id) do
+      filters = [Mapper.customer_param(opts[:customer_id]), subscription: opts[:subscription_id]]
       page("/v1/invoices", filters, opts, keys, &Mapper.invoice/1)
     end
   end
@@ -729,10 +859,10 @@ defmodule MishkaPay.Providers.Stripe do
   # products are not: an item has its `:product_id`, and the price's nickname as its name.
   @impl MishkaPay.Provider
   def list_subscriptions(opts, keys) do
-    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id),
+    with :ok <- maybe_id(opts[:customer_id], @customer, :customer_id),
          :ok <- maybe_id(opts[:price_id], "price_", :price_id) do
       filters = [
-        customer: opts[:customer_id],
+        Mapper.customer_param(opts[:customer_id]),
         price: opts[:price_id],
         status: opts[:status],
         "expand[]": "data.customer"
@@ -748,7 +878,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def create_subscription_schedule(%SubscriptionSchedule{} = schedule, keys) do
     with :ok <- maybe_id(schedule.subscription_id, "sub_", :subscription_id),
-         :ok <- maybe_id(schedule.customer_id, "cus_", :customer_id),
+         :ok <- maybe_id(schedule.customer_id, @customer, :customer_id),
          :ok <- schedule_fits(schedule),
          :ok <- billing_fits(schedule, keys),
          {:ok, answer} <-
@@ -790,8 +920,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def list_subscription_schedules(opts, keys) do
-    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
-      filters = [customer: opts[:customer_id], scheduled: opts[:scheduled]]
+    with :ok <- maybe_id(opts[:customer_id], @customer, :customer_id) do
+      filters = [Mapper.customer_param(opts[:customer_id]), scheduled: opts[:scheduled]]
       page("/v1/subscription_schedules", filters, opts, keys, &Mapper.subscription_schedule/1)
     end
   end
@@ -832,9 +962,9 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def list_payments(opts, keys) do
-    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
+    with :ok <- maybe_id(opts[:customer_id], @customer, :customer_id) do
       filters = [
-        customer: opts[:customer_id],
+        Mapper.customer_param(opts[:customer_id]),
         "expand[]": "data.latest_charge",
         "expand[]": "data.latest_charge.refunds",
         "expand[]": "data.customer"
@@ -864,7 +994,7 @@ defmodule MishkaPay.Providers.Stripe do
   # same reference starts clean.
   @impl MishkaPay.Provider
   def create_invoice(%MishkaPay.InvoiceDraft{} = draft, keys) do
-    with :ok <- stripe_id(draft.customer_id, "cus_", :customer_id),
+    with :ok <- stripe_id(draft.customer_id, @customer, :customer_id),
          :ok <- invoice_prices(draft.items),
          :ok <- currencies(draft.items),
          :ok <- tax_rates([%{tax_rate_ids: draft.tax_rate_ids} | draft.items]),
@@ -943,7 +1073,7 @@ defmodule MishkaPay.Providers.Stripe do
   # twice.
   @impl MishkaPay.Provider
   def create_invoice_item(%InvoiceItem{} = item, keys) do
-    with :ok <- stripe_id(item.customer_id, "cus_", :customer_id),
+    with :ok <- stripe_id(item.customer_id, @customer, :customer_id),
          :ok <- maybe_id(item.invoice_id, "in_", :invoice_id),
          :ok <- tax_rates([item]),
          :ok <- item_fits(item),
@@ -975,10 +1105,10 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def list_invoice_items(opts, keys) do
-    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id),
+    with :ok <- maybe_id(opts[:customer_id], @customer, :customer_id),
          :ok <- maybe_id(opts[:invoice_id], "in_", :invoice_id) do
       filters = [
-        customer: opts[:customer_id],
+        Mapper.customer_param(opts[:customer_id]),
         invoice: opts[:invoice_id],
         pending: opts[:pending]
       ]
@@ -1027,8 +1157,8 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def list_credit_notes(opts, keys) do
     with :ok <- maybe_id(opts[:invoice_id], "in_", :invoice_id),
-         :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
-      filters = [invoice: opts[:invoice_id], customer: opts[:customer_id]]
+         :ok <- maybe_id(opts[:customer_id], @customer, :customer_id) do
+      filters = [Mapper.customer_param(opts[:customer_id]), invoice: opts[:invoice_id]]
       page("/v1/credit_notes", filters, opts, keys, &Mapper.credit_note/1)
     end
   end
@@ -1175,53 +1305,92 @@ defmodule MishkaPay.Providers.Stripe do
   defp subscription_expand,
     do: [{"expand[]", "customer"}, {"expand[]", "items.data.price.product"}]
 
+  # A customer is made on the customer's own API, else the tenant's `:customer_api`, else
+  # Accounts v2: an account with the customer configuration. Its reference makes the idempotency
+  # key, so the same reference never makes two.
   @impl MishkaPay.Provider
   def create_customer(%Customer{} = customer, keys) do
-    with :ok <- metadata(customer.metadata),
+    with {:ok, api} <- customer_api(customer.api, keys),
+         :ok <- customer_fits(customer),
          {:ok, answer} <-
-           request(:post, "/v1/customers", Mapper.customer_params(customer), keys,
+           request(:post, customers_path(api), Mapper.customer_params(customer, api), keys,
              key: ProviderKit.idempotency_key("customer", customer.tenant, customer.reference)
            ) do
       Mapper.customer(answer)
     end
   end
 
+  # A customer is read, changed and deleted with the API its id belongs to: an account (`acct_`)
+  # on Accounts v2, with its customer configuration and identity; a Customer (`cus_`) on v1.
   @impl MishkaPay.Provider
   def fetch_customer(customer_id, keys) do
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
-         {:ok, answer} <- request(:get, "/v1/customers/#{customer_id}", [], keys) do
+    with :ok <- stripe_id(customer_id, @customer, :customer_id),
+         api = Mapper.api_of_customer(customer_id),
+         {:ok, answer} <- request(:get, customer_path(customer_id), customer_read(api), keys) do
       Mapper.customer(answer)
     end
   end
 
   @impl MishkaPay.Provider
   def update_customer(%Customer{id: id} = customer, keys) do
-    with :ok <- stripe_id(id, "cus_", :id),
-         :ok <- metadata(customer.metadata),
-         {:ok, answer} <-
-           request(:post, "/v1/customers/#{id}", Mapper.customer_params(customer), keys) do
+    with :ok <- stripe_id(id, @customer, :id),
+         :ok <- customer_fits(customer),
+         params = Mapper.customer_params(customer, Mapper.api_of_customer(id)),
+         {:ok, answer} <- request(:post, customer_path(id), params, keys) do
       Mapper.customer(answer)
     end
   end
 
+  # API v2 lists the accounts with the customer configuration, and filters by no email.
   @impl MishkaPay.Provider
-  def list_customers(opts, keys),
-    do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
+  def list_customers(opts, keys) do
+    with {:ok, api} <- customer_api(opts[:api], keys),
+         :ok <- refused_if(api == :v2 and is_binary(opts[:email]), :email, :customer_v2_email) do
+      customers_page(api, opts, keys)
+    end
+  end
 
-  # Stripe deletes for good and cancels the customer's subscriptions at once; a read after answers
-  # it with `deleted: true` (`customer_deleted`).
+  defp customers_page(:v2, opts, keys) do
+    filters = %{"applied_configurations" => ["customer"]}
+    v2_page(accounts_path(:v2), filters, opts, keys, &Mapper.customer/1)
+  end
+
+  defp customers_page(:v1, opts, keys),
+    do: page(customers_path(:v1), [email: opts[:email]], opts, keys, &Mapper.customer/1)
+
+  # Stripe deletes a Customer for good and cancels its subscriptions at once; a read after answers
+  # it with `deleted: true`. An account is closed with every configuration it has, and reads back
+  # `closed`. Either reads as `customer_deleted` after.
   @impl MishkaPay.Provider
   def delete_customer(customer_id, keys) do
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
-         {:ok, _deleted} <- request(:delete, "/v1/customers/#{customer_id}", [], keys),
+    with :ok <- stripe_id(customer_id, @customer, :customer_id),
+         {:ok, _gone} <- remove_customer(Mapper.api_of_customer(customer_id), customer_id, keys),
          do: :ok
   end
+
+  defp remove_customer(:v2, account_id, keys), do: close(:v2, account_id, [], keys)
+
+  defp remove_customer(:v1, customer_id, keys),
+    do: request(:delete, customer_path(customer_id), [], keys)
+
+  defp customer_fits(customer) do
+    with :ok <- maybe_payment_method(customer.default_payment_method),
+         do: metadata(customer.metadata)
+  end
+
+  defp customers_path(:v2), do: accounts_path(:v2)
+  defp customers_path(:v1), do: "/v1/customers"
+
+  defp customer_path(id), do: customers_path(Mapper.api_of_customer(id)) <> "/" <> id
+
+  defp customer_read(:v2), do: %{"include" => Mapper.customer_includes()}
+  defp customer_read(:v1), do: []
 
   # A tax id has no reference of its own, so it goes without a fixed idempotency key: the same
   # number added again after a delete must make a new one.
   @impl MishkaPay.Provider
   def create_tax_id(%MishkaPay.TaxId{customer_id: customer_id} = tax_id, keys) do
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+    with :ok <- stripe_id(customer_id, @customer, :customer_id),
          {:ok, answer} <-
            request(
              :post,
@@ -1235,7 +1404,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def list_tax_ids(opts, keys) do
-    with :ok <- stripe_id(opts[:customer_id], "cus_", :customer_id) do
+    with :ok <- stripe_id(opts[:customer_id], @customer, :customer_id) do
       page("/v1/customers/#{opts[:customer_id]}/tax_ids", [], opts, keys, &Mapper.tax_id/1)
     end
   end
@@ -1377,7 +1546,7 @@ defmodule MishkaPay.Providers.Stripe do
   # The customer and payment method an intent names, its amount in a currency Stripe takes, and
   # metadata within Stripe's limits.
   defp intent_fits(intent) do
-    with :ok <- maybe_id(intent.customer_id, "cus_", :customer_id),
+    with :ok <- maybe_id(intent.customer_id, @customer, :customer_id),
          :ok <- maybe_payment_method(intent.payment_method_id),
          :ok <- currencies([Map.take(intent, [:amount])]) do
       metadata(intent.metadata)
@@ -1566,7 +1735,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def delete_tax_id(customer_id, tax_id_id, keys) do
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+    with :ok <- stripe_id(customer_id, @customer, :customer_id),
          :ok <- stripe_id(tax_id_id, "txi_", :tax_id_id),
          {:ok, _deleted} <-
            request(:delete, "/v1/customers/#{customer_id}/tax_ids/#{tax_id_id}", [], keys),
@@ -1574,15 +1743,18 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   # Stripe's search language: each filter quoted, a quote inside escaped; the reference is kept
-  # in the customer's metadata.
+  # in the customer's metadata. API v2 has no search; Stripe's Customer search finds the customers
+  # made on Accounts v2 too, by the Customer it links to each, and a tenant on v2 gets the account.
   @impl MishkaPay.Provider
   def search_customers(opts, keys) do
-    [
-      {"email", opts[:email]},
-      {"name", opts[:name]},
-      {"metadata['#{@reference}']", opts[:reference]}
-    ]
-    |> search("/v1/customers/search", :search_needs, opts, keys, &Mapper.customer/1)
+    with {:ok, api} <- customer_api(opts[:api], keys) do
+      [
+        {"email", opts[:email]},
+        {"name", opts[:name]},
+        {"metadata['#{@reference}']", opts[:reference]}
+      ]
+      |> search("/v1/customers/search", :search_needs, opts, keys, &Mapper.customer(&1, api))
+    end
   end
 
   # The reference and the caller's metadata are both in the subscription's metadata.
@@ -1646,19 +1818,19 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def portal_session(%MishkaPay.PortalSession{} = session, keys) do
-    with :ok <- stripe_id(session.customer_id, "cus_", :customer_id),
+    with :ok <- stripe_id(session.customer_id, @customer, :customer_id),
          :ok <- maybe_id(session.subscription_id, "sub_", :subscription_id),
          :ok <- maybe_id(session.configuration, "bpc_", :configuration),
          {:ok, answer} <-
            request(
              :post,
              "/v1/billing_portal/sessions",
-             %{
-               "customer" => session.customer_id,
-               "return_url" => session.return_url,
-               "configuration" => session.configuration,
-               "flow_data" => Mapper.portal_flow(session)
-             },
+             Map.new([
+               Mapper.customer_param(session.customer_id),
+               {"return_url", session.return_url},
+               {"configuration", session.configuration},
+               {"flow_data", Mapper.portal_flow(session)}
+             ]),
              keys
            ) do
       {:ok, %{session | id: answer["id"], url: answer["url"]}}
@@ -1730,7 +1902,7 @@ defmodule MishkaPay.Providers.Stripe do
   def list_payment_methods(opts, keys) do
     customer_id = opts[:customer_id]
 
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id) do
+    with :ok <- stripe_id(customer_id, @customer, :customer_id) do
       page(
         "/v1/customers/#{customer_id}/payment_methods",
         [],
@@ -1760,16 +1932,14 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def set_default_payment_method(customer_id, payment_method_id, keys) do
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
-         :ok <- payment_method_id(payment_method_id),
-         {:ok, customer} <-
-           request(
-             :post,
-             "/v1/customers/#{customer_id}",
-             %{"invoice_settings" => %{"default_payment_method" => payment_method_id}},
-             keys
-           ) do
-      Mapper.customer(customer)
+    with :ok <- stripe_id(customer_id, @customer, :customer_id) do
+      customer = %Customer{
+        provider: "stripe",
+        id: customer_id,
+        default_payment_method: payment_method_id
+      }
+
+      update_customer(customer, keys)
     end
   end
 
@@ -2379,7 +2549,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def adjust_customer_balance(%MishkaPay.CustomerBalanceTransaction{} = txn, keys) do
-    with :ok <- stripe_id(txn.customer_id, "cus_", :customer_id),
+    with :ok <- stripe_id(txn.customer_id, @customer, :customer_id),
          :ok <- currencies([txn]),
          {:ok, answer} <-
            request(
@@ -2397,7 +2567,7 @@ defmodule MishkaPay.Providers.Stripe do
   def list_customer_balance(opts, keys) do
     customer_id = opts[:customer_id]
 
-    with :ok <- stripe_id(customer_id, "cus_", :customer_id) do
+    with :ok <- stripe_id(customer_id, @customer, :customer_id) do
       page(
         "/v1/customers/#{customer_id}/balance_transactions",
         [],
@@ -2536,14 +2706,8 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  # The call's own choice, else the tenant's setting, else Stripe's recommended Accounts v2.
-  defp connect_api(nil, keys), do: connect_api(Map.get(keys, :connect_api) || :v2, keys)
-  defp connect_api(api, _keys) when api in [:v2, :v1], do: {:ok, api}
-  defp connect_api("v2", _keys), do: {:ok, :v2}
-  defp connect_api("v1", _keys), do: {:ok, :v1}
-
-  defp connect_api(_other, _keys),
-    do: invalid(:api, Messages.text(:choices, field: :api, choices: "v2, v1"))
+  defp connect_api(api, keys), do: choice(:api, api, :connect_api, keys, [:v2, :v1])
+  defp customer_api(api, keys), do: choice(:api, api, :customer_api, keys, [:v2, :v1])
 
   defp accounts_path(:v2), do: "/v2/core/accounts"
   defp accounts_path(:v1), do: "/v1/accounts"
@@ -2744,7 +2908,7 @@ defmodule MishkaPay.Providers.Stripe do
       [limit: opts[:limit], starting_after: opts[:after]]
       |> Kernel.++(filters)
       |> Enum.reject(fn {_name, value} -> is_nil(value) end)
-      |> Enum.map(fn {name, value} -> {Atom.to_string(name), to_string(value)} end)
+      |> Enum.map(fn {name, value} -> {to_string(name), to_string(value)} end)
 
     with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
          {:ok, items} <- data |> Enum.map(map) |> all_ok() do
@@ -2757,7 +2921,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   # One page of an API v2 list, each item mapped; the cursor of the next page is the query of
   # Stripe's `next_page_url`, which a later page sends back as it is.
-  defp v2_page(path, filters, opts, keys, map) do
+  @doc false
+  def v2_page(path, filters, opts, keys, map) do
     params = v2_page_params(opts[:after], filters, opts[:limit])
 
     with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
@@ -2808,19 +2973,76 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Stripe keeps events for 30 days and filters them by type, up to 20 types a call.
   @impl MishkaPay.Provider
+  # The tenant's kind of events (`:events`, a call's own `events:` first) picks the event API: thin
+  # events are API v2's `/v2/core/events`, each turned into an Event as a webhook's is; snapshot
+  # events are `/v1/events`.
   def list_events(opts, keys) do
     types = List.wrap(opts[:types])
 
-    case Enum.drop(types, 20) != [] do
+    with :ok <- event_types(types),
+         {:ok, kind} <- events_kind(opts[:events], keys),
+         :ok <- object_filter(kind, opts[:object_id]) do
+      events_page(kind, types, opts, keys)
+    end
+  end
+
+  # Only API v2's thin events are listed by the object they are about.
+  defp object_filter(:snapshot, object_id) when is_binary(object_id),
+    do: invalid(:object_id, Messages.text(:stripe_event_object))
+
+  defp object_filter(_kind, _object_id), do: :ok
+
+  defp event_types(types) do
+    case Enum.drop(types, 20) do
+      [] -> :ok
+      _over -> invalid(:types, Messages.text(:stripe_event_types))
+    end
+  end
+
+  defp events_page(:thin, types, opts, keys) do
+    filters = %{
+      "types" => Enum.map(types, &thin_type/1),
+      "created" => opts[:since] && %{"gte" => DateTime.to_iso8601(opts[:since])},
+      "object_id" => opts[:object_id]
+    }
+
+    v2_page("/v2/core/events", filters, opts, keys, &listed_event(&1, keys))
+  end
+
+  defp events_page(:snapshot, types, opts, keys) do
+    filters =
+      [{:"created[gte]", opts[:since] && DateTime.to_unix(opts[:since])}] ++
+        Enum.map(types, &{:"types[]", &1})
+
+    page("/v1/events", filters, opts, keys, &Mapper.event/1)
+  end
+
+  # A type is asked for by the name its Event carries or by Stripe's: `invoice.paid` is the thin
+  # `v1.invoice.paid`, and a name Stripe gives a thin event (`v1.`, `v2.`) stays.
+  defp thin_type("v" <> <<_digit, ".", _rest::binary>> = type), do: type
+  defp thin_type(type), do: "v1." <> type
+
+  defp listed_event(event, keys) do
+    with {:ok, mapped} <- Mapper.event(event), do: in_full(event, mapped, keys)
+  end
+
+  @doc false
+  def events_kind(kind, keys), do: choice(:events, kind, :events, keys, [:thin, :snapshot])
+
+  # A call's own `field` (`value`), else the tenant's `setting`, else the first of `choices`
+  # (Stripe's recommended one), given as the atom or its string; anything else is
+  # `Errors.Invalid` on `field`, naming them.
+  @doc false
+  def choice(field, value, setting, keys, [recommended | _] = choices) do
+    named = value || Map.get(keys, setting) || recommended
+    {:ok, _field, chosen} = Choice.atom(field, named, choices)
+
+    case chosen in choices do
       true ->
-        invalid(:types, Messages.text(:stripe_event_types))
+        {:ok, chosen}
 
       false ->
-        filters =
-          [{:"created[gte]", opts[:since] && DateTime.to_unix(opts[:since])}] ++
-            Enum.map(types, &{:"types[]", &1})
-
-        page("/v1/events", filters, opts, keys, &Mapper.event/1)
+        invalid(field, Messages.text(:choices, field: field, choices: Enum.join(choices, ", ")))
     end
   end
 
@@ -2835,9 +3057,53 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- same_mode(event, keys),
          {:ok, mapped} <- Mapper.event(event),
          :ok <- same_account(mapped, keys) do
-      {:ok, mapped}
+      in_full(event, mapped, keys)
     end
   end
+
+  # The related objects whose Event ids sit inside them (a charge's payment, an invoice's
+  # subscription, a tax id's customer, a Customer's account when it was made on Accounts v2); a
+  # thin event about any other names its id itself.
+  @read_through ~w(checkout.session charge refund dispute invoice invoice_payment subscription_schedule tax_id payment_method setup_intent customer radar.early_fraud_warning review entitlements.active_entitlement_summary)
+
+  # A thin event Mishka Pay maps, of a v1 resource, becomes the Event its snapshot event gives,
+  # its account's objects read as that account; any other event is already whole, and one Mishka
+  # Pay does not act on costs no request. Called only after the event is known to be this tenant's.
+  defp in_full(%{"object" => "v2.core.event", "type" => "v1." <> _ = type} = thin, mapped, keys)
+       when is_map_key(@thin, type) do
+    with {:ok, object, before} <- thin_parts(thin, as_account(keys, mapped.account)),
+         do: Mapper.thin_event(thin, object, before)
+  end
+
+  defp in_full(_whole, mapped, _keys), do: {:ok, mapped}
+
+  defp as_account(keys, nil), do: keys
+  defp as_account(keys, account), do: Map.put(keys, :account_id, account)
+
+  # A detached payment method no longer names its customer: the full event's `changes` hold the
+  # one it had (an event read from a list carries them already).
+  defp thin_parts(%{"type" => "v1.payment_method.detached", "changes" => %{} = changes}, _keys),
+    do: {:ok, nil, changes["before"]}
+
+  defp thin_parts(%{"type" => "v1.payment_method.detached", "id" => id}, keys) do
+    with :ok <- stripe_id(id, "evt_", :event_id),
+         {:ok, full} <- request(:get, "/v2/core/events/#{id}", [], keys),
+         do: thin_parts(Map.put(full, "changes", full["changes"] || %{}), keys)
+  end
+
+  # An object gone since (a deleted invoice) is named by its id alone.
+  defp thin_parts(%{"related_object" => %{"type" => type, "url" => "/v1/" <> _ = url}}, keys)
+       when type in @read_through do
+    %URI{path: path, query: query} = URI.parse(url)
+
+    case request(:get, path, URI.decode_query(query || ""), keys) do
+      {:ok, object} -> {:ok, object, nil}
+      {:error, %Errors.Rejected{code: "resource_missing"}} -> {:ok, nil, nil}
+      error -> error
+    end
+  end
+
+  defp thin_parts(_named_by_id, _keys), do: {:ok, nil, nil}
 
   @doc """
   Stripe's signature of `payload` at `timestamp` (Unix seconds) with webhook `secret`: the `v1`
@@ -3206,9 +3472,11 @@ defmodule MishkaPay.Providers.Stripe do
   defp money_off(nil), do: :ok
   defp money_off(money), do: currencies([%{amount: money}])
 
-  # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
-  # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
-  defp stripe_id(id, prefix, field) do
+  # A Stripe id is its object's prefix (or one of several), then letters, digits and underscores;
+  # anything else never reaches a path, and an id of another kind (a checkout id read as a payment)
+  # is refused here.
+  @doc false
+  def stripe_id(id, prefix, field) do
     case is_binary(id) and String.starts_with?(id, prefix) and
            Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
       true ->
@@ -3221,7 +3489,11 @@ defmodule MishkaPay.Providers.Stripe do
              %{
                field: field,
                action: :stripe_id,
-               message: Messages.text(:stripe_id, field: field, prefix: prefix)
+               message:
+                 Messages.text(:stripe_id,
+                   field: field,
+                   prefix: prefix |> List.wrap() |> Enum.join(" or ")
+                 )
              }
            ]}
         )

@@ -748,7 +748,7 @@ defmodule ShopWeb.ShopLive do
 
   defp options("stripe", params) do
     %{
-      merchant_of_record: on_off(params["merchant_of_record"]),
+      merchant_of_record: merchant(params["customer_id"], params["merchant_of_record"]),
       discounts: discounts(params["discount_mode"], blank_nil(params["discount_id"])),
       allow_promotion_codes: (params["discount_mode"] == "typed" && true) || nil,
       automatic_tax: on_off(params["automatic_tax"]),
@@ -761,6 +761,11 @@ defmodule ShopWeb.ShopLive do
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
+
+  # Stripe Managed Payments sells to no customer account (`acct_`): a buyer made on Accounts v2
+  # buys with it off unless the form chose.
+  defp merchant("acct_" <> _buyer, choice) when choice in [nil, ""], do: false
+  defp merchant(_buyer, choice), do: on_off(choice)
 
   defp discounts("code", id) when is_binary(id), do: [%{promotion_code_id: id}]
   defp discounts("coupon", id) when is_binary(id), do: [%{coupon_id: id}]
@@ -1007,6 +1012,8 @@ defmodule ShopWeb.ShopLive do
   # Stripe sends payment_intent.* and charge.refunded about a pi_ id, subscription and invoice
   # events about a sub_ id. A well-formed id that does not exist (pi_nope) still goes through: it
   # shows the inbox retry path.
+  defp id_matches_type(id, "v1." <> thin_of), do: id_matches_type(id, thin_of)
+
   defp id_matches_type(id, "payment_intent." <> _),
     do: expect_prefix(id, "pi_", "payment_intent.*")
 

@@ -96,10 +96,11 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
   thin events (`MishkaPay.Providers.Stripe.thin_events/0`: `v2.core.account.created`,
   `.updated`, `.closed`, `v2.core.account[requirements].updated`,
   `v2.core.account[configuration.merchant].capability_status_updated` and the rest) only to an
-  event destination with the thin payload (Workbench, Webhooks; a `/v1/webhook_endpoints`
-  endpoint cannot take them). Point it at the platform's webhook URL and add its signing secret
-  to the platform tenant's `webhook_secrets`; each becomes an Event whose `:object_id` and
-  `:account` are the account. A thin event carries no state: read the account.
+  event destination with the thin payload (a `/v1/webhook_endpoints` endpoint cannot take them):
+  the platform's default thin destination (`WebhookEndpoint.ensure(platform, url,
+  connected_accounts: true)`, `usage-rules/webhooks.md`) takes them with its connected accounts'
+  events; each becomes an Event whose `:object_id` and `:account` are the account. A thin event
+  carries no state: read the account.
 
 ## Connect: money between accounts
 
@@ -436,11 +437,46 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 ## Customers and the portal
 
-- The customer's `reference` is kept in its metadata as `mishka_pay_reference` and comes back as
-  `:reference`; `:default_payment_method` is the customer's invoice default.
-- `delete_customer/3` is `DELETE /v1/customers/:id`: for good, and Stripe cancels the customer's
-  subscriptions at once. A second delete of the same id is `Errors.Rejected` with code
-  `"resource_missing"`; reading it is `"customer_deleted"`.
+- Two customer APIs, one set of calls: `customer_api: :v2` (the default, Stripe's Accounts v2: an
+  account with the customer configuration, `acct_...`, the one Stripe recommends) or
+  `customer_api: :v1` (Customers, `/v1/customers`, `cus_...`) in the tenant's keys; a customer's
+  own `:api` (`MishkaPay.Customer`) and `api:` on `list_customers/3` and `search_customers/3`
+  win over it. Both answer the same `MishkaPay.Customer`, with `:api` saying which. A read, a
+  change, a default card and a delete always use the API the id belongs to, so customers made
+  with either keep working after the setting changes.
+- On v2, `:email` is `contact_email`, `:name` `display_name`, `:phone` and `:address` the
+  identity's individual's (with the address's country as the identity's), `:default_payment_method`
+  the customer configuration's `billing.default_payment_method`; on v1 they are the Customer's
+  own fields and `invoice_settings.default_payment_method`. The `reference` is kept in the
+  metadata as `mishka_pay_reference` either way and comes back as `:reference`.
+- Every call that names a customer takes either id. An `acct_` id goes to Stripe as
+  `customer_account` and a `cus_` one as `customer`: checkout, payment and setup intents,
+  subscription and schedule lists, schedules, invoices and their lists, invoice items, credit
+  note lists, payment lists, portal sessions and promotion codes. Tax ids, payment methods and the
+  customer balance are paths under `/v1/customers/:id`, which take an `acct_` id as they take a
+  `cus_` one (checked live). An answer that names both (Stripe links a Customer to every customer
+  made on v2) gives the account as `:customer_id`.
+- Stripe takes no `customer_account` yet for usage reports (`report_usage/1`, the meter's
+  `stripe_customer_id`), usage summaries, entitlements and tax calculations: these take only a
+  `cus_` id, and an `acct_` one is `Errors.Invalid` on `:customer_id` before any request. A
+  customer that needs them is made with `api: :v1`.
+- Stripe Managed Payments (merchant of record) sells to no customer account: a checkout for an
+  `acct_` customer with `merchant_of_record: true` (the checkout's or the keys') is
+  `Errors.Invalid` on `:customer` before any request, and on an account whose default is Managed
+  Payments Stripe answers `Errors.Rejected` with code `"resource_missing"` on `customer_account`
+  ("No such customer", checked live). Sell to a v2 customer with `merchant_of_record: false`, or
+  give that buyer a v1 Customer. A setup checkout turns Managed Payments off itself.
+- `list_customers/3` on v2 is `GET /v2/core/accounts` with the customer configuration: at most 20
+  a page, only each account's own fields (no identity, so no phone or address), and no `email:`
+  filter (`Errors.Invalid` on `:email`). `search_customers/3` is Stripe's Customer search
+  (`/v1/customers/search`) for either API, since v2 has no search: it finds customers made on v2
+  too, by the Customer Stripe links to each, and on v2 answers each by its account (`acct_`).
+- `delete_customer/3` on v2 closes the account with every configuration it has (read first); it
+  still reads, as `Errors.Rejected` with code `"customer_deleted"`. On v1 it is
+  `DELETE /v1/customers/:id`: for good, and Stripe cancels the customer's subscriptions at once.
+  A second delete of the same id is `Errors.Rejected` with code `"resource_missing"`; reading it
+  is `"customer_deleted"`. Reading an account without the customer configuration (a seller) as a
+  customer is `"resource_missing"`.
 - The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
   pass `configuration: "bpc_..."` to use another. Another kind of id is `Errors.Invalid` on
   `:configuration` before any request.
@@ -450,7 +486,19 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   A configuration is never deleted: `active: false` turns it off.
 - Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and
   `customer.tax_id.created`, `.updated` and `.deleted` for a customer's tax ids; the event's
-  `:customer_id` names the customer, and the Ash customer listener syncs the row on each.
+  `:customer_id` names the customer, and the Ash customer listener syncs the row on each. A
+  customer made on v2 sends thin events instead, only to an event destination with the thin
+  payload (see Connect). As read live: making it sends `v2.core.account.created` and
+  `v2.core.account[configuration.customer].updated` (and `[identity].updated` with a phone or
+  address); a new invoice default `[configuration.customer].updated`; a new email or name
+  `v2.core.account.updated`; a new phone or address `[identity].updated`; a close
+  `v2.core.account.closed`. Each of these names the account as its `:customer_id` too, so the
+  Ash customer listener syncs the row on a change made outside Mishka Pay to a v2 customer's
+  email, name, phone or address, or its close. `v2.core.account.updated`, `.closed` and
+  `[identity].updated` look the same for a seller's account: there the listener's read answers
+  `resource_missing` (the account has no customer configuration) and the event counts as done,
+  with no row written. Its subscriptions and invoices still send v1 snapshot events, and read
+  back with the account as their `:customer_id`.
 - Tax ids start with `txi_`. Stripe checks EU VAT, GB VAT and AU ABN numbers against the
   government register after they are added: `:verification` is `:pending` first, and
   `customer.tax_id.updated` comes when the check ends. Other kinds get their format checked only.
@@ -469,10 +517,11 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   Stripe takes no setup mode with it. The reference goes on the SetupIntent's metadata.
 - `fetch_checkout/3` expands the SetupIntent: `:setup_intent_id` (`seti_`), `:payment_method_id`
   (`pm_`) once the buyer is done, and the customer's id under `:customer`.
-- `list_payment_methods/3` reads `GET /v1/customers/:id/payment_methods`; `customer_id:` is
-  required.
-- `set_default_payment_method/4` sets the customer's `invoice_settings.default_payment_method`,
-  which invoices and subscriptions charge.
+- `list_payment_methods/3` reads `GET /v1/customers/:id/payment_methods` (an `acct_` id too);
+  `customer_id:` is required.
+- `set_default_payment_method/4` sets the customer's invoice default, which invoices and
+  subscriptions charge: on v2 the account's `configuration.customer.billing.default_payment_method`,
+  on v1 the Customer's `invoice_settings.default_payment_method`.
 - `detach_payment_method/3` is for good: Stripe never attaches that payment method again.
 - Payment method ids are checked by prefix: `pm_`, or `card_` for a card saved before them.
 - `setup_intent.*` and `payment_method.*` events are about the customer they name (a detached
@@ -507,7 +556,10 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   no longer takes (401) is dropped and the report sent once more with a new one. A site acting
   for a connected account sends it as `Stripe-Context` (API v2's `Stripe-Account`).
 - A streamed report is checked by Stripe after it answers: a wrong customer or event name is not
-  an error in the answer but a `v1.billing.meter.error_report_triggered` thin event later. Its
+  an error in the answer but a `v1.billing.meter.error_report_triggered` (or `.no_meter_found`)
+  thin event later, which the default thin destination takes: a `MishkaPay.Event` with
+  `:object_type` `"billing.meter"` and the meter as `:object_id`, for the host's own listener;
+  a site on snapshot events never gets it (`usage-rules/webhooks.md`). A report's
   `:id` is its identifier (the reference's, or one Mishka Pay makes), so `cancel_usage/1` takes
   it like any other. Without `stream:` a report goes to `POST /v1/billing/meter_events`, which
   checks it before answering.

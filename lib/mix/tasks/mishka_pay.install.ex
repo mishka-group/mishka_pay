@@ -122,8 +122,9 @@ if Code.ensure_loaded?(Igniter) do
 
         * Give the keys: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET (test keys outside production),
           or answer each site's own in #{inspect(keys)}.
-        * Point Stripe's webhook to https://<your host>/pay/webhooks/stripe/<tenant> and send it the
-          events in MishkaPay.Providers.Stripe.handled_events/0.
+        * Point Stripe's webhook to https://<your host>/pay/webhooks/stripe/<tenant>:
+          mix mishka_pay.stripe.webhook_endpoint --url <it> makes a thin event destination with
+          the events in MishkaPay.Providers.Stripe.thin_events/0.
         * Open a checkout: MishkaPay.checkout(%{provider: "stripe", ...}).
       """)
     end

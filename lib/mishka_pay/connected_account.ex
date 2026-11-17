@@ -115,13 +115,13 @@ defmodule MishkaPay.ConnectedAccount do
   end
 
   @doc false
-  def api(field, value), do: Choice.atom(field, value, ~w(v2 v1))
+  def api(field, value), do: Choice.atom(field, value, ~w(v2 v1)a)
 
   @doc false
-  def dashboard(field, value), do: Choice.atom(field, value, ~w(express full none))
+  def dashboard(field, value), do: Choice.atom(field, value, ~w(express full none)a)
 
   @doc false
-  def collector(field, value), do: Choice.atom(field, value, ~w(application stripe))
+  def collector(field, value), do: Choice.atom(field, value, ~w(application stripe)a)
 
   @doc false
   def configurations(field, values),

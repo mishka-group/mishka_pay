@@ -81,9 +81,9 @@ defmodule MishkaPay.PortalConfiguration do
 
   @doc false
   def subscription_cancel(field, value),
-    do: Choice.atom(field, value, ~w(off immediately at_period_end))
+    do: Choice.atom(field, value, ~w(off immediately at_period_end)a)
 
   @doc false
   def proration(field, value),
-    do: Choice.atom(field, value, ~w(create_prorations always_invoice none))
+    do: Choice.atom(field, value, ~w(create_prorations always_invoice none)a)
 end

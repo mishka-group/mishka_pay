@@ -395,8 +395,10 @@ defmodule MishkaPay do
 
   @doc """
   Makes a customer from `attrs` (see `MishkaPay.Customer`): `:provider`, `:tenant`, and the
-  buyer's `:email`, `:name`, `:phone`, `:reference`, `:metadata`. Keep its `:id` on the host's
-  user to sell to them again.
+  buyer's `:email`, `:name`, `:phone`, `:address`, `:reference`, `:metadata`; `:api` picks the
+  provider's API (else the tenant's `:customer_api`, `:v2` by default: at Stripe an account with
+  the customer configuration, `acct_...`). Keep its `:id` on the host's user to sell to them
+  again.
   """
   @spec create_customer(map()) :: {:ok, Customer.t()} | {:error, Splode.Error.t()}
   def create_customer(attrs) when is_map(attrs) do
@@ -421,7 +423,10 @@ defmodule MishkaPay do
     end)
   end
 
-  @doc "Reads customer `customer_id` again from `provider`, with `tenant`'s keys."
+  @doc """
+  Reads customer `customer_id` again from `provider`, with `tenant`'s keys, on the API its id
+  belongs to (at Stripe `acct_...` on Accounts v2, `cus_...` on Customers).
+  """
   @spec fetch_customer(String.t(), String.t(), term()) ::
           {:ok, Customer.t()} | {:error, Splode.Error.t()}
   def fetch_customer(provider, customer_id, tenant \\ nil)
@@ -443,7 +448,9 @@ defmodule MishkaPay do
 
   @doc """
   One page of customers at `provider`, newest first (`MishkaPay.Page`): `email:` only those with
-  that email, plus the list options `limit:` and `after:`.
+  that email, plus the list options `limit:` and `after:`. `api:` lists on `:v2` or `:v1` instead
+  of the tenant's `:customer_api`; Stripe's Accounts v2 lists have no email filter (find by email
+  with `search_customers/3`) and hold at most 20 a page.
   """
   @spec list_customers(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -1769,7 +1776,9 @@ defmodule MishkaPay do
   @doc """
   One page of `provider`'s customers that match every filter given (`MishkaPay.Page`): `email:`,
   `name:`, `reference:` (the host's own id given when the customer was made), plus `limit:` and
-  `after:`. A customer just made may take a minute to be found.
+  `after:`. A customer just made may take a minute to be found. `api:` (else the tenant's
+  `:customer_api`) is the API the found customers are named by: Stripe searches its Customers,
+  which include those made on Accounts v2, and on `:v2` each of those answers its account id.
   """
   @spec search_customers(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -2073,8 +2082,12 @@ defmodule MishkaPay do
 
   @doc """
   One page of `provider`'s events for `tenant`, newest first (`MishkaPay.Page`), each a
-  `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, plus `limit:` and
-  `after:`.
+  `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, `object_id:` only the
+  events about that object (thin events only), plus `limit:` and `after:`. At a provider with two kinds of events, `events:` (`:thin` or `:snapshot`, else the
+  tenant's `:events`) picks which are read: Stripe's thin events come from API v2
+  (`/v2/core/events`, 20 a page), each the same Event its webhook gives, named as its snapshot
+  event (`invoice.paid`), and `types:` takes those names or Stripe's thin ones
+  (`v1.invoice.paid`); snapshot events from `/v1/events`.
   """
   @spec list_events(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -2089,7 +2102,8 @@ defmodule MishkaPay do
   delivered, when the provider says which: the window is read once, a hundred events a request,
   and the others are left out. `types:` names the events to deliver instead, and asks the
   provider for only those (Stripe takes 20 types a request). A listener keeps each event once, so
-  one already taken is not done twice.
+  one already taken is not done twice. `events:` reads the thin or the snapshot events, as in
+  `list_events/3`: replay the kind the site's webhook takes, so the ids match those it kept.
 
   Answers how many were delivered and which failed, by event id.
   """
@@ -2110,10 +2124,13 @@ defmodule MishkaPay do
     end
   end
 
+  # The events the provider acts on, by their Event type: of both kinds when it has two.
   defp handled(module) do
-    case function_exported?(module, :handled_events, 0) do
-      true -> module.handled_events()
-      false -> nil
+    case {function_exported?(module, :event_types, 0),
+          function_exported?(module, :handled_events, 0)} do
+      {true, _snapshot} -> module.event_types()
+      {false, true} -> module.handled_events()
+      {false, false} -> nil
     end
   end
 

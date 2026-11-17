@@ -82,6 +82,7 @@ defmodule MishkaPay.Messages do
           | :capability_names
           | :connect_not_set_up
           | :connect_v1_customer
+          | :customer_v2_email
           | :connect_capability_v1
           | :connect_capability_v2
           | :connect_needs_sandbox
@@ -126,6 +127,7 @@ defmodule MishkaPay.Messages do
           | :evidence_page_limit
           | :due_sent_only
           | :stripe_event_types
+          | :stripe_event_object
           | :search_needs
           | :subscription_search_needs
           | :subscription_status
@@ -153,6 +155,7 @@ defmodule MishkaPay.Messages do
           | :intent_of_invoice
           | :intent_of_checkout
           | :endpoint_url
+          | :thin_needs_v2
           | :dropdown_options
           | :declined
           | :declined_reason
@@ -476,6 +479,13 @@ defmodule MishkaPay.Messages do
         "The configurations field cannot hold customer on Accounts v1: make the account with Accounts v2"
       )
 
+  defp msgid(:customer_v2_email),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Accounts v2 lists customers without an email filter: search customers by email, or list them with api v1"
+      )
+
   defp msgid(:connect_capability_v1),
     do:
       dgettext_noop(
@@ -735,6 +745,13 @@ defmodule MishkaPay.Messages do
         "The webhook address must be an https URL, such as https://shop.example/pay/webhooks/stripe"
       )
 
+  defp msgid(:thin_needs_v2),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Thin events come only through an event destination: use the v2 webhook API, or snapshot events"
+      )
+
   defp msgid(:subscription_of_another),
     do:
       dgettext_noop(
@@ -879,6 +896,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
+
+  defp msgid(:stripe_event_object),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Only thin events are listed by the object they are about; read them with events: :thin"
+      )
 
   defp msgid(:meter_interval),
     do: dgettext_noop("mishka_pay", "A price on a meter needs an interval to bill its usage")

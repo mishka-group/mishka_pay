@@ -170,7 +170,7 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 | Dispute | `:sync` | `provider`, `dispute_id`, `tenant` |
 | Dispute | `:submit_evidence` (update) | `evidence` (the provider's field names), `submit` |
 | Dispute | `:accept` (update) | none |
-| Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata`; the user attribute with `belongs_to_user` |
+| Customer | `:register` | `provider`, `tenant`, `api` (`:v2`/`:v1`, else the keys' `customer_api`), `email`, `name`, `phone`, `reference`, `metadata`; the user attribute with `belongs_to_user` |
 | Customer | `:sync` | `provider`, `customer_id`, `tenant`; a deleted customer gets `deleted_at` |
 | Customer | `:edit` (update) | `email`, `name`, `phone`, `metadata` |
 | Customer | `:remove` (update) | none; deletes it at the provider for good and sets `deleted_at` (destroy the row too to erase the host's copy) |

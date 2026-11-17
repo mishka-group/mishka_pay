@@ -19,7 +19,10 @@ if Code.ensure_loaded?(Ash) do
     `<Resource>.MishkaPayListener`; write one by hand with `listen? false`, such as to give it
     another `:priority`. Supervise it like any plugin. An event about anything else is left
     alone; a customer the provider cannot give fails the event, so the inbox tries it again
-    later.
+    later. At Stripe a customer made on Accounts v2 sends the same account events as a seller's
+    account (`v2.core.account.updated`, `.closed`, `[identity].updated`), each naming the
+    account as its customer: an account the read finds is no customer (`resource_missing`) is
+    left alone, and its event is done.
     """
 
     @doc false
@@ -48,7 +51,25 @@ if Code.ensure_loaded?(Ash) do
     end
 
     @doc false
-    def sync(resource, event, state),
-      do: MishkaPay.Ash.sync_event(resource, :customer_id, event.customer_id, event, state)
+    def sync(resource, %MishkaPay.Event{customer_id: id} = event, state),
+      do:
+        MishkaPay.Ash.sync_event(
+          resource,
+          :customer_id,
+          id,
+          event,
+          state,
+          &not_a_customer?(id, &1)
+        )
+
+    # An account event names the account as its customer; one that is only a seller is none.
+    defp not_a_customer?("acct_" <> _id, error),
+      do:
+        match?(
+          %MishkaPay.Errors.Rejected{code: "resource_missing"},
+          MishkaPay.Ash.provider_error(error)
+        )
+
+    defp not_a_customer?(_customer_id, _error), do: false
   end
 end

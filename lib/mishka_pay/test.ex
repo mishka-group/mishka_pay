@@ -287,17 +287,54 @@ defmodule MishkaPay.Test do
       when is_binary(type) and is_map(object) and is_binary(secret) do
     at = Keyword.get_lazy(opts, :at, fn -> System.system_time(:second) end)
 
-    body =
-      JSON.encode!(%{
-        "id" =>
-          Keyword.get_lazy(opts, :id, fn -> "evt_test_#{System.unique_integer([:positive])}" end),
+    signed(
+      %{
+        "id" => event_id(opts),
         "object" => "event",
         "type" => type,
         "created" => at,
         "livemode" => Keyword.get(opts, :livemode, false),
         "data" => %{"object" => object}
-      })
+      },
+      at,
+      secret
+    )
+  end
 
+  @doc """
+  A Stripe thin event notification of `type` (`"v1.invoice.paid"`) about `related` (its
+  `related_object`: `%{"id" => "in_1", "type" => "invoice", "url" => "/v1/invoices/in_1"}`), as an
+  event destination with the thin payload sends it, signed with webhook `secret`:
+  `{body, headers}`. `opts` as `signed_event/4`, and `context:` the connected account it comes
+  from. The webhook reads the related object when the event's ids sit inside it: stub that read
+  with `stub_http/1`.
+  """
+  @spec signed_thin_event(String.t(), map(), String.t(), keyword()) ::
+          {binary(), [{String.t(), String.t()}]}
+  def signed_thin_event(type, related, secret, opts \\ [])
+      when is_binary(type) and is_map(related) and is_binary(secret) do
+    at = Keyword.get_lazy(opts, :at, fn -> System.system_time(:second) end)
+
+    signed(
+      %{
+        "id" => event_id(opts),
+        "object" => "v2.core.event",
+        "type" => type,
+        "created" => at |> DateTime.from_unix!() |> DateTime.to_iso8601(),
+        "livemode" => Keyword.get(opts, :livemode, false),
+        "context" => opts[:context],
+        "related_object" => related
+      },
+      at,
+      secret
+    )
+  end
+
+  defp event_id(opts),
+    do: Keyword.get_lazy(opts, :id, fn -> "evt_test_#{System.unique_integer([:positive])}" end)
+
+  defp signed(event, at, secret) do
+    body = JSON.encode!(event)
     signature = MishkaPay.Providers.Stripe.signature(body, at, secret)
 
     {body,

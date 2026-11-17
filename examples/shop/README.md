@@ -22,14 +22,14 @@ without leaning on text or layout.
 | **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
 | **Subscriptions**, live | `Shop.Pay.Subscription` rows (`mishka_pay do kind :subscription end`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.list_invoices/3`); cancel at the period's end or now, keep it going, sync; a new plan or quantity with **Preview the bill** (`MishkaPay.preview_subscription_change/1`) then **Apply** (`:change`); pause and resume collection |
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
-| **Webhook simulator** | a Stripe event about a payment or subscription in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
+| **Webhook simulator** | a Stripe event about a payment or subscription, as a snapshot event or (a `v1.` type) a thin event notification, in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
 | **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |
 | **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job; every Mishka Pay call and HTTP request with its outcome and time |
 | **Site settings** | refund rule, merchant of record, Stripe Tax and shop open or closed, in the database, read on every call |
 | **Sell a product with one link** (`/sell`, the top card) | one button runs `MishkaPay.create_product/1`, `create_price/1` and `create_payment_link/1` with every Stripe field, shows each call, and ends on the buyer's link; **Undo all of it** turns the link off and archives the price and product |
 | **Payment links** | `MishkaPay.create_payment_link/1` with a purchase limit (one-time, limited or none), quantity range, trial, invoice and tax choices; `PaymentLink.url/2` for one buyer; turn off or change it (`update_payment_link/1`); the list from `list_payment_links/3` |
 | **Catalog** | the shop's products beside their Stripe product and prices (`create_product/1`, `create_price/1`, `archive_price/3`) |
-| **Customers** | `Shop.Pay.Customer` rows: register, edit, sync, open Stripe's customer portal (`:portal`) |
+| **Customers** | `Shop.Pay.Customer` rows: register (on Stripe's Accounts v2 by default, an account with the customer configuration, or as a v1 Customer), edit, sync, open Stripe's customer portal (`:portal`); "Buy as this customer" sells to a v2 customer as `customer_account`, with merchant of record off (Managed Payments sells to no account) |
 | **Coupons** and promotion codes | `MishkaPay.create_coupon/1` (percent or amount, once, repeating or forever, a use limit) and `create_promotion_code/1` (for one customer only, first order, a minimum, an end date, a use limit) |
 | **Disputes**, live | `Shop.Pay.Dispute` rows from `charge.dispute.*` webhooks or **Read disputes**; evidence (`:submit_evidence`) and **Accept the loss** (`:accept`). Pay with 4000 0000 0000 0259 to make one |
 | **Members and access** | sign in by email (`Shop.Accounts.Member`, a demo with no password, kept in the session); a plan bought while signed in runs `:start_checkout` with the member as the actor, so the subscription belongs to them (`belongs_to_user`); the members-only post opens when `MishkaPay.Ash.subscribed?/3` says so; the member's rows with `active?`, `on_trial?` and `canceling?` |
@@ -100,6 +100,13 @@ export STRIPE_WEBHOOK_SECRET=whsec_...   # the secret `stripe listen` prints
 ```
 
 `demo` is the site (tenant) the shop runs as; each site of a multi-site project has its own URL.
+
+The site takes Stripe's thin events by default (`events: :thin` in its keys). In **Operations**,
+"Kind of endpoint" shows the site's kind and picks another; "Make endpoint" makes a thin event
+destination at a public URL (a tunnel to the shop), whose signing secret goes in
+`STRIPE_WEBHOOK_SECRET` (an older endpoint's secret in `STRIPE_WEBHOOK_SECRET_OLD` while both
+run). "Read events" and "Replay since" read the kind picked: thin from `/v2/core/events`,
+snapshot from `/v1/events`.
 
 After rolling the endpoint's secret in Stripe, put the new one in `STRIPE_WEBHOOK_SECRET` and the
 old one in `STRIPE_WEBHOOK_SECRET_OLD` (several with commas) until Stripe stops signing with it:

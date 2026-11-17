@@ -65,6 +65,21 @@ defmodule MishkaPay.Credentials do
       `:v1` (Stripe's Accounts v1, still needed for OAuth, Treasury, card issuing and older
       capabilities). A call's own `:api` still wins (`MishkaPay.ConnectedAccount`,
       `MishkaPay.AccountLink`, `api:` on a read, a list or a close).
+    * `:customer_api`: which of the provider's APIs makes this tenant's customers, at a provider
+      that has two. `:v2` (the default: Stripe's Accounts v2, an account with the customer
+      configuration, `acct_...`, the one Stripe recommends) or `:v1` (Stripe's Customers,
+      `cus_...`). A customer's own `:api` (`MishkaPay.Customer`) and `api:` on a list or a search
+      still win; a customer made with either is read, changed and sold to with either setting.
+    * `:events`: how the provider sends this tenant's events, at a provider that has two kinds.
+      `:thin` (the default: Stripe's thin events, the format Stripe recommends, a small
+      notification Mishka Pay reads the rest for) or `:snapshot` (each event carries its object
+      as it was). It picks the kind `MishkaPay.Providers.Stripe.WebhookEndpoint` sets up and the
+      event API `MishkaPay.list_events/3` and `MishkaPay.replay_events/3` read; a call's own
+      `events:` still wins. The webhook takes either kind whatever it says.
+    * `:webhook_api`: which of the provider's APIs keeps this tenant's webhook endpoint. `:v2`
+      (the default: Stripe's event destinations, `/v2/core/event_destinations`, the only one for
+      thin events) or `:v1` (Stripe's `/v1/webhook_endpoints`, snapshot events only). A call's
+      own `api:` still wins.
 
   These are read at runtime on every call, never from `config.exs`, so each tenant of a
   multi-site project carries its own and a change in its settings applies to the next call.
@@ -74,6 +89,8 @@ defmodule MishkaPay.Credentials do
 
   `inspect/1` shows only the provider, the tenant and the mode, so a key never reaches a log line.
   """
+
+  alias MishkaPay.Helpers.Choice
 
   use GuardedStruct
 
@@ -122,7 +139,22 @@ defmodule MishkaPay.Credentials do
     field :connect_api, :v2 | :v1,
       default: :v2,
       derives: "validate(not_nil_value, enum=Atom[v2::v1])",
-      validator: {__MODULE__, :connect_api}
+      validator: {__MODULE__, :api}
+
+    field :customer_api, :v2 | :v1,
+      default: :v2,
+      derives: "validate(not_nil_value, enum=Atom[v2::v1])",
+      validator: {__MODULE__, :api}
+
+    field :events, :thin | :snapshot,
+      default: :thin,
+      derives: "validate(not_nil_value, enum=Atom[thin::snapshot])",
+      validator: {__MODULE__, :events}
+
+    field :webhook_api, :v2 | :v1,
+      default: :v2,
+      derives: "validate(not_nil_value, enum=Atom[v2::v1])",
+      validator: {__MODULE__, :api}
 
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
 
@@ -285,19 +317,22 @@ defmodule MishkaPay.Credentials do
 
   # A plugin that reads its keys from JSON or settings answers the mode as a string.
   @doc false
-  def mode(:mode, mode) when mode in ["test", "live"],
-    do: {:ok, :mode, String.to_existing_atom(mode)}
+  def mode(:mode, mode) when is_binary(mode),
+    do: Choice.atom(:mode, mode, ~w(test live)a)
 
   def mode(:mode, mode), do: {:ok, :mode, mode}
 
   @doc false
-  def refunds(:refunds, refunds) when refunds in ["once", "many"],
-    do: {:ok, :refunds, String.to_existing_atom(refunds)}
+  def refunds(:refunds, refunds) when is_binary(refunds),
+    do: Choice.atom(:refunds, refunds, ~w(once many)a)
 
   def refunds(:refunds, refunds), do: {:ok, :refunds, refunds}
 
   @doc false
-  def connect_api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
+  def api(field, api), do: Choice.atom(field, api, ~w(v2 v1)a)
+
+  @doc false
+  def events(field, kind), do: Choice.atom(field, kind, ~w(thin snapshot)a)
 
   defp missing(provider, tenant, reason),
     do:

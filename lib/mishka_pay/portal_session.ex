@@ -56,7 +56,7 @@ defmodule MishkaPay.PortalSession do
       MishkaPay.Helpers.Choice.atom(
         field,
         value,
-        ~w(subscription_cancel subscription_update payment_method_update)
+        ~w(subscription_cancel subscription_update payment_method_update)a
       )
 
   # A subscription flow names its subscription.

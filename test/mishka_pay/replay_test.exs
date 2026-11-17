@@ -12,7 +12,7 @@ defmodule MishkaPay.ReplayTest do
   setup do
     MishkaPay.Test.start_plugin!(Stripe)
     MishkaPay.Test.start_plugin!(EventListener)
-    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a"}, "site-a")
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a", events: :snapshot}, "site-a")
     :ok
   end
 

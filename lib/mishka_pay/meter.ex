@@ -45,5 +45,5 @@ defmodule MishkaPay.Meter do
 
   @doc false
   def aggregation(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(sum count last))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(sum count last)a)
 end

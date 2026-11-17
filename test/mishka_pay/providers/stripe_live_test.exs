@@ -198,7 +198,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     since = DateTime.add(DateTime.utc_now(), -3600)
 
     assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Event{type: "charge.refunded"} | _]}} =
-             MishkaPay.list_events("stripe", nil, since: since, types: ["charge.refunded"])
+             MishkaPay.list_events("stripe", nil,
+               since: since,
+               types: ["charge.refunded"],
+               events: :snapshot
+             )
 
     assert {:ok, %Refund{id: ^rest_id, payment_id: ^id, reference: "rest-" <> _, amount: rest}} =
              MishkaPay.fetch_refund("stripe", rest_id)
@@ -571,12 +575,13 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {status, answer}
   end
 
-  test "a customer is deleted on Stripe for good: it reads back deleted, and a second delete is refused" do
+  test "a v1 customer is deleted on Stripe for good: it reads back deleted, and a second delete is refused" do
     run = run_id()
 
     {:ok, %MishkaPay.Customer{id: id}} =
       MishkaPay.create_customer(%{
         provider: "stripe",
+        api: :v1,
         email: "erase-#{run}@example.com",
         reference: "erase-#{run}"
       })
@@ -605,9 +610,12 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       cleanup(key, &delete_customer(customer, &1))
     end)
 
+    # A customer made on Accounts v2 (the default) is named as `customer_account`.
+    {customer_param, ^customer} = Stripe.Mapper.customer_param(customer)
+
     {200, %{"id" => id, "items" => %{"data" => [%{"price" => %{"id" => price}}]}}} =
       stripe(key, :post, "/v1/subscriptions", %{
-        "customer" => customer,
+        customer_param => customer,
         "trial_period_days" => 7,
         "metadata" => %{"mishka_pay_reference" => "subs-#{run}"},
         "items" => [
@@ -778,7 +786,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     refute Exception.message(error) =~ doc_url
   end
 
-  test "a customer is made, changed, found by email and read on Stripe, and its portal opens" do
+  test "a v1 customer is made, changed, found by email and read on Stripe, and its portal opens" do
     run = run_id()
     email = "live-#{run}@example.com"
     reference = "user-live-#{run}"
@@ -786,6 +794,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Customer{id: id, reference: ^reference}} =
              MishkaPay.create_customer(%{
                provider: "stripe",
+               api: :v1,
                email: email,
                name: "Live Buyer",
                reference: reference
@@ -795,7 +804,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.update_customer(%{provider: "stripe", id: id, name: "Live Buyer 2"})
 
     assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{id: ^id}]}} =
-             MishkaPay.list_customers("stripe", nil, email: email)
+             MishkaPay.list_customers("stripe", nil, email: email, api: :v1)
 
     assert {:ok, %MishkaPay.Customer{email: ^email}} = MishkaPay.fetch_customer("stripe", id)
 
@@ -804,6 +813,138 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok,
             %MishkaPay.PortalSession{id: "bps_" <> _, url: "https://billing.stripe.com/" <> _}} =
              MishkaPay.portal_session(session)
+  end
+
+  test "a customer is made on Accounts v2 once per reference, read, changed, listed and closed" do
+    run = run_id()
+    reference = "v2-buyer-#{run}"
+    email = "v2-#{run}@example.com"
+
+    customer = %{
+      provider: "stripe",
+      email: email,
+      name: "V2 Buyer",
+      phone: "+15125550100",
+      address: %{
+        country: "US",
+        line1: "1 Main St",
+        city: "Austin",
+        state: "TX",
+        postal_code: "78701"
+      },
+      reference: reference
+    }
+
+    assert {:ok,
+            %MishkaPay.Customer{
+              id: "acct_" <> _ = id,
+              api: :v2,
+              email: ^email,
+              name: "V2 Buyer",
+              phone: "+15125550100",
+              address: %MishkaPay.Address{country: "US", city: "Austin", postal_code: "78701"},
+              reference: ^reference
+            }} = MishkaPay.create_customer(customer)
+
+    assert {:ok, %MishkaPay.Customer{id: ^id}} = MishkaPay.create_customer(customer)
+
+    assert {:ok, %MishkaPay.Customer{id: ^id, name: "V2 Buyer 2", email: ^email}} =
+             MishkaPay.update_customer(%{provider: "stripe", id: id, name: "V2 Buyer 2"})
+
+    assert {:ok, %MishkaPay.Customer{id: ^id, name: "V2 Buyer 2", reference: ^reference}} =
+             MishkaPay.fetch_customer("stripe", id)
+
+    assert %MishkaPay.Customer{api: :v2} =
+             (&MishkaPay.list_customers("stripe", nil, &1))
+             |> MishkaPay.Page.stream()
+             |> Enum.take(100)
+             |> Enum.find(&(&1.id == id))
+
+    assert :ok = MishkaPay.delete_customer("stripe", id)
+
+    assert {:error, %Errors.Rejected{code: "customer_deleted"}} =
+             MishkaPay.fetch_customer("stripe", id)
+  end
+
+  test "a customer made on Accounts v2 buys through a checkout and a PaymentIntent by customer_account, and keeps the card",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: "acct_" <> _ = customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "v2-buy-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    checkout = %{
+      provider: "stripe",
+      items: [
+        %{name: "Ebook", amount: %{amount: "9.00", currency: "USD"}, tax_code: "txcd_10302000"}
+      ],
+      customer: %{id: customer},
+      success_url: "https://shop.test/thanks",
+      cancel_url: "https://shop.test/cart",
+      reference: "v2-checkout-#{run}"
+    }
+
+    # This account sells as the merchant of record by default (Managed Payments), which takes no
+    # customer account: Stripe answers as if the account did not exist.
+    assert {:error, %Errors.Rejected{code: "resource_missing", param: "customer_account"}} =
+             MishkaPay.checkout(checkout)
+
+    assert {:ok, %Checkout{id: "cs_test_" <> _ = checkout_id}} =
+             MishkaPay.checkout(
+               Map.merge(checkout, %{merchant_of_record: false, reference: "v2-off-#{run}"})
+             )
+
+    assert {:ok, %Checkout{customer: %MishkaPay.Customer{id: ^customer}}} =
+             MishkaPay.fetch_checkout("stripe", checkout_id)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: "pi_" <> _ = id, customer_id: ^customer}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "12.00", currency: "USD"},
+               customer_id: customer,
+               setup_future_usage: :off_session,
+               reference: "v2-intent-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.PaymentIntent{status: :succeeded, payment_method_id: "pm_" <> _ = pm}} =
+             MishkaPay.confirm_payment_intent("stripe", id, nil,
+               payment_method_id: "pm_card_mastercard",
+               return_url: "https://shop.test/paid"
+             )
+
+    assert {:ok, %Payment{id: ^id, status: :paid, customer_id: ^customer}} =
+             MishkaPay.fetch_payment("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: ^pm}]}} =
+             MishkaPay.list_payment_methods("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.Customer{id: ^customer, default_payment_method: ^pm}} =
+             MishkaPay.set_default_payment_method("stripe", customer, pm)
+  end
+
+  test "a v1 Customer still buys by customer, and is deleted for good" do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: "cus_" <> _ = customer, api: :v1}} =
+      MishkaPay.create_customer(%{provider: "stripe", api: :v1, email: "v1-#{run}@example.com"})
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: id, customer_id: ^customer}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "7.00", currency: "USD"},
+               customer_id: customer,
+               reference: "v1-intent-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.PaymentIntent{status: :succeeded}} =
+             MishkaPay.confirm_payment_intent("stripe", id, nil,
+               payment_method_id: "pm_card_mastercard",
+               return_url: "https://shop.test/paid"
+             )
+
+    assert :ok = MishkaPay.delete_customer("stripe", customer)
   end
 
   test "a business buyer's VAT number is added to a new customer, listed and removed" do
@@ -1041,6 +1182,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
+  # Some twenty Stripe calls in a row, against a sandbox that answers in seconds each.
+  @tag timeout: 180_000
   test "a one-off bill is made with its items, opened, sent, paid by hand, and another voided or given up" do
     run = run_id()
 
@@ -1375,19 +1518,113 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {paid.status, given} == {:issued, Money.new(:USD, "10.00")}
   end
 
-  test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
+  test "a site's v1 webhook endpoint is made with every handled event, then checked and deleted" do
     url = "https://example.com/pay/webhooks/stripe/live-#{run_id()}"
+    v1 = [api: :v1, events: :snapshot]
 
-    assert {:ok, %WebhookEndpoint{id: id, secret: "whsec_" <> _, api_version: version}} =
-             WebhookEndpoint.ensure(nil, url)
+    assert {:ok,
+            %WebhookEndpoint{id: "we_" <> _ = id, secret: "whsec_" <> _, api_version: version}} =
+             WebhookEndpoint.ensure(nil, url, v1)
 
     on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
     assert version == Stripe.version()
-    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} = WebhookEndpoint.check(nil, url)
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} = WebhookEndpoint.check(nil, url, v1)
+    assert {:ok, %WebhookEndpoint{id: ^id, secret: nil}} = WebhookEndpoint.ensure(nil, url, v1)
+    assert :ok = WebhookEndpoint.delete(nil, id)
+    assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url, v1)
+  end
+
+  test "a thin event destination is made with every thin event, read, turned off and on, and deleted" do
+    url = "https://example.com/pay/webhooks/stripe/thin-#{run_id()}"
+
+    assert {:ok,
+            %WebhookEndpoint{
+              id: "ed_" <> _ = id,
+              api: :v2,
+              events: :thin,
+              url: ^url,
+              status: :enabled,
+              secret: "whsec_" <> _,
+              events_from: ["@self"],
+              api_version: nil
+            }} = WebhookEndpoint.ensure(nil, url)
+
+    on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
+
+    assert {:ok, %{endpoint: %WebhookEndpoint{id: ^id, secret: nil}, missing: []}} =
+             WebhookEndpoint.check(nil, url)
+
+    assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url, events: :snapshot)
     assert {:ok, %WebhookEndpoint{id: ^id, secret: nil}} = WebhookEndpoint.ensure(nil, url)
+    assert {:ok, %WebhookEndpoint{id: ^id, status: :disabled}} = WebhookEndpoint.disable(nil, id)
+    assert {:ok, %WebhookEndpoint{id: ^id, status: :enabled}} = WebhookEndpoint.enable(nil, id)
     assert :ok = WebhookEndpoint.delete(nil, id)
     assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url)
   end
+
+  # Stripe keeps a snapshot destination made on API v2 as a webhook endpoint (`we_...`), changed
+  # on either API.
+  test "a snapshot event destination is rendered in the pinned API version" do
+    url = "https://example.com/pay/webhooks/stripe/snapshot-#{run_id()}"
+
+    assert {:ok, %WebhookEndpoint{id: "we_" <> _ = id, events: :snapshot, api_version: version}} =
+             WebhookEndpoint.ensure(nil, url, events: :snapshot)
+
+    on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
+    assert version == Stripe.version()
+
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} =
+             WebhookEndpoint.check(nil, url, events: :snapshot)
+
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} =
+             WebhookEndpoint.check(nil, url, events: :snapshot, api: :v1)
+
+    assert :ok = WebhookEndpoint.delete(nil, id)
+  end
+
+  test "the account's thin events are listed from API v2, each the Event its webhook gives" do
+    run = run_id()
+
+    assert {:ok, %MishkaPay.Customer{id: customer_id}} =
+             MishkaPay.create_customer(%{
+               provider: "stripe",
+               api: :v1,
+               email: "thin-#{run}@example.com",
+               reference: "thin-#{run}"
+             })
+
+    # Stripe's event list is eventually consistent: a new event may be missing for a moment, so
+    # this checks how the day's listed events map, not that one just made is there yet.
+    since = DateTime.add(DateTime.utc_now(), -86_400)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = events}} =
+             MishkaPay.list_events("stripe", nil, since: since, types: ["v1.customer.created"])
+
+    # A customer made on Accounts v2 is named by its account; a v1 one by itself.
+    assert Enum.all?(events, &listed_customer_event?/1)
+
+    assert {:ok, %MishkaPay.Page{items: about}} =
+             MishkaPay.list_events("stripe", nil, since: since, object_id: customer_id)
+
+    assert Enum.all?(about, &(&1.object_id == customer_id))
+
+    assert {:error, %MishkaPay.Errors.Invalid{}} =
+             MishkaPay.list_events("stripe", nil, object_id: customer_id, events: :snapshot)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _]}} =
+             MishkaPay.list_events("stripe", nil, since: since, events: :snapshot)
+  end
+
+  defp listed_customer_event?(%MishkaPay.Event{
+         id: "evt_" <> _,
+         type: "customer.created",
+         object_type: "customer",
+         object_id: "cus_" <> _ = object_id,
+         customer_id: customer_id
+       }),
+       do: customer_id == object_id or match?("acct_" <> _, customer_id)
+
+  defp listed_customer_event?(_event), do: false
 
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do
     run = run_id()
@@ -1562,7 +1799,12 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       })
 
     {200, %{"id" => "pm_" <> _ = card}} =
-      stripe(key, :post, "/v1/payment_methods/pm_card_visa/attach", %{"customer" => customer_id})
+      stripe(
+        key,
+        :post,
+        "/v1/payment_methods/pm_card_visa/attach",
+        Map.new([Stripe.Mapper.customer_param(customer_id)])
+      )
 
     assert {:ok,
             %MishkaPay.Page{
@@ -1631,7 +1873,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       MishkaPay.create_meter(%{provider: "stripe", name: "Stream #{run}", event_name: event})
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
-      MishkaPay.create_customer(%{provider: "stripe", email: "stream-#{run}@example.com"})
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        api: :v1,
+        email: "stream-#{run}@example.com"
+      })
 
     on_exit(fn ->
       cleanup(key, &Stripe.deactivate_meter(meter_id, &1))
@@ -1727,7 +1973,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              |> Enum.find(&(&1.id == meter_id))
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
-      MishkaPay.create_customer(%{provider: "stripe", email: "usage-#{run}@example.com"})
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        api: :v1,
+        email: "usage-#{run}@example.com"
+      })
 
     now = DateTime.utc_now()
 
@@ -1813,7 +2063,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end)
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
-      MishkaPay.create_customer(%{provider: "stripe", email: "fix-#{run}@example.com"})
+      MishkaPay.create_customer(%{provider: "stripe", api: :v1, email: "fix-#{run}@example.com"})
 
     on_exit(fn -> cleanup(key, &delete_customer(customer_id, &1)) end)
 
@@ -1898,7 +2148,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.attach_feature("stripe", product_id, feature_id)
 
     {:ok, %MishkaPay.Customer{id: customer_id}} =
-      MishkaPay.create_customer(%{provider: "stripe", email: "feature-#{run}@example.com"})
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        api: :v1,
+        email: "feature-#{run}@example.com"
+      })
 
     assert {:ok, %MishkaPay.Page{items: [], has_more: false}} =
              MishkaPay.list_entitlements("stripe", customer_id)

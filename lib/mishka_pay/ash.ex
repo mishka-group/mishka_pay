@@ -86,9 +86,12 @@ if Code.ensure_loaded?(Ash) do
     @doc false
     # A listener's sync of `resource` for an event: the row of object `id` (argument `id_name`), in
     # the event's tenant; the event state with `:failed` set when it could not be written. A sync
-    # skipped for a newer read already kept counts as done.
-    @spec sync_event(module(), atom(), String.t(), MishkaPay.Event.t(), map()) :: map()
-    def sync_event(resource, id_name, id, event, state) do
+    # skipped for a newer read already kept counts as done, and so does one whose error `skip?`
+    # says is not this listener's to keep.
+    @spec sync_event(module(), atom(), String.t(), MishkaPay.Event.t(), map(), (term() ->
+                                                                                  boolean())) ::
+            map()
+    def sync_event(resource, id_name, id, event, state, skip? \\ fn _error -> false end) do
       tenant = event.tenant && to_string(event.tenant)
       args = %{:provider => event.provider, id_name => id, :tenant => tenant}
 
@@ -101,7 +104,7 @@ if Code.ensure_loaded?(Ash) do
           state
 
         {:error, error} ->
-          case stale?(error) do
+          case stale?(error) or skip?.(error) do
             true -> state
             false -> %{state | failed: message(error)}
           end

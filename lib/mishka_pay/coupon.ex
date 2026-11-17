@@ -91,7 +91,7 @@ defmodule MishkaPay.Coupon do
   # A duration from JSON or a form comes as a string.
   @doc false
   def duration(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(once repeating forever))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(once repeating forever)a)
 
   # A percent or an amount, not both; months only for a repeating coupon. A coupon read back from
   # the provider (it has an id and a validity) is taken as the provider has it.

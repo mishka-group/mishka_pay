@@ -66,5 +66,5 @@ defmodule MishkaPay.TaxRegistration do
 
   @doc false
   def place_of_supply_scheme(field, value),
-    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inbound_goods small_seller standard))
+    do: MishkaPay.Helpers.Choice.atom(field, value, ~w(inbound_goods small_seller standard)a)
 end
