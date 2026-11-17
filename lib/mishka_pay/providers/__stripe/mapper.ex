@@ -1835,6 +1835,31 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  @doc """
+  A thin event of a v1 resource (`v1.invoice.paid`) as the `MishkaPay.Event` its snapshot event
+  gives, with its own id, type, time and `context` (its `:account`): its ids are read from
+  `object`, the related object as Stripe answers it now, or, left `nil`, from the related object's
+  id and type alone; `before` is the full event's `changes.before`, where a detached payment
+  method still names its customer.
+  """
+  @spec thin_event(map(), map() | nil, map() | nil) ::
+          {:ok, Event.t()} | {:error, Splode.Error.t()}
+  def thin_event(%{"object" => "v2.core.event"} = thin, object, before) do
+    related = thin["related_object"] || %{}
+
+    event(%{
+      "id" => thin["id"],
+      "type" => thin["type"],
+      "livemode" => thin["livemode"],
+      "account" => thin["context"],
+      "created" => thin["created"],
+      "data" => %{
+        "object" => object || %{"id" => related["id"], "object" => related["type"]},
+        "previous_attributes" => before
+      }
+    })
+  end
+
   # A thin event about a connected account names it only as its related object.
   defp account_of(%{"type" => "v2.core.account", "id" => id}), do: id
   defp account_of(_other), do: nil

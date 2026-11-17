@@ -22,7 +22,7 @@ without leaning on text or layout.
 | **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
 | **Subscriptions**, live | `Shop.Pay.Subscription` rows (`mishka_pay do kind :subscription end`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.list_invoices/3`); cancel at the period's end or now, keep it going, sync; a new plan or quantity with **Preview the bill** (`MishkaPay.preview_subscription_change/1`) then **Apply** (`:change`); pause and resume collection |
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
-| **Webhook simulator** | a Stripe event about a payment or subscription in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
+| **Webhook simulator** | a Stripe event about a payment or subscription, as a snapshot event or (a `v1.` type) a thin event notification, in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
 | **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |
 | **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job; every Mishka Pay call and HTTP request with its outcome and time |
 | **Site settings** | refund rule, merchant of record, Stripe Tax and shop open or closed, in the database, read on every call |
@@ -100,6 +100,13 @@ export STRIPE_WEBHOOK_SECRET=whsec_...   # the secret `stripe listen` prints
 ```
 
 `demo` is the site (tenant) the shop runs as; each site of a multi-site project has its own URL.
+
+The site takes Stripe's thin events by default (`events: :thin` in its keys). In **Operations**,
+"Kind of endpoint" shows the site's kind and picks another; "Make endpoint" makes a thin event
+destination at a public URL (a tunnel to the shop), whose signing secret goes in
+`STRIPE_WEBHOOK_SECRET` (an older endpoint's secret in `STRIPE_WEBHOOK_SECRET_OLD` while both
+run). "Read events" and "Replay since" read the kind picked: thin from `/v2/core/events`,
+snapshot from `/v1/events`.
 
 After rolling the endpoint's secret in Stripe, put the new one in `STRIPE_WEBHOOK_SECRET` and the
 old one in `STRIPE_WEBHOOK_SECRET_OLD` (several with commas) until Stripe stops signing with it:

@@ -198,7 +198,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     since = DateTime.add(DateTime.utc_now(), -3600)
 
     assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Event{type: "charge.refunded"} | _]}} =
-             MishkaPay.list_events("stripe", nil, since: since, types: ["charge.refunded"])
+             MishkaPay.list_events("stripe", nil,
+               since: since,
+               types: ["charge.refunded"],
+               events: :snapshot
+             )
 
     assert {:ok, %Refund{id: ^rest_id, payment_id: ^id, reference: "rest-" <> _, amount: rest}} =
              MishkaPay.fetch_refund("stripe", rest_id)
@@ -1375,18 +1379,94 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {paid.status, given} == {:issued, Money.new(:USD, "10.00")}
   end
 
-  test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
+  test "a site's v1 webhook endpoint is made with every handled event, then checked and deleted" do
     url = "https://example.com/pay/webhooks/stripe/live-#{run_id()}"
+    v1 = [api: :v1, events: :snapshot]
 
-    assert {:ok, %WebhookEndpoint{id: id, secret: "whsec_" <> _, api_version: version}} =
-             WebhookEndpoint.ensure(nil, url)
+    assert {:ok,
+            %WebhookEndpoint{id: "we_" <> _ = id, secret: "whsec_" <> _, api_version: version}} =
+             WebhookEndpoint.ensure(nil, url, v1)
 
     on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
     assert version == Stripe.version()
-    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} = WebhookEndpoint.check(nil, url)
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} = WebhookEndpoint.check(nil, url, v1)
+    assert {:ok, %WebhookEndpoint{id: ^id, secret: nil}} = WebhookEndpoint.ensure(nil, url, v1)
+    assert :ok = WebhookEndpoint.delete(nil, id)
+    assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url, v1)
+  end
+
+  test "a thin event destination is made with every thin event, read, turned off and on, and deleted" do
+    url = "https://example.com/pay/webhooks/stripe/thin-#{run_id()}"
+
+    assert {:ok,
+            %WebhookEndpoint{
+              id: "ed_" <> _ = id,
+              api: :v2,
+              events: :thin,
+              url: ^url,
+              status: :enabled,
+              secret: "whsec_" <> _,
+              events_from: ["@self"],
+              api_version: nil
+            }} = WebhookEndpoint.ensure(nil, url)
+
+    on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
+
+    assert {:ok, %{endpoint: %WebhookEndpoint{id: ^id, secret: nil}, missing: []}} =
+             WebhookEndpoint.check(nil, url)
+
+    assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url, events: :snapshot)
     assert {:ok, %WebhookEndpoint{id: ^id, secret: nil}} = WebhookEndpoint.ensure(nil, url)
+    assert {:ok, %WebhookEndpoint{id: ^id, status: :disabled}} = WebhookEndpoint.disable(nil, id)
+    assert {:ok, %WebhookEndpoint{id: ^id, status: :enabled}} = WebhookEndpoint.enable(nil, id)
     assert :ok = WebhookEndpoint.delete(nil, id)
     assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check(nil, url)
+  end
+
+  # Stripe keeps a snapshot destination made on API v2 as a webhook endpoint (`we_...`), changed
+  # on either API.
+  test "a snapshot event destination is rendered in the pinned API version" do
+    url = "https://example.com/pay/webhooks/stripe/snapshot-#{run_id()}"
+
+    assert {:ok, %WebhookEndpoint{id: "we_" <> _ = id, events: :snapshot, api_version: version}} =
+             WebhookEndpoint.ensure(nil, url, events: :snapshot)
+
+    on_exit(fn -> WebhookEndpoint.delete(nil, id) end)
+    assert version == Stripe.version()
+
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} =
+             WebhookEndpoint.check(nil, url, events: :snapshot)
+
+    assert {:ok, %{endpoint: %{id: ^id}, missing: []}} =
+             WebhookEndpoint.check(nil, url, events: :snapshot, api: :v1)
+
+    assert :ok = WebhookEndpoint.delete(nil, id)
+  end
+
+  test "the account's thin events are listed from API v2, each the Event its webhook gives" do
+    run = run_id()
+
+    assert {:ok, %MishkaPay.Customer{id: customer_id}} =
+             MishkaPay.create_customer(%{
+               provider: "stripe",
+               email: "thin-#{run}@example.com",
+               reference: "thin-#{run}"
+             })
+
+    since = DateTime.add(DateTime.utc_now(), -600)
+
+    assert {:ok, %MishkaPay.Page{items: events}} =
+             MishkaPay.list_events("stripe", nil,
+               since: since,
+               types: ["v1.customer.created"],
+               limit: 20
+             )
+
+    assert %MishkaPay.Event{id: "evt_" <> _, object_type: "customer"} =
+             Enum.find(events, &(&1.customer_id == customer_id))
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _]}} =
+             MishkaPay.list_events("stripe", nil, since: since, events: :snapshot)
   end
 
   test "currencies Stripe counts differently from ISO 4217 are priced and read back as given" do

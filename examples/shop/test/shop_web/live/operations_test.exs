@@ -7,15 +7,20 @@ defmodule ShopWeb.OperationsTest do
 
   @url "https://shop.test/pay/webhooks/stripe/demo"
 
+  # A thin event as API v2's event list answers it, about a product (named by its own id, so
+  # nothing is read for it).
   defp event(id, type),
     do: %{
       "id" => id,
-      "object" => "event",
+      "object" => "v2.core.event",
       "type" => type,
-      "created" => System.system_time(:second) - 60,
+      "created" => DateTime.utc_now() |> DateTime.add(-60) |> DateTime.to_iso8601(),
       "livemode" => false,
-      "data" => %{"object" => %{"object" => "product", "id" => "prod_1"}}
+      "context" => nil,
+      "related_object" => %{"id" => "prod_1", "type" => "product", "url" => "/v1/products/prod_1"}
     }
+
+  defp v2_list(data), do: %{"data" => data, "next_page_url" => nil}
 
   test "runs every check and shows each one's reason", %{conn: conn} do
     StripeStub.stub(fn _method, _path, _params -> nil end)
@@ -35,48 +40,53 @@ defmodule ShopWeb.OperationsTest do
            )
   end
 
-  test "checks the endpoint at a URL and makes one only on a click", %{conn: conn} do
+  test "the site takes thin events by default, and makes a thin event destination only on a click",
+       %{conn: conn} do
     test = self()
 
     StripeStub.stub(fn
-      "GET", "/v1/webhook_endpoints", _params ->
-        StripeStub.list(List.wrap(Process.get(:endpoint)))
+      "GET", "/v2/core/event_destinations", _params ->
+        v2_list(List.wrap(Process.get(:destination)))
 
-      "POST", "/v1/webhook_endpoints", %{"url" => @url} = params ->
-        send(test, :made)
+      "POST", "/v2/core/event_destinations", %{"webhook_endpoint" => %{"url" => @url}} = params ->
+        send(test, {:made, params})
 
-        endpoint =
-          %{
-            "id" => "we_1",
-            "url" => @url,
-            "status" => "enabled",
-            "enabled_events" => params["enabled_events"] |> Map.values(),
-            "api_version" => params["api_version"]
-          }
+        destination = %{
+          "id" => "ed_test_1",
+          "object" => "v2.core.event_destination",
+          "event_payload" => params["event_payload"],
+          "events_from" => params["events_from"],
+          "status" => "enabled",
+          "enabled_events" => params["enabled_events"],
+          "webhook_endpoint" => %{"url" => @url, "signing_secret" => nil}
+        }
 
-        Process.put(:endpoint, endpoint)
-        Map.put(endpoint, "secret", "whsec_made_once")
+        Process.put(:destination, destination)
+        put_in(destination, ["webhook_endpoint", "signing_secret"], "whsec_made_once")
 
       _method, _path, _params ->
         nil
     end)
 
     {:ok, view, _html} = live(conn, "/")
+    assert has_element?(view, "[data-testid=operations-site-kind][data-kind=thin]")
+    assert has_element?(view, "[data-testid=operations-kind] option[value=thin][selected]")
 
     view
     |> form("[data-testid=operations-setup-form]", %{url: @url})
     |> render_submit(%{intent: "endpoint"})
 
     assert has_element?(view, "[data-testid=endpoint-none]")
-    refute_received :made
+    refute_received {:made, _params}
 
     html =
       view
       |> form("[data-testid=operations-setup-form]", %{url: @url})
       |> render_submit(%{intent: "ensure"})
 
-    assert_received :made
-    assert has_element?(view, "[data-testid=endpoint-id]", "we_1")
+    assert_received {:made, %{"event_payload" => "thin", "type" => "webhook_endpoint"}}
+    assert has_element?(view, "[data-testid=endpoint-id]", "ed_test_1")
+    assert has_element?(view, "[data-testid=endpoint-events]", "thin")
     assert has_element?(view, "[data-testid=endpoint-complete]")
     refute html =~ "whsec_made_once"
 
@@ -85,12 +95,55 @@ defmodule ShopWeb.OperationsTest do
     |> render_submit(%{intent: "endpoint"})
 
     assert has_element?(view, "[data-testid=endpoint-status]", "enabled")
+    assert has_element?(view, "[data-testid=endpoint-from]", "@self")
   end
 
-  test "lists the last hour's events and delivers them again", %{conn: conn} do
+  test "an older v1 snapshot endpoint is checked and made when that kind is picked",
+       %{conn: conn} do
+    test = self()
+
     StripeStub.stub(fn
-      "GET", "/v1/events", %{"created" => %{"gte" => _since}} ->
-        StripeStub.list([event("evt_1", "product.updated")])
+      "GET", "/v1/webhook_endpoints", _params ->
+        StripeStub.list([])
+
+      "POST", "/v1/webhook_endpoints", %{"url" => @url} = params ->
+        send(test, :made)
+
+        %{
+          "id" => "we_1",
+          "url" => @url,
+          "status" => "enabled",
+          "enabled_events" => Map.values(params["enabled_events"]),
+          "api_version" => params["api_version"]
+        }
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    setup = %{url: @url, kind: "snapshot_v1"}
+
+    view
+    |> form("[data-testid=operations-setup-form]", setup)
+    |> render_submit(%{intent: "endpoint"})
+
+    assert has_element?(view, "[data-testid=endpoint-none]")
+
+    view
+    |> form("[data-testid=operations-setup-form]", setup)
+    |> render_submit(%{intent: "ensure"})
+
+    assert_received :made
+    assert has_element?(view, "[data-testid=endpoint-id]", "we_1")
+    assert has_element?(view, "[data-testid=endpoint-api]", "v1")
+    assert has_element?(view, "[data-testid=operations-kind] option[value=snapshot_v1][selected]")
+  end
+
+  test "lists the last hour's thin events and delivers them again", %{conn: conn} do
+    StripeStub.stub(fn
+      "GET", "/v2/core/events", %{"created" => %{"gte" => _since}} ->
+        v2_list([event("evt_test_1", "v1.product.updated")])
 
       _method, _path, _params ->
         nil
@@ -99,7 +152,12 @@ defmodule ShopWeb.OperationsTest do
     {:ok, view, _html} = live(conn, "/")
 
     view |> element("[data-testid=operations-events]") |> render_click()
-    assert has_element?(view, "[data-testid=event-row][data-event-id=evt_1]", "product.updated")
+
+    assert has_element?(
+             view,
+             "[data-testid=event-row][data-event-id=evt_test_1]",
+             "v1.product.updated"
+           )
 
     view
     |> form("[data-testid=operations-replay-form]", %{window: "1h"})
@@ -123,9 +181,10 @@ defmodule ShopWeb.OperationsTest do
     test = self()
 
     StripeStub.stub(fn
-      "GET", "/v1/events", %{"created" => %{"gte" => since}} ->
-        send(test, {:since, String.to_integer(since)})
-        StripeStub.list([])
+      "GET", "/v2/core/events", %{"created" => %{"gte" => since}} ->
+        {:ok, at, 0} = DateTime.from_iso8601(since)
+        send(test, {:since, DateTime.to_unix(at)})
+        v2_list([])
 
       _method, _path, _params ->
         nil

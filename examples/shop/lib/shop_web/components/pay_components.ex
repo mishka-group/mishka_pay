@@ -1160,6 +1160,10 @@ defmodule ShopWeb.PayComponents do
           Signed with your <code>STRIPE_WEBHOOK_SECRET</code>.
         </span>
         A refused webhook (bad signature) is never stored: it is only counted in telemetry.
+        <span data-testid="simulate-thin-hint">
+          A <code>v1.</code>
+          type is sent as a thin event, as an event destination sends it: it names its payment or subscription only, and the same sync follows.
+        </span>
       </p>
       <form phx-submit="simulate" class="flex flex-wrap gap-2 items-end">
         <input

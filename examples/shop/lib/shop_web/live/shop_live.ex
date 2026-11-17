@@ -1007,6 +1007,8 @@ defmodule ShopWeb.ShopLive do
   # Stripe sends payment_intent.* and charge.refunded about a pi_ id, subscription and invoice
   # events about a sub_ id. A well-formed id that does not exist (pi_nope) still goes through: it
   # shows the inbox retry path.
+  defp id_matches_type(id, "v1." <> thin_of), do: id_matches_type(id, thin_of)
+
   defp id_matches_type(id, "payment_intent." <> _),
     do: expect_prefix(id, "pi_", "payment_intent.*")
 

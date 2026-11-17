@@ -96,10 +96,11 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
   thin events (`MishkaPay.Providers.Stripe.thin_events/0`: `v2.core.account.created`,
   `.updated`, `.closed`, `v2.core.account[requirements].updated`,
   `v2.core.account[configuration.merchant].capability_status_updated` and the rest) only to an
-  event destination with the thin payload (Workbench, Webhooks; a `/v1/webhook_endpoints`
-  endpoint cannot take them). Point it at the platform's webhook URL and add its signing secret
-  to the platform tenant's `webhook_secrets`; each becomes an Event whose `:object_id` and
-  `:account` are the account. A thin event carries no state: read the account.
+  event destination with the thin payload (a `/v1/webhook_endpoints` endpoint cannot take them):
+  the platform's default thin destination (`WebhookEndpoint.ensure(platform, url,
+  connected_accounts: true)`, `usage-rules/webhooks.md`) takes them with its connected accounts'
+  events; each becomes an Event whose `:object_id` and `:account` are the account. A thin event
+  carries no state: read the account.
 
 ## Connect: money between accounts
 
@@ -507,7 +508,10 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   no longer takes (401) is dropped and the report sent once more with a new one. A site acting
   for a connected account sends it as `Stripe-Context` (API v2's `Stripe-Account`).
 - A streamed report is checked by Stripe after it answers: a wrong customer or event name is not
-  an error in the answer but a `v1.billing.meter.error_report_triggered` thin event later. Its
+  an error in the answer but a `v1.billing.meter.error_report_triggered` (or `.no_meter_found`)
+  thin event later, which the default thin destination takes: a `MishkaPay.Event` with
+  `:object_type` `"billing.meter"` and the meter as `:object_id`, for the host's own listener;
+  a site on snapshot events never gets it (`usage-rules/webhooks.md`). A report's
   `:id` is its identifier (the reference's, or one Mishka Pay makes), so `cancel_usage/1` takes
   it like any other. Without `stream:` a report goes to `POST /v1/billing/meter_events`, which
   checks it before answering.
