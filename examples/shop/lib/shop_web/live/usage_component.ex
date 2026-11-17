@@ -416,7 +416,7 @@ defmodule ShopWeb.UsageComponent do
                 checked={@report_form["stream"] == "true"}
                 class="checkbox checkbox-sm"
                 data-testid="usage-stream"
-              /> High volume (Stripe's meter event stream)
+              /> High volume (Stripe's meter event stream, live mode only)
             </label>
             <p
               :if={@report_error}

@@ -547,8 +547,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   (`1000000000000000` is 16 digits). Anything longer is `Errors.Invalid` on `:value` before any
   request, streamed or not.
 - `stream: true` on a report sends it through Stripe's meter event stream (API v2), for high
-  volume: up to 10,000 reports a second in live mode (a sandbox takes it too, at the sandbox's
-  own limits). Mishka Pay first makes a meter event session (`POST
+  volume: up to 10,000 reports a second, in **live mode only**. Stripe answers a sandbox or
+  test-mode key but counts nothing, so Mishka Pay refuses `stream: true` with such a key
+  (`Errors.Invalid` on `:stream`) before any request; report without it there. Mishka Pay first makes a meter event session (`POST
   /v2/billing/meter_event_session` with the secret key) and keeps its token in
   `MishkaPay.Helpers.TokenCache` until a minute before it runs out (Stripe's tokens last 15
   minutes), then posts the report as JSON to

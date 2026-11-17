@@ -3968,7 +3968,8 @@ defmodule MishkaPay.Providers.StripeTest do
 
     test "a streamed report takes a session token once, then goes as JSON to the meter event stream" do
       test_pid = self()
-      secret = "sk_test_stream_#{System.unique_integer([:positive])}"
+      # The stream counts usage in live mode only, so these stand-ins answer for a live key.
+      secret = "sk_live_stream_#{System.unique_integer([:positive])}"
       MishkaPay.Test.put_keys("stripe", %{secret_key: secret, account_id: "acct_seller"})
       expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
 
@@ -4040,9 +4041,29 @@ defmodule MishkaPay.Providers.StripeTest do
       refute Map.has_key?(kept, "timestamp")
     end
 
+    test "a streamed report with a sandbox or test-mode key is refused before any request" do
+      test_pid = self()
+      MishkaPay.Test.stub_http(fn conn -> send(test_pid, {:asked, conn.request_path}) end)
+
+      for secret <- ["sk_test_sandbox", "rk_test_sandbox"] do
+        MishkaPay.Test.put_keys("stripe", %{secret_key: secret})
+
+        assert {:error, %MishkaPay.Errors.Invalid{errors: [%{field: :stream}]}} =
+                 MishkaPay.report_usage(%{
+                   provider: "stripe",
+                   event_name: "tokens",
+                   customer_id: "cus_1",
+                   value: 1,
+                   stream: true
+                 })
+      end
+
+      refute_received {:asked, _path}
+    end
+
     test "a stream token Stripe no longer takes is replaced once; a second refusal is plain" do
       test_pid = self()
-      secret = "sk_test_expired_#{System.unique_integer([:positive])}"
+      secret = "sk_live_expired_#{System.unique_integer([:positive])}"
       MishkaPay.Test.put_keys("stripe", %{secret_key: secret})
       expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
 
