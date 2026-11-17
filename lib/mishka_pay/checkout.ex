@@ -82,6 +82,20 @@ defmodule MishkaPay.Checkout do
       `:shipping`. A merchant of record (`:merchant_of_record`) sells no shipped goods, so
       shipping goes only with it off.
 
+  On a platform of sellers (the provider needs `:connect`):
+
+    * `:destination`: the seller's connected account the money goes to; the platform takes the
+      sale and the provider moves it on (a destination charge).
+    * `:on_behalf_of`: the connected account that is the seller of record: its country and
+      statement name apply, and its fees. Usually the same account as `:destination`.
+    * `:application_fee`: in a one-time checkout, the platform's cut as money, in the items'
+      currency; with `:destination` it stays with the platform, and with a site's keys that name
+      a connected account (a direct charge) it goes to the platform.
+    * `:application_fee_percent`: in a subscription, the platform's cut of each bill, above 0
+      and up to 100, two decimals at most.
+
+  None of them goes with `mode: :setup`.
+
   `mode: :setup` saves a payment method for later and charges nothing; the provider needs
   `:payment_method`. It takes no `:items`, and needs a `:currency` (`"usd"`), which decides the
   payment methods the page offers. A buyer given by `customer: %{id: ...}` keeps the card;
@@ -228,6 +242,13 @@ defmodule MishkaPay.Checkout do
     field :shipping_rate_id, String.t(), derives: "validate(string)"
     field :payment_link_id, String.t(), derives: "validate(string)"
 
+    field :application_fee, Money.t(), validator: {MishkaPay.Refund, :amount}
+
+    field :application_fee_percent, Decimal.t(), validator: {__MODULE__, :fee_percent}
+
+    field :destination, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+    field :on_behalf_of, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+
     field :payment_id, String.t(), derives: "validate(string)"
     field :setup_intent_id, String.t(), derives: "validate(string)"
     field :payment_method_id, String.t(), derives: "validate(string)"
@@ -268,6 +289,24 @@ defmodule MishkaPay.Checkout do
   end
 
   def later(field, at), do: {:ok, field, at}
+
+  # A share of each bill, above 0 and up to 100, with at most two decimals, as a number or its
+  # text.
+  @doc false
+  def fee_percent(field, nil), do: {:ok, field, nil}
+
+  def fee_percent(field, value) when is_float(value),
+    do: fee_percent(field, Decimal.from_float(value))
+
+  def fee_percent(field, value) do
+    with {:ok, percent} <- Decimal.cast(value),
+         true <- Decimal.gt?(percent, 0) and not Decimal.gt?(percent, 100),
+         true <- Decimal.equal?(percent, Decimal.round(percent, 2)) do
+      {:ok, field, Decimal.normalize(percent)}
+    else
+      _not_a_share -> {:error, field, Messages.text(:fee_percent)}
+    end
+  end
 
   # Two-letter country codes, in upper case as providers take them.
   @doc false
@@ -326,6 +365,7 @@ defmodule MishkaPay.Checkout do
          {:ok, attrs} <- customer_creation_mode(attrs),
          {:ok, attrs} <- invoice_mode(attrs),
          {:ok, attrs} <- options_mode(attrs),
+         {:ok, attrs} <- fee_mode(attrs),
          {:ok, attrs} <- shipping_mode(attrs),
          do: fits_mode(attrs)
   end
@@ -355,7 +395,11 @@ defmodule MishkaPay.Checkout do
     :invoice,
     :submit_type,
     :statement_suffix,
-    :card_required
+    :card_required,
+    :application_fee,
+    :application_fee_percent,
+    :destination,
+    :on_behalf_of
   ]
 
   defp setup(attrs) do
@@ -451,6 +495,32 @@ defmodule MishkaPay.Checkout do
          }}
 
       true ->
+        {:ok, attrs}
+    end
+  end
+
+  # A platform's cut is money on a one-time sale and a share of each bill on a subscription.
+  defp fee_mode(attrs) do
+    subscription? = key(attrs, :mode) in [:subscription, "subscription"]
+
+    case {subscription?, key(attrs, :application_fee), key(attrs, :application_fee_percent)} do
+      {true, fee, _percent} when not is_nil(fee) ->
+        {:error,
+         %{
+           field: :application_fee,
+           action: :mode,
+           message: Messages.text(:one_time_only, param: "application_fee")
+         }}
+
+      {false, _fee, percent} when not is_nil(percent) ->
+        {:error,
+         %{
+           field: :application_fee_percent,
+           action: :mode,
+           message: Messages.text(:recurring_only, param: "application_fee_percent")
+         }}
+
+      _fits ->
         {:ok, attrs}
     end
   end

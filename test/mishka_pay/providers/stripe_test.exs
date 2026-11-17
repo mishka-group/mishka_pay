@@ -323,6 +323,185 @@ defmodule MishkaPay.Providers.StripeTest do
       assert map_size(only) == 1
     end
 
+    test "transfers, payouts and application fees are sent, read, listed and given back, as Stripe's spec accepts" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.method, conn.request_path, conn.query_string})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok,
+              %MishkaPay.Transfer{id: "tr_" <> _, amount: %Money{}, destination: "acct_" <> _}} =
+               MishkaPay.create_transfer(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 amount: %{amount: "11.00", currency: "USD"},
+                 destination: "acct_123",
+                 transfer_group: "order-7",
+                 reference: "payout-order-7"
+               })
+
+      assert {:ok, %MishkaPay.Transfer{id: "tr_123"}} =
+               MishkaPay.fetch_transfer("stripe", "tr_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Transfer{} | _]}} =
+               MishkaPay.list_transfers("stripe", "site-a",
+                 destination: "acct_123",
+                 transfer_group: "order-7"
+               )
+
+      assert_received {:sent, "GET", "/v1/transfers", query}
+
+      assert %{"destination" => "acct_123", "transfer_group" => "order-7"} =
+               URI.decode_query(query)
+
+      assert {:ok, %MishkaPay.Transfer{id: "tr_" <> _}} =
+               MishkaPay.reverse_transfer("stripe", "tr_123", "site-a",
+                 amount: %{amount: "1.00", currency: "USD"},
+                 reference: "undo-1"
+               )
+
+      assert_received {:sent, "POST", "/v1/transfers/tr_123/reversals", _}
+
+      assert {:ok, %MishkaPay.Payout{id: "po_123", status: :in_transit, automatic: true}} =
+               MishkaPay.fetch_payout("stripe", "po_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Payout{} | _]}} =
+               MishkaPay.list_payouts("stripe", "site-a", status: :in_transit)
+
+      assert_received {:sent, "GET", "/v1/payouts", payouts}
+      assert %{"status" => "in_transit"} = URI.decode_query(payouts)
+
+      assert {:ok, %MishkaPay.Payout{}} = MishkaPay.cancel_payout("stripe", "po_123", "site-a")
+      assert_received {:sent, "POST", "/v1/payouts/po_123/cancel", _}
+
+      assert {:ok, %MishkaPay.ApplicationFee{id: "fee_123", account_id: "acct_" <> _}} =
+               MishkaPay.fetch_application_fee("stripe", "fee_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.ApplicationFee{charge_id: "ch_" <> _} | _]}} =
+               MishkaPay.list_application_fees("stripe", "site-a", charge_id: "ch_1")
+
+      assert {:ok, %MishkaPay.ApplicationFee{id: "fee_" <> _}} =
+               MishkaPay.refund_application_fee("stripe", "fee_123", "site-a")
+
+      assert_received {:sent, "POST", "/v1/application_fees/fee_123/refunds", _}
+    end
+
+    test "a checkout for a seller sends its fee and destination where Stripe takes them" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test, {:stripe, conn.request_path, Plug.Conn.Query.decode(body)})
+
+        Req.Test.json(conn, %{
+          "object" => "checkout.session",
+          "id" => "cs_1",
+          "url" => "https://checkout.stripe.com/c/pay/cs_1",
+          "status" => "open"
+        })
+      end)
+
+      seller = %{destination: "acct_seller", on_behalf_of: "acct_seller"}
+
+      assert {:ok, %Checkout{}} =
+               @checkout
+               |> Map.merge(seller)
+               |> Map.put(:application_fee, %{amount: "2.50", currency: "USD"})
+               |> MishkaPay.checkout()
+
+      assert_received {:stripe, "/v1/checkout/sessions", %{"payment_intent_data" => intent}}
+
+      assert %{
+               "application_fee_amount" => "250",
+               "transfer_data" => %{"destination" => "acct_seller"},
+               "on_behalf_of" => "acct_seller"
+             } = intent
+
+      plan = %{
+        @checkout
+        | items: [
+            %{
+              name: "Pro",
+              amount: %{amount: "10.00", currency: "USD"},
+              interval: :month
+            }
+          ]
+      }
+
+      assert {:ok, %Checkout{}} =
+               plan
+               |> Map.merge(seller)
+               |> Map.merge(%{mode: :subscription, application_fee_percent: "12.5"})
+               |> MishkaPay.checkout()
+
+      assert_received {:stripe, "/v1/checkout/sessions", %{"subscription_data" => subscription}}
+
+      assert %{
+               "application_fee_percent" => "12.5",
+               "transfer_data" => %{"destination" => "acct_seller"},
+               "on_behalf_of" => "acct_seller"
+             } = subscription
+    end
+
+    test "a transfer, a reversal and a fee refund are each made once per reference" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        [key] = Plug.Conn.get_req_header(conn, "idempotency-key")
+        send(test, {:stripe, conn.request_path, URI.decode_query(body), key})
+        Req.Test.json(conn, answer_for(conn.request_path))
+      end)
+
+      transfer = %{
+        provider: "stripe",
+        tenant: "site-a",
+        amount: %{amount: "11.00", currency: "EUR"},
+        destination: "acct_1",
+        source_charge_id: "ch_1",
+        reference: "order-7"
+      }
+
+      for _twice <- 1..2,
+          do: assert({:ok, %MishkaPay.Transfer{}} = MishkaPay.create_transfer(transfer))
+
+      assert_received {:stripe, "/v1/transfers", params, key}
+      assert_received {:stripe, "/v1/transfers", ^params, ^key}
+
+      assert params == %{
+               "amount" => "1100",
+               "currency" => "eur",
+               "destination" => "acct_1",
+               "source_transaction" => "ch_1",
+               "metadata[mishka_pay_reference]" => "order-7"
+             }
+
+      assert {:ok, %MishkaPay.Transfer{amount_reversed: reversed}} =
+               MishkaPay.reverse_transfer("stripe", "tr_1", "site-a", reference: "undo-7")
+
+      assert Money.equal?(reversed, Money.new(:EUR, "11.00"))
+
+      assert_received {:stripe, "/v1/transfers/tr_1/reversals", %{"expand[]" => "transfer"} = all,
+                       undo}
+
+      refute Map.has_key?(all, "amount")
+
+      # The same reference on another transfer is another reversal.
+      MishkaPay.reverse_transfer("stripe", "tr_2", "site-a", reference: "undo-7")
+      assert_received {:stripe, "/v1/transfers/tr_2/reversals", _all, other}
+      refute other == undo
+
+      assert {:ok, %MishkaPay.ApplicationFee{refunded: false}} =
+               MishkaPay.refund_application_fee("stripe", "fee_1", "site-a",
+                 amount: %{amount: "0.50", currency: "EUR"}
+               )
+
+      assert_received {:stripe, "/v1/application_fees/fee_1/refunds",
+                       %{"amount" => "50", "expand[]" => "fee"}, _}
+    end
+
     test "a platform that has not signed up for Connect is told so plainly" do
       MishkaPay.Test.stub_http(fn conn ->
         conn
@@ -3135,6 +3314,85 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "money for a seller that cannot be right never reaches Stripe" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      transfer = %{
+        provider: "stripe",
+        amount: %{amount: "5.00", currency: "USD"},
+        destination: "acct_1",
+        reference: "t-1"
+      }
+
+      plan = %{
+        @checkout
+        | items: [%{name: "Pro", amount: %{amount: "10.00", currency: "USD"}, interval: :month}]
+      }
+
+      setup = %{
+        provider: "stripe",
+        mode: :setup,
+        currency: "usd",
+        success_url: "https://shop.test/ok",
+        cancel_url: "https://shop.test/no"
+      }
+
+      for {call, field} <- [
+            {fn -> MishkaPay.create_transfer(Map.delete(transfer, :reference)) end, :reference},
+            {fn -> MishkaPay.create_transfer(%{transfer | destination: "cus_1"}) end,
+             :destination},
+            {fn ->
+               MishkaPay.create_transfer(%{transfer | amount: %{amount: "0", currency: "USD"}})
+             end, :amount},
+            {fn -> MishkaPay.create_transfer(Map.put(transfer, :source_charge_id, "pi_1")) end,
+             :source_charge_id},
+            {fn -> MishkaPay.fetch_transfer("stripe", "tr_1/../x") end, :transfer_id},
+            {fn -> MishkaPay.reverse_transfer("stripe", "po_1") end, :transfer_id},
+            {fn -> MishkaPay.reverse_transfer("stripe", "tr_1", nil, amount: "-1") end, :amount},
+            {fn -> MishkaPay.list_transfers("stripe", nil, destination: "cus_1") end,
+             :destination},
+            {fn -> MishkaPay.fetch_payout("stripe", "tr_1") end, :payout_id},
+            {fn -> MishkaPay.cancel_payout("stripe", "po_1?x") end, :payout_id},
+            {fn -> MishkaPay.list_payouts("stripe", nil, status: :lost) end, :status},
+            {fn -> MishkaPay.fetch_application_fee("stripe", "ch_1") end, :fee_id},
+            {fn -> MishkaPay.refund_application_fee("stripe", "fee_1/../x") end, :fee_id},
+            {fn -> MishkaPay.list_application_fees("stripe", nil, charge_id: "ch_1&x=y") end,
+             :charge_id},
+            {fn -> MishkaPay.checkout(Map.put(@checkout, :destination, "cus_1")) end,
+             :destination},
+            {fn -> MishkaPay.checkout(Map.put(@checkout, :on_behalf_of, "../x")) end,
+             :on_behalf_of},
+            {fn ->
+               MishkaPay.checkout(
+                 Map.put(@checkout, :application_fee, %{amount: "1", currency: "EUR"})
+               )
+             end, :application_fee},
+            {fn -> MishkaPay.checkout(Map.put(@checkout, :application_fee_percent, 10)) end,
+             :application_fee_percent},
+            {fn ->
+               MishkaPay.checkout(
+                 Map.merge(plan, %{
+                   mode: :subscription,
+                   application_fee: %{amount: "1", currency: "USD"}
+                 })
+               )
+             end, :application_fee},
+            {fn ->
+               MishkaPay.checkout(
+                 Map.merge(plan, %{mode: :subscription, application_fee_percent: "100.5"})
+               )
+             end, :application_fee_percent},
+            {fn ->
+               MishkaPay.checkout(
+                 Map.merge(plan, %{mode: :subscription, application_fee_percent: "1.255"})
+               )
+             end, :application_fee_percent},
+            {fn -> MishkaPay.checkout(Map.put(setup, :destination, "acct_1")) end, :destination}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} = call.()
+      end
+    end
+
     test "a raw call has no way to set a header, so it cannot act for another account" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
 
@@ -4416,7 +4674,11 @@ defmodule MishkaPay.Providers.StripeTest do
       "payment_intent" => "pi_1"
     },
     "account" => %{"object" => "account", "id" => "acct_1"},
-    "account.application" => %{"object" => "application", "id" => "ca_1"}
+    "account.application" => %{"object" => "application", "id" => "ca_1"},
+    "transfer" => %{"object" => "transfer", "id" => "tr_1", "destination" => "acct_1"},
+    "payout" => %{"object" => "payout", "id" => "po_1"},
+    "application_fee" => %{"object" => "application_fee", "id" => "fee_1", "charge" => "ch_1"},
+    "application_fee.refund" => %{"object" => "fee_refund", "id" => "fr_1", "fee" => "fee_1"}
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do
@@ -4469,8 +4731,47 @@ defmodule MishkaPay.Providers.StripeTest do
   defp named?(event, :account),
     do: event.object_type in ["account", "application"] and is_binary(event.object_id)
 
+  # A fee's own change, or a refund of it.
+  defp named?(event, :application_fee),
+    do: event.object_type in ["application_fee", "fee_refund"] and is_binary(event.object_id)
+
   defp named?(event, kind),
     do: event.object_type == Atom.to_string(kind) and is_binary(event.object_id)
+
+  # Stripe's answers for a transfer, a reversal of one (its transfer expanded) and an application
+  # fee refund (its fee expanded), in euros.
+  defp answer_for("/v1/transfers"), do: stripe_transfer(0)
+
+  defp answer_for("/v1/transfers/" <> _reversal),
+    do: %{"object" => "transfer_reversal", "id" => "trr_1", "transfer" => stripe_transfer(1100)}
+
+  defp answer_for("/v1/application_fees/" <> _refund),
+    do: %{
+      "object" => "fee_refund",
+      "id" => "fr_1",
+      "fee" => %{
+        "object" => "application_fee",
+        "id" => "fee_1",
+        "amount" => 100,
+        "amount_refunded" => 50,
+        "refunded" => false,
+        "currency" => "eur",
+        "account" => "acct_1",
+        "charge" => "ch_1"
+      }
+    }
+
+  defp stripe_transfer(reversed),
+    do: %{
+      "object" => "transfer",
+      "id" => "tr_1",
+      "amount" => 1100,
+      "amount_reversed" => reversed,
+      "reversed" => reversed == 1100,
+      "currency" => "eur",
+      "destination" => "acct_1",
+      "metadata" => %{"mishka_pay_reference" => "order-7"}
+    }
 
   test "a capture or a release that cannot be right is refused before any request" do
     MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)

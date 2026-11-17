@@ -258,11 +258,16 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp mode_data(%Checkout{mode: :subscription, trial_days: days} = checkout, reference),
     do: %{
       "subscription_data" =>
-        reject_nil(%{
+        %{
           "metadata" => reference,
           "trial_period_days" => days,
-          "description" => checkout.description
-        })
+          "description" => checkout.description,
+          "application_fee_percent" =>
+            checkout.application_fee_percent &&
+              Decimal.to_string(checkout.application_fee_percent, :normal)
+        }
+        |> Map.merge(seller(checkout))
+        |> reject_nil()
     }
 
   defp mode_data(%Checkout{mode: :setup} = checkout, reference),
@@ -274,12 +279,22 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp mode_data(checkout, reference),
     do: %{
       "payment_intent_data" =>
-        reject_nil(%{
+        %{
           "metadata" => reference,
           "description" => checkout.description,
           "statement_descriptor_suffix" => checkout.statement_suffix,
-          "capture_method" => checkout.capture && Atom.to_string(checkout.capture)
-        })
+          "capture_method" => checkout.capture && Atom.to_string(checkout.capture),
+          "application_fee_amount" => minor_of(checkout.application_fee)
+        }
+        |> Map.merge(seller(checkout))
+        |> reject_nil()
+    }
+
+  # The seller a platform's sale is for: where the money goes, and who sells it.
+  defp seller(checkout),
+    do: %{
+      "transfer_data" => checkout.destination && %{"destination" => checkout.destination},
+      "on_behalf_of" => checkout.on_behalf_of
     }
 
   defp reject_nil(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
@@ -2312,6 +2327,99 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
          expires_at: time(answer["expires_at"]),
          created_at: time(answer["created"])
      }}
+  end
+
+  @doc """
+  Params of `POST /v1/transfers`: the amount in Stripe's places, the connected account, the sale
+  it pays out of, its group and the reference in its metadata.
+  """
+  @spec transfer_params(MishkaPay.Transfer.t()) :: map()
+  def transfer_params(transfer) do
+    reject_nil(%{
+      "amount" => minor(transfer.amount),
+      "currency" => lower_currency(transfer.amount),
+      "destination" => transfer.destination,
+      "source_transaction" => transfer.source_charge_id,
+      "transfer_group" => transfer.transfer_group,
+      "description" => transfer.description,
+      "metadata" => with_reference(transfer.metadata, transfer.reference)
+    })
+  end
+
+  @doc "A Stripe Transfer as a `MishkaPay.Transfer`, with what was taken back of it."
+  @spec transfer(map()) :: {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+  def transfer(transfer) do
+    currency = transfer["currency"]
+    metadata = transfer["metadata"] || %{}
+
+    %{
+      provider: "stripe",
+      id: transfer["id"],
+      amount: money(transfer["amount"], currency),
+      amount_reversed: money(transfer["amount_reversed"], currency),
+      reversed: transfer["reversed"] == true,
+      destination: id_of(transfer["destination"]),
+      destination_payment_id: id_of(transfer["destination_payment"]),
+      source_charge_id: id_of(transfer["source_transaction"]),
+      transfer_group: transfer["transfer_group"],
+      description: transfer["description"],
+      reference: metadata[@reference],
+      metadata: Map.delete(metadata, @reference),
+      created_at: time(transfer["created"])
+    }
+    |> MishkaPay.Transfer.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of a part given back (a transfer reversal, an application fee refund): the amount in
+  Stripe's places, or none for all of it, and the object it belongs to expanded in the answer.
+  """
+  @spec part_params(Elixir.Money.t() | nil, String.t()) :: [{String.t(), String.t()}]
+  def part_params(nil, expand), do: [{"expand[]", expand}]
+
+  def part_params(amount, expand),
+    do: [{"amount", Integer.to_string(minor(amount))} | part_params(nil, expand)]
+
+  @doc "A Stripe Payout as a `MishkaPay.Payout`."
+  @spec payout(map()) :: {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+  def payout(payout) do
+    %{
+      provider: "stripe",
+      id: payout["id"],
+      amount: money(payout["amount"], payout["currency"]),
+      status: known(payout["status"], ~w(pending in_transit paid failed canceled)),
+      arrival_at: time(payout["arrival_date"]),
+      automatic: payout["automatic"] == true,
+      method: payout["method"],
+      destination_id: id_of(payout["destination"]),
+      failure_code: payout["failure_code"],
+      failure_message: payout["failure_message"],
+      description: payout["description"],
+      created_at: time(payout["created"])
+    }
+    |> MishkaPay.Payout.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "A Stripe application fee as a `MishkaPay.ApplicationFee`."
+  @spec application_fee(map()) ::
+          {:ok, MishkaPay.ApplicationFee.t()} | {:error, Splode.Error.t()}
+  def application_fee(fee) do
+    currency = fee["currency"]
+
+    %{
+      provider: "stripe",
+      id: fee["id"],
+      amount: money(fee["amount"], currency),
+      amount_refunded: money(fee["amount_refunded"], currency),
+      refunded: fee["refunded"] == true,
+      account_id: id_of(fee["account"]),
+      charge_id: id_of(fee["charge"]),
+      created_at: time(fee["created"])
+    }
+    |> MishkaPay.ApplicationFee.builder()
+    |> MishkaPay.Errors.from_builder()
   end
 
   defp positive(number) when is_integer(number) and number > 0, do: number

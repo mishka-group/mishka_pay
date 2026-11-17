@@ -79,8 +79,14 @@ end
     `fetch_fraud_review/2`, `list_fraud_reviews/2` (open ones), `approve_fraud_review/2`;
   - `:connect`: `create_connected_account/2`, `fetch_connected_account/2`,
     `update_connected_account/2`, `list_connected_accounts/2`, `reject_connected_account/3`
-    (`:reason`), `account_link/2`, `login_link/2`; the tenant's keys' `:account_id` is the account
-    every request acts for, and its webhooks take only that account's events;
+    (`:reason`), `account_link/2`, `login_link/2`, `fetch_application_fee/2`,
+    `list_application_fees/2` (`:charge_id`), `refund_application_fee/3` (`:amount`,
+    `:reference`, `:tenant`), and a checkout's `:destination`, `:on_behalf_of`,
+    `:application_fee` and `:application_fee_percent`; the tenant's keys' `:account_id` is the
+    account every request acts for, and its webhooks take only that account's events;
+  - `:transfer`: `create_transfer/2`, `fetch_transfer/2`, `list_transfers/2` (`:destination`,
+    `:transfer_group`), `reverse_transfer/3` (`:amount`, `:reference`, `:tenant`);
+  - `:payout`: `fetch_payout/2`, `list_payouts/2` (`:status`), `cancel_payout/2`;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

@@ -44,11 +44,131 @@ defmodule ShopWeb.ConnectTest do
           "created" => 1_790_000_000
         }
 
+      "GET", "/v1/payouts", _params ->
+        StripeStub.list([
+          %{
+            "object" => "payout",
+            "id" => "po_1",
+            "amount" => 4200,
+            "currency" => "usd",
+            "status" => "in_transit",
+            "arrival_date" => 1_790_100_000,
+            "automatic" => true
+          }
+        ])
+
+      "GET", "/v1/application_fees", _params ->
+        StripeStub.list([
+          %{
+            "object" => "application_fee",
+            "id" => "fee_1",
+            "amount" => 250,
+            "amount_refunded" => 0,
+            "currency" => "usd",
+            "account" => "acct_1",
+            "charge" => "ch_1"
+          }
+        ])
+
+      "POST", "/v1/transfers", params ->
+        send(test, {:sent, params})
+        transfer(params["destination"], 0)
+
+      "POST", "/v1/transfers/tr_new/reversals", _params ->
+        send(test, :reversed)
+        %{"object" => "transfer_reversal", "id" => "trr_1", "transfer" => transfer("acct_1", 500)}
+
       _method, _path, _params ->
         nil
     end)
 
     :ok
+  end
+
+  defp transfer(destination, reversed),
+    do: %{
+      "object" => "transfer",
+      "id" => "tr_new",
+      "amount" => 500,
+      "amount_reversed" => reversed,
+      "reversed" => reversed == 500,
+      "currency" => "usd",
+      "destination" => destination,
+      "metadata" => %{}
+    }
+
+  test "money goes to a listed seller and comes back; payouts and the platform's cut show",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    view |> element("[data-testid=connect-show]") |> render_click()
+    render_async(view)
+
+    assert has_element?(
+             view,
+             "[data-payout-id=po_1] [data-testid=connect-payout-status]",
+             "in_transit"
+           )
+
+    assert has_element?(view, "[data-fee-id=fee_1] [data-testid=connect-fee-amount]", "$2.50")
+    assert has_element?(view, "[data-testid=connect-transfers-empty]")
+
+    view
+    |> form("[data-testid=connect-transfer-form]", %{
+      destination: "acct_1",
+      amount: "5.00",
+      currency: "USD"
+    })
+    |> render_submit()
+
+    assert_received {:sent, sent}
+
+    assert %{"amount" => "500", "currency" => "usd", "destination" => "acct_1"} = sent
+    assert %{"metadata" => %{"mishka_pay_reference" => "shop-transfer-" <> _}} = sent
+    assert has_element?(view, "[data-testid=connect-notice]", "tr_new")
+
+    view
+    |> element("[data-transfer-id=tr_new] [data-testid=connect-transfer-reverse]")
+    |> render_click()
+
+    assert_received :reversed
+
+    assert has_element?(
+             view,
+             "[data-transfer-id=tr_new] [data-testid=connect-transfer-reversed]",
+             "$5.00"
+           )
+
+    refute has_element?(view, "[data-transfer-id=tr_new] [data-testid=connect-transfer-reverse]")
+  end
+
+  test "a transfer Stripe refuses says so and adds no row", %{conn: conn} do
+    StripeStub.stub(fn
+      "GET", "/v1/accounts", _params ->
+        StripeStub.list([account("acct_1")])
+
+      "POST", "/v1/transfers", _params ->
+        StripeStub.error("No such destination: 'acct_1'", "resource_missing")
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    view |> element("[data-testid=connect-show]") |> render_click()
+    render_async(view)
+
+    view
+    |> form("[data-testid=connect-transfer-form]", %{amount: "5.00", currency: "USD"})
+    |> render_submit()
+
+    assert has_element?(view, "[data-testid=connect-error]")
+    refute has_element?(view, "[data-testid=connect-transfer-row]")
+
+    view
+    |> form("[data-testid=connect-transfer-form]", %{amount: "0", currency: "USD"})
+    |> render_submit()
+
+    assert has_element?(view, "[data-testid=connect-error]", "more than zero")
   end
 
   test "nothing is read until shown; then the accounts list, one is made and one onboarded",

@@ -24,8 +24,9 @@ defmodule ShopWeb.ShopLive do
     * members and access by subscription, refunds and held payments, more checkout options
       (embedded too), saved cards and portal links, one-off bills, customer search and bill
       previews, each in its own component;
-    * Stripe Connect: the shop as a platform that makes its sellers' connected accounts and
-      opens their onboarding pages;
+    * Stripe Connect: the shop as a platform that makes its sellers' connected accounts, opens
+      their onboarding pages, sends them money and takes it back, and lists its payouts and its
+      cut of their sales;
     * reading a checkout or a payment back by its id, and a raw call to any Stripe API path;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.

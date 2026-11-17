@@ -81,6 +81,8 @@ defmodule MishkaPay.Messages do
           | :account_invalid
           | :capability_names
           | :connect_not_set_up
+          | :fee_percent
+          | :fee_currency
           | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
@@ -453,6 +455,20 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "%{provider} makes connected accounts only once the platform has signed up for Connect in its dashboard"
+      )
+
+  defp msgid(:fee_percent),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The application_fee_percent field must be a share above 0 and up to 100, with at most two decimals"
+      )
+
+  defp msgid(:fee_currency),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The application_fee field must be in the same currency as the items"
       )
 
   defp msgid(:shipping_countries),

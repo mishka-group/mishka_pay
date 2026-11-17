@@ -53,6 +53,34 @@
   `account.application.deauthorized` (a Standard account left the platform) to the platform's
   Connect endpoint; `event.account` names the account.
 
+## Connect: money between accounts
+
+- Two ways to sell for a seller. **Destination charge**: the platform's keys (no `account_id`)
+  and a checkout with `destination:` (and usually `on_behalf_of:`): the payment lives on the
+  platform and Stripe moves it on (`payment_intent_data[transfer_data][destination]`). **Direct
+  charge**: the site's keys name its `account_id`, so the checkout is made on the seller's own
+  account. Either way `application_fee:` is `application_fee_amount` (one-time) and
+  `application_fee_percent:` is `subscription_data[application_fee_percent]`; both go to the
+  platform. Mishka Pay makes PaymentIntents only through a checkout, so these are the only
+  places it sends them.
+- `create_transfer/1` is `POST /v1/transfers` from the platform's balance: `:reference` is
+  required, makes the idempotency key and is kept in metadata; `:source_charge_id` (`ch_...`)
+  is `source_transaction`, so the transfer waits for that sale's money. A destination that is
+  not the platform's is `Errors.Rejected` with code `"resource_missing"` (param `destination`).
+- `reverse_transfer/4` is `POST /v1/transfers/:id/reversals` with `expand[]=transfer`, so one
+  request answers the transfer after (`:amount_reversed`, `:reversed`). `refund_application_fee/4`
+  is `POST /v1/application_fees/:id/refunds` with `expand[]=fee`, the same way. Each with a
+  `:reference` is made once; the same reference on another transfer or fee is another call.
+- `list_payouts/3` (`status:` `:pending`, `:in_transit`, `:paid`, `:failed`, `:canceled`),
+  `fetch_payout/3` and `cancel_payout/3` act on the account the keys act for: the platform, or
+  with a site's `account_id` the seller's. Only a `:pending` payout can be canceled.
+- Ids: transfers `tr_`, payouts `po_`, application fees `fee_`, accounts `acct_`; a wrong kind is
+  `Errors.Invalid` before any request.
+- Stripe sends `transfer.created`, `.updated`, `.reversed`; `payout.created`, `.updated`,
+  `.paid`, `.failed`, `.canceled`, `.reconciliation_completed`; `application_fee.created`,
+  `.refunded`, `.refund.updated`. A seller's payout events reach the platform's Connect endpoint
+  with `event.account` set.
+
 ## Retries and rate limits
 
 - A read, and a write with its idempotency key, is tried again on a network error and on 408,

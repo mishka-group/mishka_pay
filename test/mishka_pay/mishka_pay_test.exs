@@ -745,6 +745,21 @@ defmodule MishkaPayTest do
 
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
                MishkaPay.login_link("acme", "a1", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :transfer}} =
+               MishkaPay.list_transfers("acme", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :payout}} =
+               MishkaPay.cancel_payout("acme", "p1", "site-a")
+
+      for seller <- [
+            %{destination: "a1"},
+            %{on_behalf_of: "a1"},
+            %{application_fee: %{amount: "1", currency: "USD"}}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
+                 MishkaPay.checkout(Map.merge(@checkout, seller))
+      end
     end
 
     test "a provider without fraud reviews refuses them" do

@@ -57,12 +57,13 @@ defmodule MishkaPay.Refund do
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
 
-  # A refund of nothing is no refund; an amount left out is the whole payment.
+  # A refund of nothing is no refund; an amount left out is the whole payment. Other money that
+  # must be above zero (a transfer, a platform's fee) is checked the same way.
   @doc false
-  def amount(:amount, value) do
+  def amount(field, value) do
     case negative?(value) do
-      true -> {:error, :amount, MishkaPay.Messages.text(:amount_not_positive)}
-      false -> :amount |> MishkaPay.Money.field(value) |> positive()
+      true -> {:error, field, MishkaPay.Messages.text(:amount_not_positive)}
+      false -> field |> MishkaPay.Money.field(value) |> positive()
     end
   end
 
@@ -79,10 +80,10 @@ defmodule MishkaPay.Refund do
 
   defp negative?(_other), do: false
 
-  defp positive({:ok, :amount, %Money{amount: amount}} = ok) do
+  defp positive({:ok, field, %Money{amount: amount}} = ok) do
     case Decimal.gt?(amount, 0) do
       true -> ok
-      false -> {:error, :amount, MishkaPay.Messages.text(:amount_not_positive)}
+      false -> {:error, field, MishkaPay.Messages.text(:amount_not_positive)}
     end
   end
 

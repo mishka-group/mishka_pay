@@ -1935,6 +1935,48 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
   end
 
+  # Money can reach only a connected account that finished onboarding, which a test cannot do on
+  # its own; what runs live is reading the lists, and that an account or object that is not there
+  # is refused plainly, for a transfer and for a checkout made for a seller.
+  test "transfers, payouts and application fees are listed, and money for a seller that is not there is refused" do
+    run = run_id()
+
+    for {list, item} <- [
+          {MishkaPay.list_transfers("stripe", nil, limit: 5), MishkaPay.Transfer},
+          {MishkaPay.list_payouts("stripe", nil, limit: 5), MishkaPay.Payout},
+          {MishkaPay.list_application_fees("stripe", nil, limit: 5), MishkaPay.ApplicationFee}
+        ] do
+      assert {:ok, %MishkaPay.Page{items: items}} = list
+      assert Enum.all?(items, &is_struct(&1, item))
+    end
+
+    for missing <- [
+          MishkaPay.fetch_transfer("stripe", "tr_doesnotexist"),
+          MishkaPay.fetch_payout("stripe", "po_doesnotexist"),
+          MishkaPay.fetch_application_fee("stripe", "fee_doesnotexist"),
+          MishkaPay.create_transfer(%{
+            provider: "stripe",
+            amount: %{amount: "1.00", currency: "USD"},
+            destination: "acct_1doesnotexist0",
+            reference: "transfer-#{run}"
+          })
+        ] do
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} = missing
+    end
+
+    assert {:error, %Errors.Rejected{}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false,
+               destination: "acct_1doesnotexist0",
+               application_fee: %{amount: "2.00", currency: "USD"},
+               reference: "seller-#{run}"
+             })
+  end
+
   # A test account is deleted when the test is done with it, whatever happened.
   defp with_account(id, fun) do
     fun.()
