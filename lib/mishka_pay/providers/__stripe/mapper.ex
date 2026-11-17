@@ -108,7 +108,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "metadata" => Map.merge(checkout.metadata || %{}, reference)
     }
     |> Map.merge(ui_params(checkout))
-    |> Map.merge(mode_data(checkout, reference))
+    |> Map.merge(mode_data(checkout, reference, settings))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(options(checkout))
     |> Map.merge(shipping(checkout))
@@ -255,28 +255,33 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
-  defp mode_data(%Checkout{mode: :subscription, trial_days: days} = checkout, reference),
-    do: %{
-      "subscription_data" =>
-        %{
-          "metadata" => reference,
-          "trial_period_days" => days,
-          "description" => checkout.description,
-          "application_fee_percent" =>
-            checkout.application_fee_percent &&
-              Decimal.to_string(checkout.application_fee_percent, :normal)
-        }
-        |> Map.merge(seller(checkout))
-        |> reject_nil()
-    }
+  defp mode_data(
+         %Checkout{mode: :subscription, trial_days: days} = checkout,
+         reference,
+         settings
+       ),
+       do: %{
+         "subscription_data" =>
+           %{
+             "metadata" => reference,
+             "billing_mode" => billing_mode(checkout, settings),
+             "trial_period_days" => days,
+             "description" => checkout.description,
+             "application_fee_percent" =>
+               checkout.application_fee_percent &&
+                 Decimal.to_string(checkout.application_fee_percent, :normal)
+           }
+           |> Map.merge(seller(checkout))
+           |> reject_nil()
+       }
 
-  defp mode_data(%Checkout{mode: :setup} = checkout, reference),
+  defp mode_data(%Checkout{mode: :setup} = checkout, reference, _settings),
     do: %{
       "setup_intent_data" =>
         reject_nil(%{"metadata" => reference, "description" => checkout.description})
     }
 
-  defp mode_data(checkout, reference),
+  defp mode_data(checkout, reference, _settings),
     do: %{
       "payment_intent_data" =>
         %{
@@ -289,6 +294,27 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         |> Map.merge(seller(checkout))
         |> reject_nil()
     }
+
+  @doc """
+  Stripe's `billing_mode` of a subscription made from `choice` (a checkout or a new schedule):
+  its own `:billing_mode`, else the tenant's (`settings`), else `flexible`, Stripe's recommended
+  mode; in the flexible mode, its `:proration_discounts`, else the tenant's, else `itemized`, the
+  way Stripe recommends.
+  """
+  @spec billing_mode(map(), map()) :: map()
+  def billing_mode(choice, settings) do
+    case Map.get(choice, :billing_mode) || Map.get(settings, :billing_mode) || :flexible do
+      :classic ->
+        %{"type" => "classic"}
+
+      :flexible ->
+        discounts =
+          Map.get(choice, :proration_discounts) || Map.get(settings, :proration_discounts) ||
+            :itemized
+
+        %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
+    end
+  end
 
   # The seller a platform's sale is for: where the money goes, and who sells it.
   defp seller(checkout),
@@ -1354,17 +1380,21 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @doc """
   Params of `POST /v1/subscription_schedules`: `from_subscription` alone (Stripe takes nothing
-  else with it, metadata neither), or the customer, its start (now unless given), the phases and
-  what happens after them, with the reference in its metadata.
+  else with it, metadata and billing mode neither), or the customer, its start (now unless
+  given), the phases and what happens after them, its billing mode (`billing_mode/2`, with the
+  tenant's `settings`), with the reference in its metadata.
   """
-  @spec subscription_schedule_params(SubscriptionSchedule.t()) :: map()
-  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id})
+  @spec subscription_schedule_params(SubscriptionSchedule.t(), map()) :: map()
+  def subscription_schedule_params(schedule, settings \\ %{})
+
+  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id}, _settings)
       when is_binary(id),
       do: %{"from_subscription" => id}
 
-  def subscription_schedule_params(%SubscriptionSchedule{} = schedule) do
+  def subscription_schedule_params(%SubscriptionSchedule{} = schedule, settings) do
     reject_nil(%{
       "customer" => schedule.customer_id,
+      "billing_mode" => billing_mode(schedule, settings),
       "start_date" => unix(schedule.start_at) || "now",
       "end_behavior" => schedule.end_behavior && Atom.to_string(schedule.end_behavior),
       "phases" => Enum.map(schedule.phases, &phase_params/1),

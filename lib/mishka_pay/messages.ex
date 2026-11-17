@@ -134,6 +134,8 @@ defmodule MishkaPay.Messages do
           | :phase_prices
           | :phase_length
           | :schedule_from_subscription
+          | :proration_discounts_flexible
+          | :billing_mode_when_made
           | :schedule_moves
           | :choices
           | :fields_three
@@ -796,6 +798,20 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "A phase lasts a number of periods of one interval, or until an end date, one of them"
+      )
+
+  defp msgid(:proration_discounts_flexible),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Proration discounts go only with the flexible billing mode: leave them out, or use billing_mode flexible"
+      )
+
+  defp msgid(:billing_mode_when_made),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The billing mode is set when a subscription is made: a running one keeps its own"
       )
 
   defp msgid(:schedule_from_subscription),

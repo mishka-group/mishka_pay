@@ -19,6 +19,11 @@ defmodule MishkaPay.SubscriptionSchedule do
     * new: `:customer_id` and its `:phases`, from `:start_at` (now unless given); the
       subscription starts when the first phase does.
 
+  A new schedule also takes `:billing_mode` (`:flexible`, the default, or `:classic`) and
+  `:proration_discounts` (`:itemized`, the default, or `:included`), as a checkout does
+  (`MishkaPay.Checkout`); left out, the tenant's own (`MishkaPay.Credentials`) apply. A schedule
+  made from a subscription keeps the subscription's billing mode, and a change cannot set one.
+
   And on either, `:reference` (the caller's own id: it makes the idempotency key, so the same
   reference never makes two) and `:metadata`. A change (`:id` given) names only what it changes:
   `:phases` (all of them from the current one on, the current one with the start it has),
@@ -52,6 +57,14 @@ defmodule MishkaPay.SubscriptionSchedule do
       validator: {__MODULE__, :end_behavior}
 
     field :phases, list(), structs: MishkaPay.SubscriptionPhase, derives: "validate(list)"
+
+    field :billing_mode, :flexible | :classic,
+      derives: "validate(enum=Atom[flexible::classic])",
+      validator: {MishkaPay.Checkout, :billing_mode}
+
+    field :proration_discounts, :itemized | :included,
+      derives: "validate(enum=Atom[itemized::included])",
+      validator: {MishkaPay.Checkout, :proration_discounts}
 
     field :proration, :create_prorations | :always_invoice | :none,
       derives: "validate(enum=Atom[create_prorations::always_invoice::none])",
@@ -90,20 +103,30 @@ defmodule MishkaPay.SubscriptionSchedule do
   end
 
   # A new schedule from a subscription takes nothing of its own plan, and phases given, new or in
-  # a change, are one or more. A schedule the provider answered (it has a status) is taken as it
-  # is. It runs on the caller's map, before the fields are built; a field that failed its
-  # own checks is no longer in it.
+  # a change, are one or more. The billing mode is set only on a new schedule of its own. A
+  # schedule the provider answered (it has a status) is taken as it is. It runs on the caller's
+  # map, before the fields are built; a field that failed its own checks is no longer in it.
   @doc false
   def planned(attrs) do
     from = key(attrs, :subscription_id)
-    planned = Enum.find([:customer_id, :phases, :start_at, :end_behavior], &key(attrs, &1))
+
+    planned =
+      Enum.find(
+        [:customer_id, :phases, :start_at, :end_behavior, :billing_mode, :proration_discounts],
+        &key(attrs, &1)
+      )
+
+    billing = Enum.find([:billing_mode, :proration_discounts], &key(attrs, &1))
 
     case {key(attrs, :status), key(attrs, :id), from, planned} do
       {nil, nil, from, planned} when not is_nil(from) and not is_nil(planned) ->
         invalid(planned, :schedule_from_subscription)
 
+      {nil, id, _from, _planned} when not is_nil(id) and not is_nil(billing) ->
+        invalid(billing, :billing_mode_when_made)
+
       {nil, _new_or_change, _from, _planned} ->
-        some_phases(attrs)
+        with {:ok, attrs} <- MishkaPay.Checkout.billing(attrs), do: some_phases(attrs)
 
       _answered ->
         {:ok, attrs}

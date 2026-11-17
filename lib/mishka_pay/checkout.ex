@@ -57,6 +57,14 @@ defmodule MishkaPay.Checkout do
       answers come back in `:field_values`.
     * `:card_required`: with `:subscription` and a trial, `false` starts the trial without a card;
       the provider asks for one before the first charge.
+    * `:billing_mode`: with `:subscription`, how the provider counts prorations and bills:
+      `:flexible` (the default, Stripe's recommended mode) or `:classic` (its older counting). Left
+      out, the tenant's `:billing_mode` (`MishkaPay.Credentials`) applies, else `:flexible`. It is
+      set once, when the subscription is made.
+    * `:proration_discounts`: with the flexible billing mode, how a bill shows a proration of a
+      discounted price: `:itemized` (the default, Stripe's recommended way: the full amount and
+      the discount, as on any other line) or `:included` (the amount after the discount, with a
+      discount of zero). Left out, the tenant's `:proration_discounts` applies, else `:itemized`.
     * `:description`: the payment's, the subscription's or the setup's description at the
       provider.
     * `:statement_suffix`: up to 22 letters, digits or spaces added to the line on the buyer's
@@ -216,6 +224,14 @@ defmodule MishkaPay.Checkout do
     field :fields, list(), structs: MishkaPay.CheckoutField, derives: "validate(list)"
     field :card_required, boolean(), derives: "validate(boolean)"
 
+    field :billing_mode, :flexible | :classic,
+      derives: "validate(enum=Atom[flexible::classic])",
+      validator: {__MODULE__, :billing_mode}
+
+    field :proration_discounts, :itemized | :included,
+      derives: "validate(enum=Atom[itemized::included])",
+      validator: {__MODULE__, :proration_discounts}
+
     field :description, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=500)"
 
@@ -278,6 +294,35 @@ defmodule MishkaPay.Checkout do
   @doc false
   def capture(field, value),
     do: Choice.atom(field, value, ~w(automatic manual))
+
+  @doc false
+  def billing_mode(field, value),
+    do: Choice.atom(field, value, ~w(flexible classic))
+
+  @doc false
+  def proration_discounts(field, value),
+    do: Choice.atom(field, value, ~w(itemized included))
+
+  @doc """
+  Whether `attrs` (a caller's map) asks for proration discounts only with the flexible billing
+  mode: `:proration_discounts` with `billing_mode: :classic` is an error on
+  `:proration_discounts`. Checkouts and subscription schedules check it before they are built.
+  """
+  @spec billing(map()) :: {:ok, map()} | {:error, map()}
+  def billing(attrs) do
+    case {key(attrs, :billing_mode), key(attrs, :proration_discounts)} do
+      {mode, discounts} when mode in [:classic, "classic"] and not is_nil(discounts) ->
+        {:error,
+         %{
+           field: :proration_discounts,
+           action: :billing_mode,
+           message: Messages.text(:proration_discounts_flexible)
+         }}
+
+      _fits ->
+        {:ok, attrs}
+    end
+  end
 
   # A checkout that expires is one that has not expired yet.
   @doc false
@@ -365,6 +410,7 @@ defmodule MishkaPay.Checkout do
          {:ok, attrs} <- customer_creation_mode(attrs),
          {:ok, attrs} <- invoice_mode(attrs),
          {:ok, attrs} <- options_mode(attrs),
+         {:ok, attrs} <- billing_mode_of_plan(attrs),
          {:ok, attrs} <- fee_mode(attrs),
          {:ok, attrs} <- shipping_mode(attrs),
          do: fits_mode(attrs)
@@ -496,6 +542,23 @@ defmodule MishkaPay.Checkout do
 
       true ->
         {:ok, attrs}
+    end
+  end
+
+  # A billing mode is a subscription's, set when it is made.
+  defp billing_mode_of_plan(attrs) do
+    case {key(attrs, :mode) in [:subscription, "subscription"],
+          Enum.find([:billing_mode, :proration_discounts], &key(attrs, &1))} do
+      {false, field} when not is_nil(field) ->
+        {:error,
+         %{
+           field: field,
+           action: :mode,
+           message: Messages.text(:recurring_only, param: Atom.to_string(field))
+         }}
+
+      _plan_or_none ->
+        billing(attrs)
     end
   end
 

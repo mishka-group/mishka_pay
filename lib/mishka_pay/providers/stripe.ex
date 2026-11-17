@@ -33,7 +33,10 @@ defmodule MishkaPay.Providers.Stripe do
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription. `list_subscriptions/2` lists them by customer, price or status (Stripe
       leaves canceled ones out unless asked for them or for `:all`), and `search_subscriptions/2`
-      finds them with Stripe's search by status, reference or metadata.
+      finds them with Stripe's search by status, reference or metadata. Every subscription it
+      makes (a subscription checkout, a new schedule) sends Stripe's `billing_mode`: `flexible`
+      with `itemized` proration discounts, Stripe's recommended ones, unless the checkout, the
+      schedule or the tenant's keys ask for `classic` or `included`.
     * `create_subscription_schedule/2`, `fetch_subscription_schedule/2`,
       `list_subscription_schedules/2`, `update_subscription_schedule/2`,
       `release_subscription_schedule/2` and `cancel_subscription_schedule/3` use Subscription
@@ -435,6 +438,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
          :ok <- held(checkout, keys),
+         :ok <- billing_fits(checkout, keys),
          :ok <- shipping_rates(checkout.shipping_rates),
          :ok <- for_seller(checkout),
          {:ok, session} <-
@@ -456,6 +460,17 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp held(_checkout, _keys), do: :ok
+
+  # Proration discounts go only with the flexible billing mode, the tenant's own mode included.
+  defp billing_fits(%{proration_discounts: discounts} = choice, keys)
+       when not is_nil(discounts) do
+    case choice.billing_mode || Map.get(keys, :billing_mode) do
+      :classic -> invalid(:proration_discounts, Messages.text(:proration_discounts_flexible))
+      _flexible -> :ok
+    end
+  end
+
+  defp billing_fits(_choice, _keys), do: :ok
 
   # A sale for a seller names Connect accounts, and takes its fee in the items' own currency, in
   # amounts Stripe can count.
@@ -682,11 +697,12 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- maybe_id(schedule.subscription_id, "sub_", :subscription_id),
          :ok <- maybe_id(schedule.customer_id, "cus_", :customer_id),
          :ok <- schedule_fits(schedule),
+         :ok <- billing_fits(schedule, keys),
          {:ok, answer} <-
            request(
              :post,
              "/v1/subscription_schedules",
-             Mapper.subscription_schedule_params(schedule),
+             Mapper.subscription_schedule_params(schedule, keys),
              keys,
              key:
                ProviderKit.idempotency_key(

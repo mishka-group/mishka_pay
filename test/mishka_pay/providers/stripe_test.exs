@@ -63,6 +63,13 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok,
               %Checkout{id: "cs_" <> _, url: "https://checkout.stripe.com/" <> _, status: :open}} =
                MishkaPay.checkout(@checkout)
+
+      for billing <- [%{}, %{billing_mode: :flexible, proration_discounts: :included}] do
+        plan = %{@checkout | items: [%{id: "price_monthly"}]}
+
+        assert {:ok, %Checkout{id: "cs_" <> _}} =
+                 MishkaPay.checkout(Map.merge(plan, Map.put(billing, :mode, :subscription)))
+      end
     end
 
     test "request options send another API version and expand objects, as Stripe's spec accepts" do
@@ -1180,10 +1187,81 @@ defmodule MishkaPay.Providers.StripeTest do
       assert params["mode"] == "subscription"
       assert params["subscription_data"]["trial_period_days"] == 14
       assert params["subscription_data"]["metadata"] == %{"mishka_pay_reference" => "sub-1"}
+
+      assert params["subscription_data"]["billing_mode"] == %{
+               "type" => "flexible",
+               "flexible" => %{"proration_discounts" => "itemized"}
+             }
+
       refute Map.has_key?(params, "payment_intent_data")
 
       assert [%{"price_data" => %{"recurring" => %{"interval" => "year", "interval_count" => 1}}}] =
                params["line_items"]
+    end
+
+    test "a subscription's billing mode is its own, else the tenant's, else flexible and itemized" do
+      plan = %Checkout{
+        provider: "stripe",
+        mode: :subscription,
+        items: [%MishkaPay.Price{id: "price_1", quantity: 1}],
+        success_url: "https://shop.test/ok",
+        cancel_url: "https://shop.test/no"
+      }
+
+      schedule = %MishkaPay.SubscriptionSchedule{
+        provider: "stripe",
+        customer_id: "cus_1",
+        phases: [%MishkaPay.SubscriptionPhase{items: [%MishkaPay.Price{id: "price_1"}]}]
+      }
+
+      billing = fn choice, settings ->
+        checkout = Stripe.Mapper.checkout_params(Map.merge(plan, choice), settings)
+        made = Stripe.Mapper.subscription_schedule_params(Map.merge(schedule, choice), settings)
+        assert checkout["subscription_data"]["billing_mode"] == made["billing_mode"]
+        made["billing_mode"]
+      end
+
+      flexible = &%{"type" => "flexible", "flexible" => %{"proration_discounts" => &1}}
+
+      assert billing.(%{}, %{}) == flexible.("itemized")
+      assert billing.(%{billing_mode: :classic}, %{}) == %{"type" => "classic"}
+      assert billing.(%{proration_discounts: :included}, %{}) == flexible.("included")
+
+      assert billing.(%{}, %{billing_mode: :classic, proration_discounts: :included}) ==
+               %{"type" => "classic"}
+
+      assert billing.(%{}, %{proration_discounts: :included}) == flexible.("included")
+
+      assert billing.(%{billing_mode: :flexible}, %{billing_mode: :classic}) ==
+               flexible.("itemized")
+
+      refute Map.has_key?(
+               Stripe.Mapper.subscription_schedule_params(%{schedule | subscription_id: "sub_1"}),
+               "billing_mode"
+             )
+
+      # Proration discounts asked of a tenant whose subscriptions are classic: no request.
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", billing_mode: :classic})
+
+      for made <- [
+            MishkaPay.checkout(%{
+              provider: "stripe",
+              mode: :subscription,
+              items: [%{id: "price_1"}],
+              success_url: "https://shop.test/ok",
+              cancel_url: "https://shop.test/no",
+              proration_discounts: :itemized
+            }),
+            MishkaPay.create_subscription_schedule(%{
+              provider: "stripe",
+              customer_id: "cus_1",
+              phases: [%{items: [%{id: "price_1"}]}],
+              proration_discounts: :itemized
+            })
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :proration_discounts}]}} = made
+      end
     end
 
     test "a subscription is read, cancelled at the period's end or now, resumed, and its invoices listed" do
@@ -1752,6 +1830,10 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert params == %{
                "customer" => "cus_1",
+               "billing_mode" => %{
+                 "type" => "flexible",
+                 "flexible" => %{"proration_discounts" => "itemized"}
+               },
                "start_date" => "1796083200",
                "end_behavior" => "cancel",
                "phases" => %{
@@ -1830,6 +1912,11 @@ defmodule MishkaPay.Providers.StripeTest do
             {Map.put(base, :subscription_id, "sub_1"), :customer_id},
             {%{provider: "stripe", subscription_id: "sub_1", end_behavior: :cancel},
              :end_behavior},
+            {%{provider: "stripe", subscription_id: "sub_1", billing_mode: :flexible},
+             :billing_mode},
+            {Map.merge(base, %{billing_mode: :classic, proration_discounts: :itemized}),
+             :proration_discounts},
+            {Map.put(base, :billing_mode, :monthly), :billing_mode},
             {%{base | phases: [%{items: []}]}, :items},
             {%{
                base
@@ -1870,7 +1957,10 @@ defmodule MishkaPay.Providers.StripeTest do
             {%{provider: "stripe", id: "sub_sched_1", subscription_id: "sub_2"},
              :subscription_id},
             {%{provider: "stripe", end_behavior: :cancel}, :id},
-            {%{provider: "stripe", id: "sub_1", end_behavior: :cancel}, :schedule_id}
+            {%{provider: "stripe", id: "sub_1", end_behavior: :cancel}, :schedule_id},
+            {%{provider: "stripe", id: "sub_sched_1", billing_mode: :classic}, :billing_mode},
+            {%{provider: "stripe", id: "sub_sched_1", proration_discounts: :included},
+             :proration_discounts}
           ] do
         assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} =
                  MishkaPay.update_subscription_schedule(attrs)

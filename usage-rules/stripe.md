@@ -290,6 +290,23 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - `search_subscriptions/3` is Stripe's search (`GET /v1/subscriptions/search`, `status` and
   `metadata` fields); its index lags up to a minute, and `:next` is Stripe's `next_page`.
 
+## Billing mode
+
+- Every subscription Mishka Pay makes (a subscription checkout's `subscription_data`, a new
+  schedule) sends `billing_mode[type]`: `flexible` unless the checkout, the schedule or the site's
+  keys say `:classic`. In the flexible mode it sends `billing_mode[flexible][proration_discounts]`,
+  `itemized` unless they say `:included`. Both are what Stripe recommends; the pinned version's
+  own default is `flexible` too, so nothing changes when the option is left out.
+- A schedule made from a subscription (`from_subscription`) sends no billing mode: Stripe refuses
+  one there, and the schedule keeps the subscription's.
+- Payment links take no billing mode: Stripe gives their subscriptions the API version's default
+  (`flexible`) or the Dashboard's default for links made there.
+- A subscription made `classic` (before the flexible default, or in the Dashboard) moves to
+  flexible with Stripe's migrate call, for good (it never moves back): `MishkaPay.request(%{provider:
+  "stripe", tenant: site.id, method: :post, path: "/v1/subscriptions/sub_.../migrate", params:
+  %{"billing_mode" => %{"type" => "flexible"}}})`. Mishka Pay has no typed call for it, since
+  every subscription it makes is flexible unless asked otherwise.
+
 ## Subscription changes
 
 - A preview is `POST /v1/invoices/create_preview`; its id starts with `upcoming_in_` and it is

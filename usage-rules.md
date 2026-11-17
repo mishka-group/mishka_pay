@@ -75,7 +75,9 @@ Keys fields: `secret_key` (required), `publishable_key`, `webhook_secret`, `webh
 (older secrets still accepted while a rolled one runs out, see `usage-rules/webhooks.md`), `mode` (`:test`
 default, or `:live`), `merchant_of_record` (Stripe Managed Payments, `true`/`false`/absent),
 `refunds` (`:once` default, or `:many`), `automatic_tax` (`true` counts the tax of every checkout
-and payment link of this site with Stripe Tax; a checkout's own choice wins), `account_id` (the
+and payment link of this site with Stripe Tax; a checkout's own choice wins), `billing_mode`
+(`:flexible` default, or `:classic`) and `proration_discounts` (`:itemized` default, or
+`:included`) for the site's new subscriptions (a checkout's or a schedule's own wins), `account_id` (the
 connected account the site acts for on a Stripe Connect platform: `acct_...`, sent as
 `Stripe-Account` on every request; see `usage-rules/stripe.md`), `extra` (a map). Answer `nil` for a tenant without keys.
 

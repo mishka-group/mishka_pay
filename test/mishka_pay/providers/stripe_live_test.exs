@@ -1230,6 +1230,73 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.fetch_subscription("stripe", subscription)
   end
 
+  test "subscriptions are made flexible with itemized proration discounts, or classic when asked",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "billing-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Billing mode plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    {:ok, %MishkaPay.Price{id: price}} =
+      MishkaPay.create_price(%{
+        provider: "stripe",
+        product_id: product,
+        amount: %{amount: "9.00", currency: "USD"},
+        interval: :month
+      })
+
+    for billing <- [%{}, %{billing_mode: :classic}, %{proration_discounts: :included}] do
+      assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+               MishkaPay.checkout(
+                 Map.merge(billing, %{
+                   provider: "stripe",
+                   mode: :subscription,
+                   items: [%{id: price}],
+                   success_url: "https://shop.test/welcome",
+                   cancel_url: "https://shop.test/pricing",
+                   merchant_of_record: false
+                 })
+               )
+    end
+
+    for {billing, read} <- [
+          {%{}, %{"type" => "flexible", "flexible" => %{"proration_discounts" => "itemized"}}},
+          {%{billing_mode: :classic}, %{"type" => "classic", "flexible" => nil}}
+        ] do
+      assert {:ok, %MishkaPay.SubscriptionSchedule{id: id, subscription_id: subscription}} =
+               MishkaPay.create_subscription_schedule(
+                 Map.merge(billing, %{
+                   provider: "stripe",
+                   customer_id: customer,
+                   end_behavior: :cancel,
+                   phases: [
+                     %{items: [%{id: price}], trial: true, iterations: 1, interval: :month}
+                   ]
+                 })
+               )
+
+      assert {:ok, %{"billing_mode" => schedule_mode}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/subscription_schedules/#{id}"})
+
+      assert {:ok, %{"billing_mode" => subscription_mode}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/subscriptions/#{subscription}"})
+
+      for mode <- [schedule_mode, subscription_mode],
+          do: assert(Map.take(mode, ["type", "flexible"]) == read)
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{status: :canceled}} =
+               MishkaPay.cancel_subscription_schedule("stripe", id)
+    end
+  end
+
   test "a credit note is previewed, made once per reference by line, listed and voided on an open bill, then made on a paid one",
        %{key: key} do
     run = run_id()

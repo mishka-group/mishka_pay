@@ -3,7 +3,8 @@ defmodule ShopWeb.CheckoutOptionsComponent do
   More checkout options of the demo shop, each one a field of `MishkaPay.Checkout` sent through
   `Shop.Pay.Payment`'s `:start_checkout`: the buyer's phone, the site's terms, up to three
   questions (text, numeric or dropdown), a description, a card statement suffix, the pay
-  button's word, a plan's trial without a card, shipping countries with an inline shipping rate,
+  button's word, a plan's trial without a card, a plan's billing mode and proration discounts
+  (`:billing_mode`, `:proration_discounts`), shipping countries with an inline shipping rate,
   and pay later (`capture: :manual`, then Capture or Cancel under "Refunds and held payments").
 
   The checkout opens on Stripe's page, or embedded in this page (`ui_mode: :embedded`): Stripe.js
@@ -22,6 +23,8 @@ defmodule ShopWeb.CheckoutOptionsComponent do
     "ui_mode" => "hosted",
     "merchant_of_record" => "",
     "submit_type" => "",
+    "billing_mode" => "",
+    "proration_discounts" => "",
     "q1_type" => "text",
     "q2_type" => "text",
     "q3_type" => "text"
@@ -147,6 +150,46 @@ defmodule ShopWeb.CheckoutOptionsComponent do
                 }
                 value={value}
                 selected={@form["submit_type"] == value}
+              >
+                {label}
+              </option>
+            </select>
+          </label>
+          <label class="fieldset">
+            <span class="fieldset-legend">Billing mode (plans only)</span>
+            <select name="billing_mode" class="select select-sm" data-testid="more-billing-mode">
+              <option
+                :for={
+                  {value, label} <- [
+                    {"", "The site's setting (flexible)"},
+                    {"flexible", "Flexible"},
+                    {"classic", "Classic"}
+                  ]
+                }
+                value={value}
+                selected={@form["billing_mode"] == value}
+              >
+                {label}
+              </option>
+            </select>
+          </label>
+          <label class="fieldset">
+            <span class="fieldset-legend">Proration discounts (flexible only)</span>
+            <select
+              name="proration_discounts"
+              class="select select-sm"
+              data-testid="more-proration-discounts"
+            >
+              <option
+                :for={
+                  {value, label} <- [
+                    {"", "The site's setting (itemized)"},
+                    {"itemized", "Itemized"},
+                    {"included", "Included"}
+                  ]
+                }
+                value={value}
+                selected={@form["proration_discounts"] == value}
               >
                 {label}
               </option>
@@ -481,6 +524,8 @@ defmodule ShopWeb.CheckoutOptionsComponent do
       statement_suffix: blank_nil(params["statement_suffix"]),
       submit_type: blank_nil(params["submit_type"]),
       trial_days: if(plan?, do: integer(params["trial_days"]) || product.trial_days),
+      billing_mode: if(plan?, do: blank_nil(params["billing_mode"])),
+      proration_discounts: if(plan?, do: blank_nil(params["proration_discounts"])),
       card_required: if(params["no_card"] == "true", do: false),
       shipping_countries: countries(params["shipping_countries"]),
       shipping_rates: shipping_rates(params),
