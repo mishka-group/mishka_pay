@@ -762,7 +762,8 @@ defmodule ShopWeb.PayComponents do
 
   @doc """
   One payment: the row the shop keeps, the payment as its provider has it, its events and actions.
-  A Stripe payment not paid yet has "Cancel" (`cancel_payment`), so one left waiting can be ended.
+  A Stripe payment not paid yet has "Cancel" (`cancel_payment`), so one left waiting can be ended;
+  one a checkout made (its row has a `checkout_id`) has none, as only its checkout can end it.
   """
   attr :selected, :map, required: true
   attr :live, :any, required: true
@@ -1050,7 +1051,8 @@ defmodule ShopWeb.PayComponents do
 
   # A Stripe payment intent no one has paid yet (waiting for a card, for the buyer, or after a
   # declined card) can still be canceled; a held one is let go under "Refunds and held payments".
-  defp cancelable?(%{provider: "stripe", status: status}),
+  # One a checkout made ends only with its checkout, so it has no Cancel here.
+  defp cancelable?(%{provider: "stripe", checkout_id: nil, status: status}),
     do: status in [:pending, :requires_action, :failed]
 
   defp cancelable?(_payment), do: false

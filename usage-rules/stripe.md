@@ -140,6 +140,12 @@
   `pm_card_mastercard`); never send a card number.
 - `capture: :manual` holds the money: `:requires_capture` after the confirm, then
   `capture_payment/4`, or `cancel_payment_intent/3` to let it go.
+- `cancel_payment_intent/3` cannot end an intent an invoice or a checkout made: Stripe answers 400
+  with no code, and Mishka Pay reads its words ("PaymentIntents created by invoices", "created by
+  Checkout") as `Errors.Rejected` with code `"intent_of_invoice"` (void the invoice instead) or
+  `"intent_of_checkout"` (expire the checkout instead, `expire_checkout/3`). Status, request id
+  and Stripe's own message stay on the error for the log. A payment row with a `checkout_id`
+  came from a checkout: offer the checkout's expiry, not the intent's cancel.
 - `update_payment_intent/1` sends only what it names; a changed `:amount` sends its currency
   too. A paid or canceled intent cannot change (`Errors.Rejected`).
 - A declined card on a server confirm is `Errors.Declined` with the bank's reason; read in the

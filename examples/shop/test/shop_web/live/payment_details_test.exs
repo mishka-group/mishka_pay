@@ -89,16 +89,55 @@ defmodule ShopWeb.PaymentDetailsTest do
     assert has_element?(view, "[data-testid=payment-cancel]")
   end
 
-  defp seed(provider_id, status) do
-    Ash.Seed.seed!(Shop.Pay.Payment, %{
-      provider: "stripe",
-      provider_id: provider_id,
-      tenant: "demo",
-      status: status,
-      amount: Decimal.new("19.99"),
-      currency: "USD",
-      synced_at: DateTime.utc_now()
+  test "a payment a checkout made has no Cancel, as only its checkout can end it", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/payment_intents/pi_open"} => intent("pi_open", "requires_payment_method")
     })
+
+    seed("pi_open", :pending, %{checkout_id: "cs_test_open"})
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=payment-row][data-payment-id=pi_open]") |> render_click()
+
+    assert has_element?(view, "[data-testid=details-sync]")
+    refute has_element?(view, "[data-testid=payment-cancel]")
+  end
+
+  test "a cancel of an intent an invoice made says to void the bill", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/payment_intents/pi_open"} => intent("pi_open", "requires_payment_method"),
+      {"POST", "/v1/payment_intents/pi_open/cancel"} =>
+        StripeRoutes.error(
+          400,
+          "You cannot cancel PaymentIntents created by invoices. Try voiding the invoice instead."
+        )
+    })
+
+    seed("pi_open", :pending)
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=payment-row][data-payment-id=pi_open]") |> render_click()
+    view |> element("[data-testid=payment-cancel]") |> render_click()
+
+    assert has_element?(view, "#flash-error", "void the bill")
+    refute has_element?(view, "#flash-error", "HTTP 400")
+    assert has_element?(view, "[data-testid=stored-status]", "pending")
+  end
+
+  defp seed(provider_id, status, fields \\ %{}) do
+    Ash.Seed.seed!(
+      Shop.Pay.Payment,
+      Map.merge(
+        %{
+          provider: "stripe",
+          provider_id: provider_id,
+          tenant: "demo",
+          status: status,
+          amount: Decimal.new("19.99"),
+          currency: "USD",
+          synced_at: DateTime.utc_now()
+        },
+        fields
+      )
+    )
   end
 
   defp intent(id \\ "pi_paid", status \\ "succeeded") do

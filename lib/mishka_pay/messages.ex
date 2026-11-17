@@ -140,6 +140,8 @@ defmodule MishkaPay.Messages do
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
+          | :intent_of_invoice
+          | :intent_of_checkout
           | :endpoint_url
           | :dropdown_options
           | :declined
@@ -694,6 +696,13 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "That subscription belongs to another customer: open the portal for the customer who has it"
       )
+
+  defp msgid(:intent_of_invoice),
+    do: dgettext_noop("mishka_pay", "This payment belongs to a bill: void the bill instead.")
+
+  defp msgid(:intent_of_checkout),
+    do:
+      dgettext_noop("mishka_pay", "This payment belongs to a checkout: end the checkout instead.")
 
   defp msgid(:portal_feature_off),
     do:

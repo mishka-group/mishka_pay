@@ -2824,7 +2824,9 @@ defmodule MishkaPay.Providers.Stripe do
     {"Stripe Tax has not been activated", "tax_not_set_up"},
     {"signed up for Connect", "connect_not_set_up"},
     {"feature in the portal configuration is disabled", "portal_feature_off"},
-    {"customer does not match the subscription's customer", "subscription_of_another"}
+    {"customer does not match the subscription's customer", "subscription_of_another"},
+    {"PaymentIntents created by invoices", "intent_of_invoice"},
+    {"PaymentIntents created by Checkout", "intent_of_checkout"}
   ]
 
   defp code_of(%{"message" => message}) when is_binary(message),

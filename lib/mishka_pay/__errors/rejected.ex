@@ -26,6 +26,8 @@ defmodule MishkaPay.Errors.Rejected do
       tax; `"managed_payments_shipping"` shipping asked of a checkout the provider sells as
       merchant of record; `"portal_feature_off"` a portal task the portal's settings turn off;
       `"subscription_of_another"` a subscription that belongs to another customer;
+      `"intent_of_invoice"` and `"intent_of_checkout"` a PaymentIntent an invoice or a checkout
+      made, which only its invoice (voided) or its checkout (expired) can end;
       `"account_invalid"` a connected account (the keys' `:account_id`) the key has no access to,
       or that does not exist; `"connect_not_set_up"` a connected account asked of a platform that
       has not signed up for Connect.
@@ -73,6 +75,8 @@ defmodule MishkaPay.Errors.Rejected do
   def message(%{code: "portal_feature_off"}), do: Messages.text(:portal_feature_off)
   def message(%{code: "subscription_of_another"}), do: Messages.text(:subscription_of_another)
   def message(%{code: "capture_invoice"}), do: Messages.text(:capture_invoice)
+  def message(%{code: "intent_of_invoice"}), do: Messages.text(:intent_of_invoice)
+  def message(%{code: "intent_of_checkout"}), do: Messages.text(:intent_of_checkout)
 
   def message(%{code: "merchant_of_record_off", param: param}),
     do: Messages.text(:merchant_of_record_off, param: param || "this choice")

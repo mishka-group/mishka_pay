@@ -2464,6 +2464,46 @@ defmodule MishkaPay.Providers.StripeTest do
                })
     end
 
+    test "an intent an invoice or a checkout made is refused a cancel in plain words, keeping Stripe's for the log" do
+      refusals = [
+        {"You cannot cancel PaymentIntents created by invoices. Try voiding the invoice instead.",
+         "intent_of_invoice", "void the bill"},
+        {"You cannot perform this action on PaymentIntents created by Checkout.",
+         "intent_of_checkout", "end the checkout"}
+      ]
+
+      for {words, code, advice} <- refusals do
+        MishkaPay.Test.stub_http(fn conn ->
+          conn
+          |> Plug.Conn.put_resp_header("request-id", "req_cancel1")
+          |> Plug.Conn.put_status(400)
+          |> Req.Test.json(%{"error" => %{"type" => "invalid_request_error", "message" => words}})
+        end)
+
+        assert {:error,
+                %Errors.Rejected{status: 400, code: ^code, request_id: "req_cancel1"} = error} =
+                 MishkaPay.cancel_payment_intent("stripe", "pi_123", "site-a")
+
+        assert error.message == words
+        assert Exception.message(error) =~ advice
+        refute Exception.message(error) =~ "HTTP 400"
+      end
+
+      MishkaPay.Test.stub_http(fn conn ->
+        error = %{
+          "type" => "invalid_request_error",
+          "message" => "This PaymentIntent's status is succeeded, and it cannot be canceled."
+        }
+
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => error})
+      end)
+
+      assert {:error, %Errors.Rejected{status: 400, code: nil} = error} =
+               MishkaPay.cancel_payment_intent("stripe", "pi_123", "site-a")
+
+      assert Exception.message(error) =~ "HTTP 400"
+    end
+
     test "a portal session opens on one task, as Stripe's spec accepts, and a subscription task needs its subscription" do
       base = %{
         provider: "stripe",
