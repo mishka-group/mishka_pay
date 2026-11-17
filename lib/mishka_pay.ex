@@ -78,6 +78,8 @@ defmodule MishkaPay do
     * payment links: `:payment_link_create`, `:payment_link`, `:payment_link_update`,
       `:payment_link_list`;
     * disputes: `:dispute`, `:dispute_list`, `:dispute_update`, `:dispute_accept`;
+    * fraud: `:fraud_warning`, `:fraud_warning_list`, `:fraud_review`, `:fraud_review_list`,
+      `:fraud_review_approve`;
     * files: `:file_upload`, `:file`, `:file_link`;
     * usage billing: `:meter_create`, `:meter`, `:meter_update`, `:meter_list`,
       `:meter_deactivate`, `:meter_reactivate`, `:usage_report`, `:usage_cancel`,
@@ -879,6 +881,75 @@ defmodule MishkaPay do
   def accept_dispute(provider, dispute_id, tenant \\ nil)
       when is_binary(provider) and is_binary(dispute_id) do
     capable(:dispute, :dispute_accept, provider, tenant, & &1.accept_dispute(dispute_id, &2))
+  end
+
+  @doc """
+  Reads early fraud warning `warning_id` (`MishkaPay.FraudWarning`): a card issuer saying a
+  payment looks like fraud, before any dispute.
+  """
+  @spec fetch_fraud_warning(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.FraudWarning.t()} | {:error, Splode.Error.t()}
+  def fetch_fraud_warning(provider, warning_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(warning_id) do
+    capable(:fraud, :fraud_warning, provider, tenant, & &1.fetch_fraud_warning(warning_id, &2))
+  end
+
+  @doc """
+  One page of early fraud warnings, newest first (`MishkaPay.Page` of `MishkaPay.FraudWarning`):
+  `payment_id:` or `charge_id:` only those about one payment, plus `limit:` and `after:`. A
+  warning that is `:actionable` can still be headed off: refund its payment in full.
+  """
+  @spec list_fraud_warnings(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_fraud_warnings(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :fraud,
+      :fraud_warning_list,
+      provider,
+      tenant,
+      & &1.list_fraud_warnings(limited(opts), &2)
+    )
+  end
+
+  @doc "Reads review `review_id` (`MishkaPay.FraudReview`), open or closed."
+  @spec fetch_fraud_review(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+  def fetch_fraud_review(provider, review_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(review_id) do
+    capable(:fraud, :fraud_review, provider, tenant, & &1.fetch_fraud_review(review_id, &2))
+  end
+
+  @doc """
+  One page of the reviews still open, newest first (`MishkaPay.Page` of `MishkaPay.FraudReview`):
+  payments the provider's fraud rules hold for the seller, plus `limit:` and `after:`.
+  """
+  @spec list_fraud_reviews(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_fraud_reviews(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :fraud,
+      :fraud_review_list,
+      provider,
+      tenant,
+      & &1.list_fraud_reviews(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Approves open review `review_id`: the seller trusts the payment and it goes on. Answers the
+  review, closed. To turn it down instead, refund the payment.
+  """
+  @spec approve_fraud_review(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+  def approve_fraud_review(provider, review_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(review_id) do
+    capable(
+      :fraud,
+      :fraud_review_approve,
+      provider,
+      tenant,
+      & &1.approve_fraud_review(review_id, &2)
+    )
   end
 
   @doc """

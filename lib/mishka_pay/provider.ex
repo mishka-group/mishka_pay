@@ -84,6 +84,8 @@ defmodule MishkaPay.Provider do
     * `:payment_link`: `create_payment_link/2`, `fetch_payment_link/2`, `list_payment_links/2`,
       `update_payment_link/2`;
     * `:dispute`: `fetch_dispute/2`, `list_disputes/2`, `update_dispute/2`, `accept_dispute/2`;
+    * `:fraud`: `fetch_fraud_warning/2`, `list_fraud_warnings/2`, `fetch_fraud_review/2`,
+      `list_fraud_reviews/2`, `approve_fraud_review/2`;
     * `:file`: `upload_file/2`, `fetch_file/2`, `file_link/3`;
     * `:usage`: `create_meter/2`, `fetch_meter/2`, `update_meter/2`, `list_meters/2`,
       `deactivate_meter/2`, `reactivate_meter/2`, `report_usage/2`, `cancel_usage/2`,
@@ -133,6 +135,7 @@ defmodule MishkaPay.Provider do
     :catalog,
     :payment_link,
     :dispute,
+    :fraud,
     :file,
     :usage,
     :entitlement,
@@ -186,6 +189,8 @@ defmodule MishkaPay.Provider do
     * `:catalog`: keeps products and their prices, so a checkout sells a price by its id.
     * `:payment_link`: makes pages that sell catalog prices to anyone who opens them.
     * `:dispute`: reads chargebacks and answers them with evidence, or accepts them.
+    * `:fraud`: reads a card issuer's early fraud warnings, and the payments its fraud rules hold
+      for review, which the seller lets through.
     * `:file`: keeps files, such as dispute evidence, and makes public links to them.
     * `:usage`: counts what customers use on meters, for prices billed by usage, and takes back
       a report sent by mistake.
@@ -223,6 +228,7 @@ defmodule MishkaPay.Provider do
           | :catalog
           | :payment_link
           | :dispute
+          | :fraud
           | :file
           | :usage
           | :entitlement
@@ -716,6 +722,29 @@ defmodule MishkaPay.Provider do
   @callback accept_dispute(dispute_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:fraud`. Reads one early fraud warning."
+  @callback fetch_fraud_warning(warning_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.FraudWarning.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:fraud`. One page of early fraud warnings, newest first; only those about `:payment_id`
+  or `:charge_id` when given.
+  """
+  @callback list_fraud_warnings(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:fraud`. Reads one review, open or closed."
+  @callback fetch_fraud_review(review_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:fraud`. One page of the reviews still open, newest first."
+  @callback list_fraud_reviews(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:fraud`. Lets an open review's payment through, and answers the review closed."
+  @callback approve_fraud_review(review_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:file`. Uploads a file, after checking the provider takes its type and size."
   @callback upload_file(MishkaPay.FileUpload.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
@@ -942,6 +971,11 @@ defmodule MishkaPay.Provider do
                       list_disputes: 2,
                       update_dispute: 2,
                       accept_dispute: 2,
+                      fetch_fraud_warning: 2,
+                      list_fraud_warnings: 2,
+                      fetch_fraud_review: 2,
+                      list_fraud_reviews: 2,
+                      approve_fraud_review: 2,
                       upload_file: 2,
                       fetch_file: 2,
                       file_link: 3,
@@ -1067,6 +1101,13 @@ defmodule MishkaPay.Provider do
     ],
     event_list: [list_events: 2],
     dispute: [fetch_dispute: 2, list_disputes: 2, update_dispute: 2, accept_dispute: 2],
+    fraud: [
+      fetch_fraud_warning: 2,
+      list_fraud_warnings: 2,
+      fetch_fraud_review: 2,
+      list_fraud_reviews: 2,
+      approve_fraud_review: 2
+    ],
     file: [upload_file: 2, fetch_file: 2, file_link: 3],
     payment_link: [
       create_payment_link: 2,

@@ -1709,6 +1709,25 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.reactivate_meter("stripe", meter_id)
   end
 
+  # Stripe's API makes no early fraud warning or review on demand: a warning comes from a card
+  # issuer, and a review only from a Radar rule the account must have. What can be checked live is
+  # that both lists are read, and that a warning or review that is not there is refused plainly.
+  test "early fraud warnings and open reviews are listed, and one that does not exist is a plain rejection" do
+    assert {:ok, %MishkaPay.Page{items: warnings}} =
+             MishkaPay.list_fraud_warnings("stripe", nil, limit: 5)
+
+    assert Enum.all?(warnings, &match?(%MishkaPay.FraudWarning{id: "issfr_" <> _}, &1))
+
+    assert {:ok, %MishkaPay.Page{items: reviews}} = MishkaPay.list_fraud_reviews("stripe", nil)
+    assert Enum.all?(reviews, &match?(%MishkaPay.FraudReview{id: "prv_" <> _, open: true}, &1))
+
+    assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
+             MishkaPay.fetch_fraud_warning("stripe", "issfr_doesnotexist")
+
+    assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
+             MishkaPay.approve_fraud_review("stripe", "prv_doesnotexist")
+  end
+
   test "a feature is attached to a product, and a customer who bought nothing has no entitlements",
        %{key: key} do
     run = run_id()

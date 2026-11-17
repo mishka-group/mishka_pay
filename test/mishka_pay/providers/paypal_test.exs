@@ -265,6 +265,20 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no fraud reviews: every Radar call is refused before any request" do
+      for call <- [
+            fn -> MishkaPay.fetch_fraud_warning("paypal", "W1", "site-a") end,
+            fn -> MishkaPay.list_fraud_warnings("paypal", "site-a", payment_id: "O1") end,
+            fn -> MishkaPay.fetch_fraud_review("paypal", "R1", "site-a") end,
+            fn -> MishkaPay.list_fraud_reviews("paypal", "site-a") end,
+            fn -> MishkaPay.approve_fraud_review("paypal", "R1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :fraud}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal has no credit notes: every credit note call is refused before any request" do
       note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
 

@@ -77,7 +77,7 @@
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, early fraud warnings `issfr_`, reviews `prv_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -112,6 +112,22 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   `"shipping_documentation"`, `"duplicate_charge_documentation"`, `"refund_policy"`,
   `"cancellation_policy"`, `"uncategorized_file"`) take only a `file_...` id; anything else is
   `Errors.Invalid` before any request.
+
+## Radar: early fraud warnings and reviews
+
+- An early fraud warning (`issfr_...`) is `GET /v1/radar/early_fraud_warnings`, filtered by
+  `payment_id:` (`pi_`) or `charge_id:`. Stripe makes one when a card issuer reports fraud,
+  never on request; in a sandbox the test card `4000 0000 0000 5423`, paid on a checkout page,
+  makes one a moment later (the API takes no card number, and has no token for it).
+- `:actionable` is true while the payment is neither refunded nor disputed: a full refund then
+  usually stops the dispute and its fee.
+- `list_fraud_reviews/3` is `GET /v1/reviews`, which lists only open reviews (`prv_...`).
+  Radar opens one only where the account has a review rule (Radar for Fraud Teams);
+  `approve_fraud_review/3` is `POST /v1/reviews/:id/approve`. Refunding the payment closes a
+  review as refunded.
+- Stripe sends `radar.early_fraud_warning.created`, `.updated`, `review.opened` and
+  `review.closed`; each names its payment (the event's `:payment_id`), which the Ash payment
+  listener reads again, and the warning or review as `:object_id`.
 
 ## Files
 

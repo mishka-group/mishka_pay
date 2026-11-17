@@ -93,6 +93,11 @@ defmodule MishkaPay.Providers.Stripe do
       identifier makes its idempotency key.
     * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
       (`feat_...`) on products, and the active entitlements of a customer.
+    * `fetch_fraud_warning/2` and `list_fraud_warnings/2` read Radar's early fraud warnings
+      (`issfr_...`), by PaymentIntent or charge; `list_fraud_reviews/2` lists the open Reviews
+      (`prv_...`) Radar's rules placed, `fetch_fraud_review/2` reads one and
+      `approve_fraud_review/2` approves it. Stripe sends `radar.early_fraud_warning.*` and
+      `review.opened`/`review.closed` about them.
     * `fetch_balance/1` reads the payments balance, and `list_balance_transactions/2` its
       balance transactions (`txn_...`), by payout (`po_...`) or type.
     * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
@@ -140,6 +145,7 @@ defmodule MishkaPay.Providers.Stripe do
       :catalog,
       :payment_link,
       :dispute,
+      :fraud,
       :file,
       :expire,
       :refund,
@@ -261,6 +267,10 @@ defmodule MishkaPay.Providers.Stripe do
     "credit_note.created" => [:credit_note],
     "credit_note.updated" => [:credit_note],
     "credit_note.voided" => [:credit_note],
+    "radar.early_fraud_warning.created" => [:fraud_warning, :payment],
+    "radar.early_fraud_warning.updated" => [:fraud_warning, :payment],
+    "review.opened" => [:fraud_review, :payment],
+    "review.closed" => [:fraud_review, :payment],
     "product.created" => [:product],
     "product.updated" => [:product],
     "product.deleted" => [:product],
@@ -293,8 +303,8 @@ defmodule MishkaPay.Providers.Stripe do
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
   (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
   `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`; or the
-  provider object it is about (`:credit_note`, `:subscription_schedule`, which names its
-  subscription too). Each is mapped to its
+  provider object it is about (`:credit_note`; `:subscription_schedule`, which names its
+  subscription too; `:fraud_warning` and `:fraud_review`, which name their payment too). Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -1575,6 +1585,44 @@ defmodule MishkaPay.Providers.Stripe do
     |> Enum.find_value(:ok, fn {_name, id} ->
       with :ok <- stripe_id(id, "file_", :evidence), do: nil
     end)
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_fraud_warning(warning_id, keys) do
+    with :ok <- stripe_id(warning_id, "issfr_", :warning_id),
+         {:ok, answer} <- request(:get, "/v1/radar/early_fraud_warnings/#{warning_id}", [], keys) do
+      Mapper.fraud_warning(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_fraud_warnings(opts, keys) do
+    with :ok <- maybe_id(opts[:payment_id], "pi_", :payment_id),
+         :ok <- maybe_id(opts[:charge_id], "", :charge_id) do
+      filters = [payment_intent: opts[:payment_id], charge: opts[:charge_id]]
+      page("/v1/radar/early_fraud_warnings", filters, opts, keys, &Mapper.fraud_warning/1)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_fraud_review(review_id, keys) do
+    with :ok <- stripe_id(review_id, "prv_", :review_id),
+         {:ok, answer} <- request(:get, "/v1/reviews/#{review_id}", [], keys) do
+      Mapper.fraud_review(answer)
+    end
+  end
+
+  # Stripe lists only the reviews still open.
+  @impl MishkaPay.Provider
+  def list_fraud_reviews(opts, keys),
+    do: page("/v1/reviews", [], opts, keys, &Mapper.fraud_review/1)
+
+  @impl MishkaPay.Provider
+  def approve_fraud_review(review_id, keys) do
+    with :ok <- stripe_id(review_id, "prv_", :review_id),
+         {:ok, answer} <- request(:post, "/v1/reviews/#{review_id}/approve", %{}, keys) do
+      Mapper.fraud_review(answer)
+    end
   end
 
   @impl MishkaPay.Provider

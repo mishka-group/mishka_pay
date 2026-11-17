@@ -75,6 +75,8 @@ end
   - `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
   - `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
   - `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
+  - `:fraud`: `fetch_fraud_warning/2`, `list_fraud_warnings/2` (`:payment_id`, `:charge_id`),
+    `fetch_fraud_review/2`, `list_fraud_reviews/2` (open ones), `approve_fraud_review/2`;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.
@@ -82,7 +84,7 @@ end
   with `Errors.Unsupported`, never dropped.
 - Leave a capability out rather than half-implement it; Mishka Pay answers `Errors.Unsupported`.
 - Every callback answers the Mishka Pay struct or a `MishkaPay.Errors` error, never the provider's
-  raw body.
+  raw body; only `raw_request/2` answers the provider's decoded answer, which is its point.
 - Requests go through `MishkaPay.Client` (retries, idempotency keys, telemetry).
 - Use `MishkaPay.ProviderKit` for the refund rule (`refund_key/2`, `refundable/3`), idempotency
   keys and `invalid/2`; do not copy them.

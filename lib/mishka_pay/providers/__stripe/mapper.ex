@@ -1539,6 +1539,43 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
+  @doc "A Stripe Radar early fraud warning as a `MishkaPay.FraudWarning`."
+  @spec fraud_warning(map()) :: {:ok, MishkaPay.FraudWarning.t()} | {:error, Splode.Error.t()}
+  def fraud_warning(warning) do
+    %{
+      provider: "stripe",
+      id: warning["id"],
+      payment_id: id_of(warning["payment_intent"]),
+      charge_id: id_of(warning["charge"]),
+      fraud_type: warning["fraud_type"],
+      actionable: warning["actionable"] == true,
+      created_at: time(warning["created"])
+    }
+    |> MishkaPay.FraudWarning.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @opened_reasons %{"rule" => :rule, "manual" => :manual}
+
+  @doc "A Stripe Radar review as a `MishkaPay.FraudReview`."
+  @spec fraud_review(map()) :: {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+  def fraud_review(review) do
+    %{
+      provider: "stripe",
+      id: review["id"],
+      payment_id: id_of(review["payment_intent"]),
+      charge_id: id_of(review["charge"]),
+      open: review["open"] == true,
+      opened_reason: Map.get(@opened_reasons, review["opened_reason"]),
+      reason: review["reason"],
+      closed_reason: review["closed_reason"],
+      ip_address: review["ip_address"],
+      created_at: time(review["created"])
+    }
+    |> MishkaPay.FraudReview.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   # The dispute evidence fields that take the id of an uploaded file, not text.
   @evidence_files ~w(cancellation_policy customer_communication customer_signature duplicate_charge_documentation receipt refund_policy service_documentation shipping_documentation uncategorized_file)
 

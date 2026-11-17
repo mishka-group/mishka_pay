@@ -2142,6 +2142,43 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Exception.message(error) =~ "merchant_of_record to false"
     end
 
+    test "early fraud warnings and open reviews are read and listed, and a review approved, as Stripe's spec accepts" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.method, conn.request_path, conn.query_string})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok,
+              %MishkaPay.FraudWarning{
+                id: "issfr_123",
+                charge_id: "ch_1234",
+                fraud_type: "misc",
+                actionable: true,
+                created_at: %DateTime{}
+              }} = MishkaPay.fetch_fraud_warning("stripe", "issfr_123", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.FraudWarning{id: "issfr_" <> _}]}} =
+               MishkaPay.list_fraud_warnings("stripe", "site-a", payment_id: "pi_1", limit: 5)
+
+      assert_received {:sent, "GET", "/v1/radar/early_fraud_warnings/issfr_123", ""}
+      assert_received {:sent, "GET", "/v1/radar/early_fraud_warnings", query}
+      assert %{"payment_intent" => "pi_1", "limit" => "5"} = URI.decode_query(query)
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.FraudReview{open: true} | _]}} =
+               MishkaPay.list_fraud_reviews("stripe", "site-a")
+
+      assert {:ok,
+              %MishkaPay.FraudReview{id: "prv_123", opened_reason: :rule, charge_id: "ch_" <> _}} =
+               MishkaPay.fetch_fraud_review("stripe", "prv_123", "site-a")
+
+      assert {:ok, %MishkaPay.FraudReview{id: "prv_123"}} =
+               MishkaPay.approve_fraud_review("stripe", "prv_123", "site-a")
+
+      assert_received {:sent, "POST", "/v1/reviews/prv_123/approve", ""}
+    end
+
     test "a meter is read, renamed, turned on again, and a wrong report is taken back once, as Stripe's spec accepts" do
       test = self()
 
@@ -2498,6 +2535,11 @@ defmodule MishkaPay.Providers.StripeTest do
              :meter_id},
             {MishkaPay.deactivate_meter("stripe", "../charges"), :meter_id},
             {MishkaPay.reactivate_meter("stripe", "mtr_1/../x"), :meter_id},
+            {MishkaPay.fetch_fraud_warning("stripe", "prv_1"), :warning_id},
+            {MishkaPay.fetch_fraud_review("stripe", "issfr_1"), :review_id},
+            {MishkaPay.approve_fraud_review("stripe", "prv_1/../../charges"), :review_id},
+            {MishkaPay.list_fraud_warnings("stripe", nil, payment_id: "ch_1"), :payment_id},
+            {MishkaPay.list_fraud_warnings("stripe", nil, charge_id: "ch_1&x=y"), :charge_id},
             {MishkaPay.fetch_meter("stripe", "evt_1"), :meter_id},
             {MishkaPay.update_meter(%{provider: "stripe", id: "mtr_1"}), :name},
             {MishkaPay.update_meter(%{provider: "stripe", id: "../x", name: "N"}), :id},
@@ -4094,6 +4136,18 @@ defmodule MishkaPay.Providers.StripeTest do
       "id" => "cn_1",
       "invoice" => "in_1",
       "customer" => "cus_1"
+    },
+    "radar.early_fraud_warning" => %{
+      "object" => "radar.early_fraud_warning",
+      "id" => "issfr_1",
+      "charge" => "ch_1",
+      "payment_intent" => "pi_1"
+    },
+    "review" => %{
+      "object" => "review",
+      "id" => "prv_1",
+      "charge" => "ch_1",
+      "payment_intent" => "pi_1"
     }
   }
 
@@ -4135,6 +4189,12 @@ defmodule MishkaPay.Providers.StripeTest do
   defp named?(event, :subscription), do: event.subscription_id == "sub_1"
   defp named?(event, :dispute), do: event.dispute_id == "dp_1"
   defp named?(event, :customer), do: event.customer_id == "cus_1"
+
+  defp named?(event, :fraud_warning),
+    do: {event.object_type, event.object_id} == {"radar.early_fraud_warning", "issfr_1"}
+
+  defp named?(event, :fraud_review),
+    do: {event.object_type, event.object_id} == {"review", "prv_1"}
 
   defp named?(event, kind),
     do: event.object_type == Atom.to_string(kind) and is_binary(event.object_id)

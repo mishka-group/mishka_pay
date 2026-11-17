@@ -739,6 +739,14 @@ defmodule MishkaPayTest do
                MishkaPay.reactivate_meter("acme", "m1", "site-a")
     end
 
+    test "a provider without fraud reviews refuses them" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :fraud}} =
+               MishkaPay.list_fraud_reviews("acme", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :fraud}} =
+               MishkaPay.approve_fraud_review("acme", "r1", "site-a")
+    end
+
     test "a provider without credit notes refuses them, after the note is checked" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
                MishkaPay.list_credit_notes("acme", "site-a", invoice_id: "acme_in_1")
