@@ -2,7 +2,8 @@ defmodule ShopWeb.UsageComponent do
   @moduledoc """
   Usage billing, read live from Stripe: make a meter (`MishkaPay.create_meter/1`), list them
   (`list_meters/3`), turn one off (`deactivate_meter/3`) and on again (`reactivate_meter/3`);
-  report what a customer used (`report_usage/1`, with a reference so it never counts twice), take
+  report what a customer used (`report_usage/1`, with a reference so it never counts twice, and
+  `stream: true` for Stripe's high-volume meter event stream), take
   a report sent by mistake back (`cancel_usage/1`) and read what a meter counted for them
   (`usage_summary/6`); and a price that bills a meter's count each period (`create_price/1` with
   `meter_id` and an interval).
@@ -20,7 +21,13 @@ defmodule ShopWeb.UsageComponent do
   @meter_form %{"name" => "", "event_name" => "", "aggregation" => "sum"}
   @summary_form %{"window" => "hour"}
   @price_form %{"currency" => "USD", "interval" => "month"}
-  @report_form %{"event_name" => "", "customer_id" => "", "value" => "1", "reference" => ""}
+  @report_form %{
+    "event_name" => "",
+    "customer_id" => "",
+    "value" => "1",
+    "reference" => "",
+    "stream" => ""
+  }
 
   @impl true
   def mount(socket) do
@@ -127,16 +134,19 @@ defmodule ShopWeb.UsageComponent do
       event_name: params["event_name"],
       customer_id: params["customer_id"],
       value: params["value"],
-      reference: params["reference"]
+      reference: params["reference"],
+      stream: params["stream"] == "true"
     }
 
     case MishkaPay.report_usage(attrs) do
       {:ok, usage} ->
-        {:noreply,
-         socket
-         |> assign(reported: usage, cancelled: nil, report_error: nil)
-         |> update(:report_form, &%{&1 | "reference" => reference()})
-         |> done("Usage reported. Stripe counts it within a few minutes.")}
+        new_socket =
+          socket
+          |> assign(reported: usage, cancelled: nil, report_error: nil)
+          |> update(:report_form, &%{&1 | "reference" => reference()})
+          |> done("Usage reported. Stripe counts it within a few minutes.")
+
+        {:noreply, new_socket}
 
       {:error, error} ->
         {:noreply, assign(socket, report_error: MishkaPay.Ash.message(error))}
@@ -398,6 +408,16 @@ defmodule ShopWeb.UsageComponent do
               value={@report_form["reference"]}
               testid="usage-reference"
             />
+            <label class="label gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="stream"
+                value="true"
+                checked={@report_form["stream"] == "true"}
+                class="checkbox checkbox-sm"
+                data-testid="usage-stream"
+              /> High volume (Stripe's meter event stream)
+            </label>
             <p
               :if={@report_error}
               role="alert"

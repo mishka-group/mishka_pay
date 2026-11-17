@@ -25,6 +25,10 @@ defmodule MishkaPay.Providers.Stripe do
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
     * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
+    * `capture: :automatic`, on a checkout or a PaymentIntent, is Stripe's `automatic_async`
+      (its default and recommended way), `:automatic_sync` its older `automatic`; `:manual`
+      holds the money. Both `automatic` and
+      `automatic_async` read back as `:automatic`.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, the charge's refunds and the
       customer, in one request: the buyer, the card, the receipt, why it failed and every refund.
     * `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
@@ -33,7 +37,10 @@ defmodule MishkaPay.Providers.Stripe do
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription. `list_subscriptions/2` lists them by customer, price or status (Stripe
       leaves canceled ones out unless asked for them or for `:all`), and `search_subscriptions/2`
-      finds them with Stripe's search by status, reference or metadata.
+      finds them with Stripe's search by status, reference or metadata. Every subscription it
+      makes (a subscription checkout, a new schedule) sends Stripe's `billing_mode`: `flexible`
+      with `itemized` proration discounts, Stripe's recommended ones, unless the checkout, the
+      schedule or the tenant's keys ask for `classic` or `included`.
     * `create_subscription_schedule/2`, `fetch_subscription_schedule/2`,
       `list_subscription_schedules/2`, `update_subscription_schedule/2`,
       `release_subscription_schedule/2` and `cancel_subscription_schedule/3` use Subscription
@@ -105,7 +112,10 @@ defmodule MishkaPay.Providers.Stripe do
       report's reference makes its `identifier`; Stripe takes reports from the last 35 days and
       up to 5 minutes ahead, and counts summaries from and to whole minutes. A cancel is a meter
       event adjustment (`type: cancel`) of one identifier, within 24 hours of the report; the
-      identifier makes its idempotency key.
+      identifier makes its idempotency key. A report with `stream: true` goes through the API v2
+      meter event stream instead: a meter event session's token, kept in
+      `MishkaPay.Helpers.TokenCache` until shortly before it runs out, then the report as JSON to
+      `meter-events.stripe.com`, which Stripe checks after it answers.
     * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
       (`feat_...`) on products, and the active entitlements of a customer.
     * `fetch_fraud_warning/2` and `list_fraud_warnings/2` read Radar's early fraud warnings
@@ -183,7 +193,9 @@ defmodule MishkaPay.Providers.Stripe do
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
   another address, such as Stripe's own mock server in tests. Uploads go to `files_url` when it is
-  set, else to `base_url` when that is set, else to `https://files.stripe.com`.
+  set, else to `base_url` when that is set, else to `https://files.stripe.com`; streamed usage
+  reports (`stream: true`) to `meter_events_url` the same way, else to
+  `https://meter-events.stripe.com`.
   """
 
   use MishkaPay.Provider,
@@ -252,6 +264,7 @@ defmodule MishkaPay.Providers.Stripe do
     SubscriptionSchedule
   }
 
+  alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -262,6 +275,7 @@ defmodule MishkaPay.Providers.Stripe do
   @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
+  @meter_events_url "https://meter-events.stripe.com"
 
   # What Stripe takes for each purpose of a file: its most bytes and its types, with the first
   # bytes of each type (docs.stripe.com/file-upload).
@@ -475,6 +489,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
          :ok <- held(checkout, keys),
+         :ok <- billing_fits(checkout, keys),
          :ok <- shipping_rates(checkout.shipping_rates),
          :ok <- for_seller(checkout),
          {:ok, session} <-
@@ -496,6 +511,18 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp held(_checkout, _keys), do: :ok
+
+  # Proration discounts go only with the flexible billing mode, the tenant's own mode included.
+  defp billing_fits(%{proration_discounts: discounts} = choice, keys)
+       when not is_nil(discounts),
+       do: discounts_fit(Mapper.billing_type(choice, keys))
+
+  defp billing_fits(_choice, _keys), do: :ok
+
+  defp discounts_fit(:flexible), do: :ok
+
+  defp discounts_fit(:classic),
+    do: invalid(:proration_discounts, Messages.text(:proration_discounts_flexible))
 
   # A sale for a seller names Connect accounts, and takes its fee in the items' own currency, in
   # amounts Stripe can count.
@@ -722,11 +749,12 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- maybe_id(schedule.subscription_id, "sub_", :subscription_id),
          :ok <- maybe_id(schedule.customer_id, "cus_", :customer_id),
          :ok <- schedule_fits(schedule),
+         :ok <- billing_fits(schedule, keys),
          {:ok, answer} <-
            request(
              :post,
              "/v1/subscription_schedules",
-             Mapper.subscription_schedule_params(schedule),
+             Mapper.subscription_schedule_params(schedule, keys),
              keys,
              key:
                ProviderKit.idempotency_key(
@@ -2173,7 +2201,34 @@ defmodule MishkaPay.Providers.Stripe do
 
     with :ok <- stripe_id(usage.customer_id, "cus_", :customer_id),
          :ok <- usage_time(usage.at),
-         {:ok, answer} <-
+         :ok <- usage_digits(usage.value) do
+      send_usage(usage, identifier, keys)
+    end
+  end
+
+  # Stripe refuses a value of more than 15 digits, or more than 12 after the decimal point, which
+  # its counting (in doubles) cannot keep exactly; leading zeros are not counted.
+  @usage_digits 15
+  @usage_places 12
+
+  defp usage_digits(value) do
+    case Mapper.usage_size(value) do
+      {digits, places} when digits <= @usage_digits and places <= @usage_places ->
+        :ok
+
+      _too_long ->
+        invalid(
+          :value,
+          Messages.text(:stripe_usage_digits, digits: @usage_digits, places: @usage_places)
+        )
+    end
+  end
+
+  defp send_usage(%MishkaPay.Usage{stream: true} = usage, identifier, keys),
+    do: stream_usage(usage, identifier || new_identifier(), keys, 1)
+
+  defp send_usage(usage, identifier, keys) do
+    with {:ok, answer} <-
            request(
              :post,
              "/v1/billing/meter_events",
@@ -2184,6 +2239,108 @@ defmodule MishkaPay.Providers.Stripe do
       {:ok, Mapper.usage(answer, usage)}
     end
   end
+
+  defp new_identifier,
+    do: "mishka_pay-usage-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+
+  # Stripe's meter event stream (API v2): a session token, kept until shortly before it runs out,
+  # then the report as JSON to `meter-events.stripe.com`. Stripe checks it after it answers, so
+  # the answer has no identifier: the report's own is its id, made here when there is no
+  # reference. A token Stripe no longer takes (401) is dropped and the report sent once more
+  # with a new one.
+  defp stream_usage(usage, identifier, keys, tries_left) do
+    with {:ok, token} <- meter_session(keys) do
+      case v2_request(
+             :post,
+             meter_events_url(),
+             "/v2/billing/meter_event_stream",
+             %{"events" => [Mapper.usage_event(usage, identifier)]},
+             token,
+             key: identifier
+           ) do
+        {:ok, _accepted} ->
+          {:ok, %{usage | id: identifier}}
+
+        {:error, %Errors.Rejected{status: 401}} when tries_left > 0 ->
+          TokenCache.drop(meter_session_key(keys))
+          stream_usage(usage, identifier, keys, tries_left - 1)
+
+        {:error, _refused} = error ->
+          error
+      end
+    end
+  end
+
+  # One session per secret key and connected account; the key itself is never kept, only its hash.
+  defp meter_session(keys) do
+    TokenCache.get(meter_session_key(keys), fn ->
+      with :ok <- maybe_id(Map.get(keys, :account_id), "acct_", :account_id),
+           {:ok, session} <-
+             v2_request(
+               :post,
+               base_url(false),
+               "/v2/billing/meter_event_session",
+               %{},
+               keys.secret_key,
+               account_id: Map.get(keys, :account_id)
+             ) do
+        session_token(session)
+      end
+    end)
+  end
+
+  defp meter_session_key(keys),
+    do:
+      {:stripe_meter_session, :crypto.hash(:sha256, keys.secret_key), Map.get(keys, :account_id)}
+
+  defp session_token(%{"authentication_token" => token, "expires_at" => expires_at})
+       when is_binary(token) and is_binary(expires_at) do
+    case DateTime.from_iso8601(expires_at) do
+      {:ok, at, _offset} -> {:ok, token, max(DateTime.diff(at, DateTime.utc_now()), 1)}
+      {:error, _unreadable} -> session_unreadable()
+    end
+  end
+
+  defp session_token(_other), do: session_unreadable()
+
+  defp session_unreadable,
+    do: {:error, Errors.Rejected.exception(provider: "stripe", code: "meter_session_unreadable")}
+
+  defp meter_events_url do
+    config = Application.get_env(:mishka_pay, __MODULE__, [])
+    config[:meter_events_url] || Keyword.get(config, :base_url, @meter_events_url)
+  end
+
+  # A request to Stripe's API v2: a JSON body, the pinned `Stripe-Version`, and a connected
+  # account in `Stripe-Context` (API v2's name for `Stripe-Account`). Its errors have the same
+  # shape as v1's, so they are read the same way.
+  defp v2_request(method, base_url, path, body, bearer, opts) do
+    %{
+      provider: "stripe",
+      method: method,
+      base_url: base_url,
+      path: path,
+      auth: {:bearer, bearer},
+      headers: v2_headers(opts[:account_id]),
+      json: body,
+      idempotency_header: "idempotency-key",
+      idempotency_key: opts[:key],
+      retry_header: "stripe-should-retry",
+      limit_header: "stripe-rate-limited-reason"
+    }
+    |> Client.request()
+    |> v2_answer()
+  end
+
+  defp v2_headers(nil), do: %{"stripe-version" => @version}
+  defp v2_headers(account_id), do: Map.put(v2_headers(nil), "stripe-context", account_id)
+
+  # The stream answers an empty object, or no body at all.
+  defp v2_answer({:ok, %Req.Response{status: status, body: body}})
+       when status in 200..299 and not is_map(body),
+       do: {:ok, %{}}
+
+  defp v2_answer(other), do: answer(other)
 
   # Stripe takes usage from the last 35 days, and up to 5 minutes ahead for clocks that drift.
   defp usage_time(nil), do: :ok
@@ -2893,6 +3050,14 @@ defmodule MishkaPay.Providers.Stripe do
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
 
+  # A tax Stripe could not count can come with a 402 (paying a bill), but no bank declined it.
+  defp answer(
+         {:ok,
+          %Req.Response{status: 402, body: %{"error" => %{"code" => "failed_tax_calculation"}}} =
+            response}
+       ),
+       do: rejected(response)
+
   defp answer({:ok, %Req.Response{status: 402, body: %{"error" => error}} = response}) do
     {:error,
      Errors.Declined.exception(
@@ -2904,8 +3069,15 @@ defmodule MishkaPay.Providers.Stripe do
      )}
   end
 
-  defp answer({:ok, %Req.Response{status: status, body: body} = response}) do
+  defp answer({:ok, %Req.Response{} = response}), do: rejected(response)
+
+  defp answer({:error, _unreachable} = error), do: error
+
+  defp rejected(%Req.Response{status: status, body: body} = response) do
     error = error_of(body)
+
+    limit_reason =
+      response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
 
     {:error,
      Errors.Rejected.exception(
@@ -2916,12 +3088,9 @@ defmodule MishkaPay.Providers.Stripe do
        message: error["message"],
        request_id: request_id(response),
        doc_url: error["doc_url"],
-       rate_limit_reason:
-         response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
+       rate_limit_reason: limit_reason
      )}
   end
-
-  defp answer({:error, _unreachable} = error), do: error
 
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}

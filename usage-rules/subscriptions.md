@@ -22,6 +22,13 @@ MishkaPay.checkout(%{
   provider price `id`. A one-time checkout refuses an item with an interval, and `trial_days`.
 - Back on the success page, `fetch_checkout/3` gives `:subscription_id`; read the subscription
   with `fetch_subscription/3`.
+- `billing_mode:` (`:flexible` or `:classic`) says how the provider counts prorations and bills;
+  `proration_discounts:` (`:itemized` or `:included`) how a bill shows the proration of a
+  discounted price, in the flexible mode only. Left out, the site's keys decide
+  (`MishkaPay.Credentials`), else `:flexible` and `:itemized`, Stripe's recommended ones. Both
+  belong to a subscription checkout or a new schedule: a one-time checkout, a schedule made from a
+  subscription and a schedule change refuse them, and `proration_discounts` with `:classic` is
+  `Errors.Invalid`.
 
 ## Statuses and access
 

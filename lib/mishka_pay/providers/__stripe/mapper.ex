@@ -108,7 +108,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "metadata" => Map.merge(checkout.metadata || %{}, reference)
     }
     |> Map.merge(ui_params(checkout))
-    |> Map.merge(mode_data(checkout, reference))
+    |> Map.merge(mode_data(checkout, reference, settings))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(options(checkout))
     |> Map.merge(shipping(checkout))
@@ -255,40 +255,81 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
-  defp mode_data(%Checkout{mode: :subscription, trial_days: days} = checkout, reference),
-    do: %{
-      "subscription_data" =>
-        %{
-          "metadata" => reference,
-          "trial_period_days" => days,
-          "description" => checkout.description,
-          "application_fee_percent" =>
-            checkout.application_fee_percent &&
-              Decimal.to_string(checkout.application_fee_percent, :normal)
-        }
-        |> Map.merge(seller(checkout))
-        |> reject_nil()
-    }
+  defp mode_data(
+         %Checkout{mode: :subscription, trial_days: days} = checkout,
+         reference,
+         settings
+       ),
+       do: %{
+         "subscription_data" =>
+           %{
+             "metadata" => reference,
+             "billing_mode" => billing_mode(checkout, settings),
+             "trial_period_days" => days,
+             "description" => checkout.description,
+             "application_fee_percent" =>
+               checkout.application_fee_percent &&
+                 Decimal.to_string(checkout.application_fee_percent, :normal)
+           }
+           |> Map.merge(seller(checkout))
+           |> reject_nil()
+       }
 
-  defp mode_data(%Checkout{mode: :setup} = checkout, reference),
+  defp mode_data(%Checkout{mode: :setup} = checkout, reference, _settings),
     do: %{
       "setup_intent_data" =>
         reject_nil(%{"metadata" => reference, "description" => checkout.description})
     }
 
-  defp mode_data(checkout, reference),
+  defp mode_data(checkout, reference, _settings),
     do: %{
       "payment_intent_data" =>
         %{
           "metadata" => reference,
           "description" => checkout.description,
           "statement_descriptor_suffix" => checkout.statement_suffix,
-          "capture_method" => checkout.capture && Atom.to_string(checkout.capture),
+          "capture_method" => capture_method(checkout.capture),
           "application_fee_amount" => minor_of(checkout.application_fee)
         }
         |> Map.merge(seller(checkout))
         |> reject_nil()
     }
+
+  @doc """
+  Stripe's `billing_mode` of a subscription made from `choice` (a checkout or a new schedule):
+  its own `:billing_mode`, else the tenant's (`settings`), else `flexible`, Stripe's recommended
+  mode; in the flexible mode, its `:proration_discounts`, else the tenant's, else `itemized`, the
+  way Stripe recommends.
+  """
+  @spec billing_mode(map(), map()) :: map()
+  def billing_mode(choice, settings) do
+    discounts =
+      Map.get(choice, :proration_discounts) || Map.get(settings, :proration_discounts) ||
+        :itemized
+
+    choice |> billing_type(settings) |> billing_mode_of(discounts)
+  end
+
+  @doc """
+  The billing mode a subscription made from `choice` gets: its own `:billing_mode`, else the
+  tenant's (`settings`), else `:flexible`.
+  """
+  @spec billing_type(map(), map()) :: :flexible | :classic
+  def billing_type(choice, settings),
+    do: Map.get(choice, :billing_mode) || Map.get(settings, :billing_mode) || :flexible
+
+  defp billing_mode_of(:classic, _discounts), do: %{"type" => "classic"}
+
+  defp billing_mode_of(:flexible, discounts),
+    do: %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
+
+  # Stripe takes the money at once with `automatic_async`, its default and recommended way (it
+  # answers sooner than `automatic`, still there for a site that asks for it); `manual` holds
+  # it. Left out, Stripe's default applies.
+  defp capture_method(nil), do: nil
+  defp capture_method(:automatic), do: "automatic_async"
+  defp capture_method(:automatic_sync), do: "automatic"
+  defp capture_method(:manual), do: "manual"
 
   # The seller a platform's sale is for: where the money goes, and who sells it.
   defp seller(checkout),
@@ -887,7 +928,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "currency" => intent.amount && lower_currency(intent.amount),
       "customer" => intent.customer_id,
       "payment_method" => intent.payment_method_id,
-      "capture_method" => intent.capture && Atom.to_string(intent.capture),
+      "capture_method" => capture_method(intent.capture),
       "setup_future_usage" =>
         intent.setup_future_usage && Atom.to_string(intent.setup_future_usage),
       "automatic_payment_methods" => automatic_methods(intent),
@@ -948,7 +989,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       amount_received: money(intent["amount_received"], currency),
       customer_id: id_of(intent["customer"]),
       payment_method_id: id_of(intent["payment_method"]),
-      capture: (intent["capture_method"] == "manual" && :manual) || :automatic,
+      capture: capture_of(intent["capture_method"]),
       setup_future_usage: Map.get(@future_usages, intent["setup_future_usage"]),
       automatic_payment_methods: get_in(intent, ["automatic_payment_methods", "enabled"]),
       description: intent["description"],
@@ -963,6 +1004,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.PaymentIntent.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # `automatic` and `automatic_async` both take the money at once; only `manual` holds it.
+  defp capture_of("manual"), do: :manual
+  defp capture_of(_automatic), do: :automatic
 
   @doc "A Stripe SetupIntent as a `MishkaPay.SetupIntent`, for a page with Stripe Elements."
   @spec setup_intent(map()) :: {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
@@ -1354,17 +1399,21 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @doc """
   Params of `POST /v1/subscription_schedules`: `from_subscription` alone (Stripe takes nothing
-  else with it, metadata neither), or the customer, its start (now unless given), the phases and
-  what happens after them, with the reference in its metadata.
+  else with it, metadata and billing mode neither), or the customer, its start (now unless
+  given), the phases and what happens after them, its billing mode (`billing_mode/2`, with the
+  tenant's `settings`), with the reference in its metadata.
   """
-  @spec subscription_schedule_params(SubscriptionSchedule.t()) :: map()
-  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id})
+  @spec subscription_schedule_params(SubscriptionSchedule.t(), map()) :: map()
+  def subscription_schedule_params(schedule, settings \\ %{})
+
+  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id}, _settings)
       when is_binary(id),
       do: %{"from_subscription" => id}
 
-  def subscription_schedule_params(%SubscriptionSchedule{} = schedule) do
+  def subscription_schedule_params(%SubscriptionSchedule{} = schedule, settings) do
     reject_nil(%{
       "customer" => schedule.customer_id,
+      "billing_mode" => billing_mode(schedule, settings),
       "start_date" => unix(schedule.start_at) || "now",
       "end_behavior" => schedule.end_behavior && Atom.to_string(schedule.end_behavior),
       "phases" => Enum.map(schedule.phases, &phase_params/1),
@@ -2357,7 +2406,39 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
-  defp usage_value(%Decimal{} = value), do: Decimal.to_string(value, :normal)
+  @doc """
+  One event of `POST /v2/billing/meter_event_stream` (JSON): the customer and the value in its
+  payload, its `identifier`, and when it happened as an ISO 8601 time.
+  """
+  @spec usage_event(MishkaPay.Usage.t(), String.t()) :: map()
+  def usage_event(usage, identifier) do
+    reject_nil(%{
+      "event_name" => usage.event_name,
+      "identifier" => identifier,
+      "payload" => %{
+        "stripe_customer_id" => usage.customer_id,
+        "value" => usage_value(usage.value)
+      },
+      "timestamp" => usage.at && DateTime.to_iso8601(usage.at)
+    })
+  end
+
+  @doc """
+  How long a usage value is as Stripe reads it: `{digits, places}`, its digits without leading
+  zeros and those after the decimal point, of the value as it is sent (trailing zeros after the
+  point dropped).
+  """
+  @spec usage_size(integer() | Decimal.t()) :: {non_neg_integer(), non_neg_integer()}
+  def usage_size(value) do
+    [whole | fraction] = value |> usage_value() |> String.trim_leading("-") |> String.split(".")
+    places = fraction |> Enum.join() |> String.length()
+    {String.length(String.trim_leading(whole, "0")) + places, places}
+  end
+
+  # A decimal goes without the zeros that end its fraction: `1.50` is sent as `1.5`.
+  defp usage_value(%Decimal{} = value),
+    do: value |> Decimal.normalize() |> Decimal.to_string(:normal)
+
   defp usage_value(value), do: Integer.to_string(value)
 
   @doc "The usage with Stripe's answer: its `identifier` as the report's id."

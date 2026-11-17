@@ -1230,6 +1230,73 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.fetch_subscription("stripe", subscription)
   end
 
+  test "subscriptions are made flexible with itemized proration discounts, or classic when asked",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "billing-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Billing mode plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    {:ok, %MishkaPay.Price{id: price}} =
+      MishkaPay.create_price(%{
+        provider: "stripe",
+        product_id: product,
+        amount: %{amount: "9.00", currency: "USD"},
+        interval: :month
+      })
+
+    for billing <- [%{}, %{billing_mode: :classic}, %{proration_discounts: :included}] do
+      assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+               MishkaPay.checkout(
+                 Map.merge(billing, %{
+                   provider: "stripe",
+                   mode: :subscription,
+                   items: [%{id: price}],
+                   success_url: "https://shop.test/welcome",
+                   cancel_url: "https://shop.test/pricing",
+                   merchant_of_record: false
+                 })
+               )
+    end
+
+    for {billing, read} <- [
+          {%{}, %{"type" => "flexible", "flexible" => %{"proration_discounts" => "itemized"}}},
+          {%{billing_mode: :classic}, %{"type" => "classic", "flexible" => nil}}
+        ] do
+      assert {:ok, %MishkaPay.SubscriptionSchedule{id: id, subscription_id: subscription}} =
+               MishkaPay.create_subscription_schedule(
+                 Map.merge(billing, %{
+                   provider: "stripe",
+                   customer_id: customer,
+                   end_behavior: :cancel,
+                   phases: [
+                     %{items: [%{id: price}], trial: true, iterations: 1, interval: :month}
+                   ]
+                 })
+               )
+
+      assert {:ok, %{"billing_mode" => schedule_mode}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/subscription_schedules/#{id}"})
+
+      assert {:ok, %{"billing_mode" => subscription_mode}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/subscriptions/#{subscription}"})
+
+      for mode <- [schedule_mode, subscription_mode],
+          do: assert(Map.take(mode, ["type", "flexible"]) == read)
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{status: :canceled}} =
+               MishkaPay.cancel_subscription_schedule("stripe", id)
+    end
+  end
+
   test "a credit note is previewed, made once per reference by line, listed and voided on an open bill, then made on a paid one",
        %{key: key} do
     run = run_id()
@@ -1554,6 +1621,81 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   defp archive(key, %MishkaPay.Product{id: id}),
     do: cleanup(key, &Stripe.update_product(%MishkaPay.Product{id: id, active: false}, &1))
+
+  test "a report sent through Stripe's meter event stream takes a session token first",
+       %{key: key} do
+    run = run_id()
+    event = "mishka_pay_stream_#{run}"
+
+    {:ok, %MishkaPay.Meter{id: meter_id}} =
+      MishkaPay.create_meter(%{provider: "stripe", name: "Stream #{run}", event_name: event})
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "stream-#{run}@example.com"})
+
+    on_exit(fn ->
+      cleanup(key, &Stripe.deactivate_meter(meter_id, &1))
+      cleanup(key, &delete_customer(customer_id, &1))
+    end)
+
+    usage = %{
+      provider: "stripe",
+      event_name: event,
+      customer_id: customer_id,
+      value: 2,
+      reference: "stream-#{run}",
+      stream: true
+    }
+
+    test = self()
+    handler = "stream-#{run}"
+
+    :telemetry.attach(
+      handler,
+      [:mishka_pay, :request, :stop],
+      fn _event, _measure, meta, _config -> send(test, {:sent, meta.path, meta.status}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _ = first}} =
+             MishkaPay.report_usage(usage)
+
+    assert_received {:sent, "/v2/billing/meter_event_session", 200}
+    assert_received {:sent, "/v2/billing/meter_event_stream", status} when status in 200..299
+
+    # The session's token is kept: the next report goes straight to the stream.
+    assert {:ok, %MishkaPay.Usage{id: second}} =
+             MishkaPay.report_usage(%{usage | reference: nil, value: "0.5"})
+
+    refute second == first
+    refute_received {:sent, "/v2/billing/meter_event_session", _status}
+    assert_received {:sent, "/v2/billing/meter_event_stream", _status}
+
+    # Stripe counts digits as Mishka Pay does: sixteen are refused, zeros that end a whole number
+    # too, and more than twelve after the point. Sent raw, past Mishka Pay's own check.
+    raw = fn value ->
+      MishkaPay.request(%{
+        provider: "stripe",
+        method: :post,
+        path: "/v1/billing/meter_events",
+        params: %{
+          "event_name" => event,
+          "payload" => %{"stripe_customer_id" => customer_id, "value" => value}
+        }
+      })
+    end
+
+    for value <- ["1234567890123456", "1000000000000000", "0.1234567890123"],
+        do: assert({:error, %Errors.Rejected{status: 400}} = raw.(value))
+
+    for value <- ["123456789012345", "123.123456789012", "0012345678901234.5"],
+        do: assert({:ok, %{"identifier" => _}} = raw.(value))
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :value}]}} =
+             MishkaPay.report_usage(%{usage | value: 1_234_567_890_123_456})
+  end
 
   test "a meter counts a customer's usage once per reference, a metered price bills it, and the meter is turned off",
        %{key: key} do
@@ -1960,6 +2102,41 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert {:ok, %MishkaPay.PaymentIntent{id: ^held, status: :canceled}} =
              MishkaPay.cancel_payment_intent("stripe", held)
+  end
+
+  test "a payment taken at once is Stripe's automatic_async, or its older automatic when asked, on an intent and a checkout, and reads back as automatic" do
+    for {capture, sent} <- [{:automatic, "automatic_async"}, {:automatic_sync, "automatic"}] do
+      assert {:ok, %MishkaPay.PaymentIntent{id: id, capture: :automatic}} =
+               MishkaPay.create_payment_intent(%{
+                 provider: "stripe",
+                 amount: %{amount: "7.00", currency: "USD"},
+                 capture: capture,
+                 payment_method_id: "pm_card_mastercard"
+               })
+
+      assert {:ok, %{"capture_method" => ^sent}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/payment_intents/#{id}"})
+
+      assert {:ok, %MishkaPay.PaymentIntent{id: ^id, status: :succeeded, capture: :automatic}} =
+               MishkaPay.confirm_payment_intent("stripe", id, nil,
+                 return_url: "https://shop.test/paid"
+               )
+
+      assert {:ok, %Payment{id: ^id, status: :paid}} = MishkaPay.fetch_payment("stripe", id)
+
+      for invoice <- [false, true] do
+        assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+                 MishkaPay.checkout(%{
+                   provider: "stripe",
+                   items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+                   success_url: "https://shop.test/thanks",
+                   cancel_url: "https://shop.test/cart",
+                   capture: capture,
+                   invoice: invoice,
+                   merchant_of_record: false
+                 })
+      end
+    end
   end
 
   test "a setup intent saves a test card on a customer without a charge; another is canceled",

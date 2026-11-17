@@ -61,6 +61,36 @@ defmodule MishkaPay.CheckoutTest do
       assert [:trial_days] = fields(build(%{"trial_days" => 7}))
     end
 
+    test "a billing mode and proration discounts are a subscription's, discounts only flexible" do
+      plan = %{"mode" => "subscription", "items" => [%{"id" => "price_monthly"}]}
+
+      assert {:ok, %Checkout{billing_mode: :classic, proration_discounts: nil}} =
+               build(Map.put(plan, "billing_mode", "classic"))
+
+      assert {:ok, %Checkout{billing_mode: :flexible, proration_discounts: :included}} =
+               build(
+                 Map.merge(plan, %{
+                   "billing_mode" => "flexible",
+                   "proration_discounts" => "included"
+                 })
+               )
+
+      assert [:billing_mode] = fields(build(%{"billing_mode" => "flexible"}))
+      assert [:proration_discounts] = fields(build(%{"proration_discounts" => "itemized"}))
+
+      assert [:proration_discounts] =
+               fields(
+                 build(
+                   Map.merge(plan, %{
+                     "billing_mode" => "classic",
+                     "proration_discounts" => "itemized"
+                   })
+                 )
+               )
+
+      assert [:billing_mode] = fields(build(Map.put(plan, "billing_mode", "monthly")))
+    end
+
     test "an unknown mode or interval is refused on its field" do
       assert [:mode] = fields(build(%{"mode" => "forever"}))
 

@@ -121,6 +121,9 @@ defmodule MishkaPay.Messages do
           | :usage_value
           | :usage_window
           | :stripe_usage_time
+          | :stripe_usage_digits
+          | :tax_calculation_failed
+          | :evidence_page_limit
           | :due_sent_only
           | :stripe_event_types
           | :search_needs
@@ -139,6 +142,8 @@ defmodule MishkaPay.Messages do
           | :phase_prices
           | :phase_length
           | :schedule_from_subscription
+          | :proration_discounts_flexible
+          | :billing_mode_when_made
           | :schedule_moves
           | :choices
           | :fields_three
@@ -838,6 +843,20 @@ defmodule MishkaPay.Messages do
         "A phase lasts a number of periods of one interval, or until an end date, one of them"
       )
 
+  defp msgid(:proration_discounts_flexible),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Proration discounts go only with the flexible billing mode: leave them out, or use billing_mode flexible"
+      )
+
+  defp msgid(:billing_mode_when_made),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The billing mode is set when a subscription is made: a running one keeps its own"
+      )
+
   defp msgid(:schedule_from_subscription),
     do:
       dgettext_noop(
@@ -873,6 +892,27 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:usage_window),
     do: dgettext_noop("mishka_pay", "The end of a usage window must come after its start")
+
+  defp msgid(:stripe_usage_digits),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe takes a usage value of at most %{digits} digits, %{places} of them after the decimal point: round it first"
+      )
+
+  defp msgid(:tax_calculation_failed),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The provider could not count the tax for this sale: try again, and ask the provider's support if it keeps failing"
+      )
+
+  defp msgid(:evidence_page_limit),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The evidence is longer than the card network takes for this dispute: shorten the text or send files with fewer pages"
+      )
 
   defp msgid(:stripe_usage_time),
     do:

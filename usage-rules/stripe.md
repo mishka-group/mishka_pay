@@ -156,6 +156,12 @@
 - Stripe Managed Payments works with Checkout on a hosted page or an embedded page. Stripe lists
   "payment flows that use Elements with the Checkout Sessions API" and Payment Intents
   integrations as not supported. A Mishka Pay checkout is always a Checkout Session.
+- `capture: :automatic` is `capture_method=automatic_async` (Stripe's default, recommended over
+  `automatic` because it answers sooner), on a checkout's PaymentIntent and on
+  `create_payment_intent/1`; left out, nothing is sent and Stripe's default applies.
+  `capture: :automatic_sync` sends Stripe's older `automatic`, for a site that wants the answer
+  only once the money is taken. Read back, `automatic` and `automatic_async` are both
+  `:automatic` (taken at once).
 - `capture: :manual` is `payment_intent_data[capture_method]=manual`. The PaymentIntent waits in
   `requires_capture`, read as `:authorized`. `capture_payment/4` is
   `POST /v1/payment_intents/:id/capture` with `amount_to_capture` in Stripe's units; Stripe lets
@@ -282,6 +288,11 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Dispute evidence is PDF, JPEG or PNG, up to 5 MB, and its first bytes must match its
   `content_type`; anything else is `Errors.Invalid` before any request. Stripe keeps it 9 months.
 - Stripe takes all of a dispute's files together up to 4.5 MB (and 19 pages for Mastercard).
+- `update_dispute/1` evidence past the card network's page limit (Stripe estimates the pages of
+  the text and files together, and the limit differs by dispute) is `Errors.Rejected` with code
+  `"dispute_evidence_page_limit_exceeded"` and a plain message, whether `submit` is set or not.
+  Mishka Pay cannot count the pages before the request (Stripe's estimate is its own, and it asks
+  integrations not to read the limit from its words): shorten the text or send fewer pages.
 - A file id works in one request only: upload again for another dispute.
 - `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
   `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
@@ -337,6 +348,23 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - `search_subscriptions/3` is Stripe's search (`GET /v1/subscriptions/search`, `status` and
   `metadata` fields); its index lags up to a minute, and `:next` is Stripe's `next_page`.
 
+## Billing mode
+
+- Every subscription Mishka Pay makes (a subscription checkout's `subscription_data`, a new
+  schedule) sends `billing_mode[type]`: `flexible` unless the checkout, the schedule or the site's
+  keys say `:classic`. In the flexible mode it sends `billing_mode[flexible][proration_discounts]`,
+  `itemized` unless they say `:included`. Both are what Stripe recommends; the pinned version's
+  own default is `flexible` too, so nothing changes when the option is left out.
+- A schedule made from a subscription (`from_subscription`) sends no billing mode: Stripe refuses
+  one there, and the schedule keeps the subscription's.
+- Payment links take no billing mode: Stripe gives their subscriptions the API version's default
+  (`flexible`) or the Dashboard's default for links made there.
+- A subscription made `classic` (before the flexible default, or in the Dashboard) moves to
+  flexible with Stripe's migrate call, for good (it never moves back): `MishkaPay.request(%{provider:
+  "stripe", tenant: site.id, method: :post, path: "/v1/subscriptions/sub_.../migrate", params:
+  %{"billing_mode" => %{"type" => "flexible"}}})`. Mishka Pay has no typed call for it, since
+  every subscription it makes is flexible unless asked otherwise.
+
 ## Subscription changes
 
 - A preview is `POST /v1/invoices/create_preview`; its id starts with `upcoming_in_` and it is
@@ -358,7 +386,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reference makes the idempotency key, and Stripe wants it unique across all transactions. A
   calculation can be recorded for 90 days (`:expires_at`).
 - An account without Stripe Tax turned on answers `Errors.Rejected` with code
-  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
+  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`; a tax Stripe could
+  not count (its own failure; Stripe says to contact its support if it keeps happening),
+  `"failed_tax_calculation"`, never `Errors.Declined` even when paying a bill answers 402. An account with
   it on but with no registration where the buyer is counts a tax of zero.
 - Stripe Tax must be turned on (head office, registrations) before `automatic_tax` counts
   anything: `update_tax_settings/1` sets the head office and defaults, `create_tax_registration/1`
@@ -457,6 +487,25 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
   is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
   corrects usage reported by mistake.
+- Stripe takes a value of at most 15 digits, at most 12 of them after the decimal point (its
+  counting is in doubles). Leading zeros are not counted, and a `Decimal` is sent without the
+  zeros that end its fraction (`1.50` as `1.5`); zeros that end a whole number are counted
+  (`1000000000000000` is 16 digits). Anything longer is `Errors.Invalid` on `:value` before any
+  request, streamed or not.
+- `stream: true` on a report sends it through Stripe's meter event stream (API v2), for high
+  volume: up to 10,000 reports a second in live mode (a sandbox takes it too, at the sandbox's
+  own limits). Mishka Pay first makes a meter event session (`POST
+  /v2/billing/meter_event_session` with the secret key) and keeps its token in
+  `MishkaPay.Helpers.TokenCache` until a minute before it runs out (Stripe's tokens last 15
+  minutes), then posts the report as JSON to
+  `https://meter-events.stripe.com/v2/billing/meter_event_stream` with that token. A token Stripe
+  no longer takes (401) is dropped and the report sent once more with a new one. A site acting
+  for a connected account sends it as `Stripe-Context` (API v2's `Stripe-Account`).
+- A streamed report is checked by Stripe after it answers: a wrong customer or event name is not
+  an error in the answer but a `v1.billing.meter.error_report_triggered` thin event later. Its
+  `:id` is its identifier (the reference's, or one Mishka Pay makes), so `cancel_usage/1` takes
+  it like any other. Without `stream:` a report goes to `POST /v1/billing/meter_events`, which
+  checks it before answering.
 - `cancel_usage/1` is a meter event adjustment (`POST /v1/billing/meter_event_adjustments`,
   `type: cancel`) of the report's identifier (the `MishkaPay.Usage`'s `:id`), within 24 hours of
   the report; its idempotency key comes from the event name and identifier, so it cancels once.

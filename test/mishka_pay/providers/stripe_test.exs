@@ -63,6 +63,13 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok,
               %Checkout{id: "cs_" <> _, url: "https://checkout.stripe.com/" <> _, status: :open}} =
                MishkaPay.checkout(@checkout)
+
+      for billing <- [%{}, %{billing_mode: :flexible, proration_discounts: :included}] do
+        plan = %{@checkout | items: [%{id: "price_monthly"}]}
+
+        assert {:ok, %Checkout{id: "cs_" <> _}} =
+                 MishkaPay.checkout(Map.merge(plan, Map.put(billing, :mode, :subscription)))
+      end
     end
 
     test "request options send another API version and expand objects, as Stripe's spec accepts" do
@@ -1411,6 +1418,45 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a tax Stripe could not count and evidence past the page limit are plain rejections" do
+      refuse = fn status, code ->
+        MishkaPay.Test.stub_http(fn conn ->
+          conn
+          |> Plug.Conn.put_status(status)
+          |> Req.Test.json(%{
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => code,
+              "message" => "Stripe's own words about acct_123."
+            }
+          })
+        end)
+      end
+
+      # Paying a bill answers 402 when the tax fails, but no bank declined anything.
+      for status <- [400, 402] do
+        refuse.(status, "failed_tax_calculation")
+
+        assert {:error, %Errors.Rejected{status: ^status, code: "failed_tax_calculation"} = error} =
+                 MishkaPay.calculate_tax(@tax)
+
+        assert Exception.message(error) ==
+                 MishkaPay.Messages.text(:tax_calculation_failed)
+      end
+
+      refuse.(400, "dispute_evidence_page_limit_exceeded")
+
+      assert {:error, %Errors.Rejected{code: "dispute_evidence_page_limit_exceeded"} = error} =
+               MishkaPay.update_dispute(%{
+                 provider: "stripe",
+                 dispute_id: "du_1",
+                 evidence: %{"uncategorized_text" => String.duplicate("a long story ", 500)}
+               })
+
+      assert Exception.message(error) == MishkaPay.Messages.text(:evidence_page_limit)
+      refute Exception.message(error) =~ "acct_"
+    end
+
     test "a tax calculation that cannot be right is refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
       [line, other] = @tax.items
@@ -1484,10 +1530,81 @@ defmodule MishkaPay.Providers.StripeTest do
       assert params["mode"] == "subscription"
       assert params["subscription_data"]["trial_period_days"] == 14
       assert params["subscription_data"]["metadata"] == %{"mishka_pay_reference" => "sub-1"}
+
+      assert params["subscription_data"]["billing_mode"] == %{
+               "type" => "flexible",
+               "flexible" => %{"proration_discounts" => "itemized"}
+             }
+
       refute Map.has_key?(params, "payment_intent_data")
 
       assert [%{"price_data" => %{"recurring" => %{"interval" => "year", "interval_count" => 1}}}] =
                params["line_items"]
+    end
+
+    test "a subscription's billing mode is its own, else the tenant's, else flexible and itemized" do
+      plan = %Checkout{
+        provider: "stripe",
+        mode: :subscription,
+        items: [%MishkaPay.Price{id: "price_1", quantity: 1}],
+        success_url: "https://shop.test/ok",
+        cancel_url: "https://shop.test/no"
+      }
+
+      schedule = %MishkaPay.SubscriptionSchedule{
+        provider: "stripe",
+        customer_id: "cus_1",
+        phases: [%MishkaPay.SubscriptionPhase{items: [%MishkaPay.Price{id: "price_1"}]}]
+      }
+
+      billing = fn choice, settings ->
+        checkout = Stripe.Mapper.checkout_params(Map.merge(plan, choice), settings)
+        made = Stripe.Mapper.subscription_schedule_params(Map.merge(schedule, choice), settings)
+        assert checkout["subscription_data"]["billing_mode"] == made["billing_mode"]
+        made["billing_mode"]
+      end
+
+      flexible = &%{"type" => "flexible", "flexible" => %{"proration_discounts" => &1}}
+
+      assert billing.(%{}, %{}) == flexible.("itemized")
+      assert billing.(%{billing_mode: :classic}, %{}) == %{"type" => "classic"}
+      assert billing.(%{proration_discounts: :included}, %{}) == flexible.("included")
+
+      assert billing.(%{}, %{billing_mode: :classic, proration_discounts: :included}) ==
+               %{"type" => "classic"}
+
+      assert billing.(%{}, %{proration_discounts: :included}) == flexible.("included")
+
+      assert billing.(%{billing_mode: :flexible}, %{billing_mode: :classic}) ==
+               flexible.("itemized")
+
+      refute Map.has_key?(
+               Stripe.Mapper.subscription_schedule_params(%{schedule | subscription_id: "sub_1"}),
+               "billing_mode"
+             )
+
+      # Proration discounts asked of a tenant whose subscriptions are classic: no request.
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", billing_mode: :classic})
+
+      for made <- [
+            MishkaPay.checkout(%{
+              provider: "stripe",
+              mode: :subscription,
+              items: [%{id: "price_1"}],
+              success_url: "https://shop.test/ok",
+              cancel_url: "https://shop.test/no",
+              proration_discounts: :itemized
+            }),
+            MishkaPay.create_subscription_schedule(%{
+              provider: "stripe",
+              customer_id: "cus_1",
+              phases: [%{items: [%{id: "price_1"}]}],
+              proration_discounts: :itemized
+            })
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :proration_discounts}]}} = made
+      end
     end
 
     test "a subscription is read, cancelled at the period's end or now, resumed, and its invoices listed" do
@@ -2056,6 +2173,10 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert params == %{
                "customer" => "cus_1",
+               "billing_mode" => %{
+                 "type" => "flexible",
+                 "flexible" => %{"proration_discounts" => "itemized"}
+               },
                "start_date" => "1796083200",
                "end_behavior" => "cancel",
                "phases" => %{
@@ -2134,6 +2255,11 @@ defmodule MishkaPay.Providers.StripeTest do
             {Map.put(base, :subscription_id, "sub_1"), :customer_id},
             {%{provider: "stripe", subscription_id: "sub_1", end_behavior: :cancel},
              :end_behavior},
+            {%{provider: "stripe", subscription_id: "sub_1", billing_mode: :flexible},
+             :billing_mode},
+            {Map.merge(base, %{billing_mode: :classic, proration_discounts: :itemized}),
+             :proration_discounts},
+            {Map.put(base, :billing_mode, :monthly), :billing_mode},
             {%{base | phases: [%{items: []}]}, :items},
             {%{
                base
@@ -2174,7 +2300,10 @@ defmodule MishkaPay.Providers.StripeTest do
             {%{provider: "stripe", id: "sub_sched_1", subscription_id: "sub_2"},
              :subscription_id},
             {%{provider: "stripe", end_behavior: :cancel}, :id},
-            {%{provider: "stripe", id: "sub_1", end_behavior: :cancel}, :schedule_id}
+            {%{provider: "stripe", id: "sub_1", end_behavior: :cancel}, :schedule_id},
+            {%{provider: "stripe", id: "sub_sched_1", billing_mode: :classic}, :billing_mode},
+            {%{provider: "stripe", id: "sub_sched_1", proration_discounts: :included},
+             :proration_discounts}
           ] do
         assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} =
                  MishkaPay.update_subscription_schedule(attrs)
@@ -3547,7 +3676,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok, %MishkaPay.Usage{id: ^identifier}} =
                MishkaPay.report_usage(Map.put(usage, :value, Decimal.new("-3.50")))
 
-      assert_received {:sent, %{"payload[value]" => "-3.50"} = again, [^identifier]}
+      assert_received {:sent, %{"payload[value]" => "-3.5"} = again, [^identifier]}
       refute Map.has_key?(again, "timestamp")
 
       assert {:ok, %MishkaPay.Usage{id: nil, value: 1}} =
@@ -3556,6 +3685,149 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, without, [client_key]}
       refute Map.has_key?(without, "identifier")
       refute client_key == identifier
+
+      # Fifteen digits go, twelve after the point; leading zeros and the zeros that end a
+      # fraction are not counted (Stripe's own counting, checked on a sandbox).
+      for value <- [
+            123_456_789_012_345,
+            "-123456789012345",
+            "123.123456789012",
+            "0012345678901234.5",
+            "1.500000000000000000",
+            "0.000000000001"
+          ] do
+        assert {:ok, %MishkaPay.Usage{}} = MishkaPay.report_usage(Map.put(usage, :value, value))
+        assert_received {:sent, _sent, _key}
+      end
+
+      for value <- [1_000_000_000_000_000, "1234.123456789012", "0.1234567890123"] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :value} = error]}} =
+                 MishkaPay.report_usage(Map.put(usage, :value, value))
+
+        assert error.message ==
+                 MishkaPay.Messages.text(:stripe_usage_digits, digits: 15, places: 12)
+      end
+
+      refute_received {:sent, _sent, _key}
+    end
+
+    test "a streamed report takes a session token once, then goes as JSON to the meter event stream" do
+      test_pid = self()
+      secret = "sk_test_stream_#{System.unique_integer([:positive])}"
+      MishkaPay.Test.put_keys("stripe", %{secret_key: secret, account_id: "acct_seller"})
+      expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        headers = Map.new(conn.req_headers)
+        send(test_pid, {:sent, conn.host, conn.request_path, headers, JSON.decode!(body)})
+
+        case conn.request_path do
+          "/v2/billing/meter_event_session" ->
+            Req.Test.json(conn, %{
+              "object" => "v2.billing.meter_event_session",
+              "authentication_token" => "token_#{System.unique_integer([:positive])}",
+              "expires_at" => expires
+            })
+
+          "/v2/billing/meter_event_stream" ->
+            Req.Test.json(conn, %{})
+        end
+      end)
+
+      at = DateTime.utc_now() |> DateTime.add(-3600) |> DateTime.truncate(:second)
+
+      usage = %{
+        provider: "stripe",
+        event_name: "tokens",
+        customer_id: "cus_1",
+        value: Decimal.new("2.5"),
+        at: at,
+        reference: "r-stream",
+        stream: true
+      }
+
+      assert {:ok, %MishkaPay.Usage{id: identifier, stream: true}} =
+               MishkaPay.report_usage(usage)
+
+      assert_received {:sent, "api.stripe.com", "/v2/billing/meter_event_session", session, %{}}
+      assert session["authorization"] == "Bearer " <> secret
+      assert session["stripe-version"] == Stripe.version()
+      assert session["stripe-context"] == "acct_seller"
+      refute Map.has_key?(session, "stripe-account")
+
+      assert_received {:sent, "meter-events.stripe.com", "/v2/billing/meter_event_stream",
+                       %{"authorization" => "Bearer token_" <> token} = stream,
+                       %{"events" => [event]}}
+
+      assert stream["stripe-version"] == Stripe.version()
+      assert stream["idempotency-key"] == identifier
+      assert stream["content-type"] =~ "application/json"
+
+      assert event == %{
+               "event_name" => "tokens",
+               "identifier" => identifier,
+               "payload" => %{"stripe_customer_id" => "cus_1", "value" => "2.5"},
+               "timestamp" => DateTime.to_iso8601(at)
+             }
+
+      # The token is kept; a report without a reference gets an identifier of its own.
+      assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _ = own}} =
+               MishkaPay.report_usage(Map.drop(usage, [:reference, :at]))
+
+      refute own == identifier
+      refute_received {:sent, _host, "/v2/billing/meter_event_session", _headers, _body}
+
+      assert_received {:sent, _host, "/v2/billing/meter_event_stream",
+                       %{"authorization" => "Bearer token_" <> ^token}, %{"events" => [kept]}}
+
+      assert kept["identifier"] == own
+      refute Map.has_key?(kept, "timestamp")
+    end
+
+    test "a stream token Stripe no longer takes is replaced once; a second refusal is plain" do
+      test_pid = self()
+      secret = "sk_test_expired_#{System.unique_integer([:positive])}"
+      MishkaPay.Test.put_keys("stripe", %{secret_key: secret})
+      expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test_pid, {:sent, conn.request_path})
+
+        case conn.request_path do
+          "/v2/billing/meter_event_session" ->
+            Req.Test.json(conn, %{"authentication_token" => "token_x", "expires_at" => expires})
+
+          "/v2/billing/meter_event_stream" ->
+            conn
+            |> Plug.Conn.put_status(401)
+            |> Req.Test.json(%{
+              "error" => %{
+                "type" => "invalid_request_error",
+                "code" => "billing_meter_event_session_expired",
+                "message" => "The temporary session token has expired."
+              }
+            })
+        end
+      end)
+
+      usage = %{provider: "stripe", event_name: "tokens", customer_id: "cus_1", stream: true}
+
+      assert {:error,
+              %Errors.Rejected{status: 401, code: "billing_meter_event_session_expired"} = error} =
+               MishkaPay.report_usage(usage)
+
+      refute Exception.message(error) =~ "temporary session token"
+
+      for path <- [
+            "/v2/billing/meter_event_session",
+            "/v2/billing/meter_event_stream",
+            "/v2/billing/meter_event_session",
+            "/v2/billing/meter_event_stream"
+          ],
+          do: assert_received({:sent, ^path})
+
+      refute_received {:sent, _path}
     end
 
     test "a usage window goes to Stripe in whole minutes, and an empty one counts 0" do
@@ -3732,6 +4004,10 @@ defmodule MishkaPay.Providers.StripeTest do
             {MishkaPay.report_usage(Map.put(usage, :customer_id, "cs_1")), :customer_id},
             {MishkaPay.report_usage(Map.put(usage, :at, DateTime.add(now, -36, :day))), :at},
             {MishkaPay.report_usage(Map.put(usage, :at, DateTime.add(now, 10, :minute))), :at},
+            {MishkaPay.report_usage(Map.put(usage, :value, 1_234_567_890_123_456)), :value},
+            {MishkaPay.report_usage(
+               Map.merge(usage, %{value: "1234567890.123456", stream: true})
+             ), :value},
             {MishkaPay.usage_summary("stripe", "mtr_1", "cus_1", now, now), :to},
             {MishkaPay.usage_summary("stripe", "evt_1", "cus_1", now, DateTime.add(now, 60)),
              :meter_id},
@@ -5021,6 +5297,37 @@ defmodule MishkaPay.Providers.StripeTest do
              id: "pi_1",
              description: "New"
            }) == %{"description" => "New"}
+
+    # Taken at once is Stripe's recommended automatic_async; held stays manual; left out, unsent.
+    for {capture, sent} <- [
+          {:automatic, "automatic_async"},
+          {:automatic_sync, "automatic"},
+          {:manual, "manual"},
+          {nil, nil}
+        ] do
+      intent = %MishkaPay.PaymentIntent{
+        provider: "stripe",
+        amount: Money.new(:USD, "5"),
+        capture: capture
+      }
+
+      assert Stripe.Mapper.payment_intent_params(intent)["capture_method"] == sent
+
+      checkout = %{params_checkout() | capture: capture}
+
+      assert Stripe.Mapper.checkout_params(checkout)["payment_intent_data"]["capture_method"] ==
+               sent
+    end
+
+    for method <- ["automatic", "automatic_async"] do
+      assert {:ok, %MishkaPay.PaymentIntent{capture: :automatic}} =
+               Stripe.Mapper.payment_intent(%{
+                 "id" => "pi_3",
+                 "amount" => 500,
+                 "currency" => "usd",
+                 "capture_method" => method
+               })
+    end
   end
 
   test "a tax rate, a registration and the tax settings map from Stripe's answers" do

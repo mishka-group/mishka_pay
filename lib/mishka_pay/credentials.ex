@@ -34,6 +34,13 @@ defmodule MishkaPay.Credentials do
     * `:automatic_tax`: `true` has the provider count the tax of this tenant's checkouts and
       payment links from the buyer's address (Stripe Tax); a checkout's own `:automatic_tax` still
       wins.
+    * `:billing_mode`: how this tenant's new subscriptions count prorations and bill: `:flexible`
+      (the default when left out, Stripe's recommended mode) or `:classic`. A checkout's or a
+      schedule's own `:billing_mode` still wins. Mishka Pay sends it with every subscription it
+      makes (a subscription checkout, a new schedule).
+    * `:proration_discounts`: with the flexible mode, `:itemized` (the default when left out,
+      Stripe's recommended way: a proration shows the full amount and its discount) or
+      `:included` (the amount after the discount). A checkout's or a schedule's own still wins.
     * `:webhook_secrets`: other webhook secrets still accepted beside `:webhook_secret`, while a
       rolled secret runs out. Stripe keeps signing with the old secret for a while after a roll
       (up to a day), so a site lists the old one here and puts the new one in
@@ -94,6 +101,14 @@ defmodule MishkaPay.Credentials do
     field :publishable_key, String.t(), derives: "sanitize(trim) validate(string)"
     field :merchant_of_record, boolean(), derives: "validate(boolean)"
     field :automatic_tax, boolean(), derives: "validate(boolean)"
+
+    field :billing_mode, :flexible | :classic,
+      derives: "validate(enum=Atom[flexible::classic])",
+      validator: {MishkaPay.Checkout, :billing_mode}
+
+    field :proration_discounts, :itemized | :included,
+      derives: "validate(enum=Atom[itemized::included])",
+      validator: {MishkaPay.Checkout, :proration_discounts}
 
     field :refunds, :once | :many,
       default: :once,
