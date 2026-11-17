@@ -195,6 +195,61 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "a raw call reaches PayPal's API with the OAuth token, JSON and a request id from its reference" do
+      body = %{
+        "intent" => "CAPTURE",
+        "purchase_units" => [%{"amount" => %{"currency_code" => "USD", "value" => "5.00"}}],
+        "payment_source" => %{
+          "paypal" => %{"experience_context" => %{"return_url" => "https://shop.test/back"}}
+        }
+      }
+
+      call = %{
+        provider: "paypal",
+        tenant: "site-a",
+        method: :post,
+        path: "/v2/checkout/orders",
+        params: body,
+        reference: "raw-order-1"
+      }
+
+      assert {:ok, %{"id" => "ORDER" <> _ = id, "status" => "PAYER_ACTION_REQUIRED"}} =
+               MishkaPay.request(call)
+
+      {headers, sent} = paypal_request("POST", "/v2/checkout/orders")
+      assert headers["paypal-request-id"] =~ "mishka_pay-raw-"
+      assert headers["authorization"] =~ "Bearer "
+      assert sent["intent"] == "CAPTURE"
+
+      assert {:ok, %{"id" => ^id}} =
+               MishkaPay.request(%{
+                 provider: "paypal",
+                 tenant: "site-a",
+                 path: "/v2/checkout/orders/#{id}"
+               })
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} =
+               MishkaPay.request(%{
+                 provider: "paypal",
+                 tenant: "site-a",
+                 path: "/v2/checkout/orders/NOPE"
+               })
+    end
+
+    test "PayPal has no API version or expand: a raw call with either is refused before any request" do
+      for options <- [%{api_version: "2026-01-01"}, %{expand: ["payer"]}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :options}]}} =
+                 MishkaPay.request(%{
+                   provider: "paypal",
+                   tenant: "site-a",
+                   path: "/v2/checkout/orders/X",
+                   options: options
+                 })
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal has no credit notes: every credit note call is refused before any request" do
       note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
 

@@ -1770,5 +1770,54 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   # Stripe and PayPal keep codes, lookup keys and idempotency keys between runs; a counter alone
   # starts again each run, so the run's time makes every name new.
+  test "a raw call makes a customer once per reference in another API version, reads it expanded and deletes it",
+       %{key: key} do
+    run = run_id()
+
+    made = %{
+      provider: "stripe",
+      method: :post,
+      path: "/v1/customers",
+      params: %{"email" => "raw-#{run}@example.com", "metadata" => %{"run" => run}},
+      reference: "raw-#{run}",
+      options: %{api_version: "2025-03-31.basil", expand: ["invoice_settings"]}
+    }
+
+    assert {:ok, %{"object" => "customer", "id" => "cus_" <> _ = id} = customer} =
+             MishkaPay.request(made)
+
+    on_exit(fn ->
+      cleanup(key, fn keys ->
+        case Stripe.delete_customer(id, keys) do
+          {:error, %Errors.Rejected{code: "resource_missing"}} -> {:ok, :gone}
+          answer -> with :ok <- answer, do: {:ok, :deleted}
+        end
+      end)
+    end)
+
+    assert customer["metadata"] == %{"run" => run}
+    assert {:ok, %{"id" => ^id}} = MishkaPay.request(made)
+
+    assert {:ok, %{"id" => ^id, "test_clock" => nil}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               path: "/v1/customers/#{id}",
+               options: %{expand: ["test_clock"]}
+             })
+
+    assert {:ok, %{"object" => "balance"}} =
+             MishkaPay.request(%{provider: "stripe", path: "/v1/balance"})
+
+    assert {:ok, %{"id" => ^id, "deleted" => true}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               method: :delete,
+               path: "/v1/customers/#{id}"
+             })
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :path}]}} =
+             MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
+  end
+
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

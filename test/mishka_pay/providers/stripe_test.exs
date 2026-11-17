@@ -97,6 +97,55 @@ defmodule MishkaPay.Providers.StripeTest do
       assert version == Stripe.version()
     end
 
+    test "a raw call reads and writes any path with the site's key, one idempotency key per reference" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.method, conn.request_path, Map.new(conn.req_headers)})
+        StripeMock.forward(conn)
+      end)
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :raw_request, :stop]])
+
+      assert {:ok, %{"object" => "balance", "available" => [_ | _]}} =
+               MishkaPay.request(%{provider: "stripe", tenant: "site-a", path: "/v1/balance"})
+
+      assert_received {:sent, "GET", "/v1/balance", headers}
+      assert headers["authorization"] == "Bearer sk_test_123"
+      assert headers["stripe-version"] == Stripe.version()
+      refute Map.has_key?(headers, "idempotency-key")
+
+      assert_received {[:mishka_pay, :raw_request, :stop], ^ref, _,
+                       %{provider: "stripe", tenant: "site-a", outcome: :ok}}
+
+      write = %{
+        provider: "stripe",
+        tenant: "site-a",
+        method: "post",
+        path: "/v1/customers",
+        params: %{"email" => "raw@shop.test", "metadata" => %{"plan" => "pro"}},
+        reference: "raw-1",
+        options: %{api_version: "2025-03-31.basil", expand: ["invoice_settings"]}
+      }
+
+      assert {:ok, %{"object" => "customer", "id" => "cus_" <> _}} = MishkaPay.request(write)
+      assert_received {:sent, "POST", "/v1/customers", %{"idempotency-key" => key} = first}
+      assert first["stripe-version"] == "2025-03-31.basil"
+
+      assert {:ok, %{"object" => "customer"}} = MishkaPay.request(write)
+      assert_received {:sent, "POST", "/v1/customers", %{"idempotency-key" => ^key}}
+
+      assert {:ok, %{"deleted" => true}} =
+               MishkaPay.request(%{
+                 provider: "stripe",
+                 method: :delete,
+                 path: "/v1/customers/cus_1"
+               })
+
+      assert {:error, %Errors.Rejected{status: 404}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/no_such_thing"})
+    end
+
     test "a reference reused with other details is a plain rejection that never shows the key" do
       MishkaPay.Test.stub_http(fn conn ->
         conn

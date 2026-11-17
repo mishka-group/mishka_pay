@@ -84,7 +84,8 @@ defmodule MishkaPay do
     * entitlements: `:feature_create`, `:feature_attach`, `:entitlement_list`;
     * money views: `:balance`, `:balance_transaction_list`, `:customer_balance_adjust`,
       `:customer_balance_list`;
-    * events: `:event_list`.
+    * events: `:event_list`;
+    * a call to the provider's own API: `:raw_request`.
   """
 
   alias MishkaPay.{
@@ -1389,6 +1390,28 @@ defmodule MishkaPay do
       tenant,
       & &1.list_credit_note_lines(credit_note_id, limited(opts), &2)
     )
+  end
+
+  @doc """
+  Calls any path of the provider's own API with the tenant's keys, for what Mishka Pay has no
+  typed call for yet, and answers the provider's decoded answer as it is (a map). `attrs` is a
+  `MishkaPay.RawRequest`: `:method`, `:path` (from the root, never an address), `:params`, a
+  `:reference` that makes a write's idempotency key, and `:options` (`MishkaPay.RequestOptions`:
+  `:api_version`, `:expand`). It goes through the same retries, idempotency keys and telemetry as
+  every typed call, and an error is the same `MishkaPay.Errors` one.
+
+      MishkaPay.request(%{provider: "stripe", tenant: site_id, path: "/v1/tax/settings"})
+
+      MishkaPay.request(%{provider: "stripe", tenant: site_id, method: :post,
+                          path: "/v1/customers/\#{id}", params: %{"preferred_locales" => ["de"]},
+                          reference: "locale-\#{id}", options: %{expand: ["tax"]}})
+
+  Reach for it only until a typed call exists: the answer is the provider's own shape, which
+  changes with its API version.
+  """
+  @spec request(map()) :: {:ok, map()} | {:error, Splode.Error.t()}
+  def request(attrs) when is_map(attrs) do
+    made(:raw_request, :raw_request, attrs, MishkaPay.RawRequest, [:provider], :raw_request)
   end
 
   @doc """

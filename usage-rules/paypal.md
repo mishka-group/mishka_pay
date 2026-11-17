@@ -1,7 +1,7 @@
 # Rules for PayPal in Mishka Pay (coming soon)
 
 `MishkaPay.Providers.PayPal` (id `"paypal"`) exists with `:checkout`, `:refund`,
-`:subscription` and `:webhook`. Checkout, capture, refunds (once, or many with a reference) and
+`:subscription`, `:webhook` and `:raw_request`. Checkout, capture, refunds (once, or many with a reference) and
 subscriptions have run against PayPal's sandbox; webhooks from the sandbox are still to come
 (mishka-group/mishka_pay#17). Prefer Stripe in production until then.
 
@@ -32,3 +32,6 @@ subscriptions have run against PayPal's sandbox; webhooks from the sandbox are s
   `tax_behavior`), payment links and the catalog: each is refused with
   `Errors.Unsupported`.
 - Webhooks are verified by PayPal's own API; they cannot be simulated locally.
+- `MishkaPay.request/1` calls any PayPal REST path (`"/v2/checkout/orders/<id>"`) with the
+  site's OAuth token; a write's body is JSON and its `:reference` makes `PayPal-Request-Id`.
+  PayPal has no API version or expand: `options:` with either is `Errors.Invalid` on `:options`.

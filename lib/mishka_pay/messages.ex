@@ -30,6 +30,7 @@ defmodule MishkaPay.Messages do
           | :path_root
           | :api_version
           | :expand_paths
+          | :request_options_none
           | :params_plain
           | :one_body
           | :multipart_parts
@@ -214,6 +215,9 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The expand field takes up to 20 dotted paths of lower-case names, at most four levels deep"
       )
+
+  defp msgid(:request_options_none),
+    do: dgettext_noop("mishka_pay", "%{provider} takes no api_version or expand option")
 
   defp msgid(:path_root),
     do: dgettext_noop("mishka_pay", "The path field must start with /")

@@ -45,6 +45,8 @@ end
     `void_credit_note/2`, `list_credit_notes/2` (`:invoice_id`, `:customer_id`),
     `list_credit_note_lines/3`;
   - `:event_list`: `list_events/2`; optional `check_keys/1` (one read that changes nothing);
+  - `:raw_request`: `raw_request/2` (a `MishkaPay.RawRequest`, answered as the provider's decoded
+    map); refuse an option of `:options` the provider cannot send;
   - `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`;
   - `:tax_id`: `create_tax_id/2`, `list_tax_ids/2` (`:customer_id` in its options),
     `delete_tax_id/3`;

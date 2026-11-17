@@ -41,6 +41,10 @@ defmodule MishkaPay.Providers.PayPal do
       its next bill is the plan's price on its next billing time. PayPal cancels a subscription at
       once (`at: :now`): a cancel at the period's end, taking one back, a customer's bills and one
       bill by id are refused.
+    * `raw_request/2` calls any path of PayPal's REST API with the site's OAuth token, a write's
+      body as JSON and its reference (with the method and path) as `PayPal-Request-Id`, and
+      answers PayPal's JSON as it is (`{}` for an empty answer). PayPal has no API version or
+      expand option: either one is refused before any request.
     * `verify_webhook/3` asks PayPal to check the message (`verify-webhook-signature`) and answers
       it as a `MishkaPay.Event` naming its Order, or its subscription (a renewal's sale names it as
       its billing agreement).
@@ -70,7 +74,7 @@ defmodule MishkaPay.Providers.PayPal do
   use MishkaPay.Provider,
     id: "paypal",
     label: "PayPal",
-    capabilities: [:checkout, :refund, :subscription, :webhook]
+    capabilities: [:checkout, :refund, :subscription, :webhook, :raw_request]
 
   alias MishkaPay.{Checkout, Client, Errors, Messages, Page, Price, ProviderKit, Refund}
   alias MishkaPay.Helpers.TokenCache
@@ -228,6 +232,18 @@ defmodule MishkaPay.Providers.PayPal do
            ) do
       Mapper.refund(answer, refund)
     end
+  end
+
+  # PayPal names no API version in a header and expands nothing: such an option is refused.
+  @impl MishkaPay.Provider
+  def raw_request(%MishkaPay.RawRequest{options: %{api_version: version, expand: expand}}, _keys)
+      when not is_nil(version) or not is_nil(expand),
+      do: ProviderKit.invalid(:options, Messages.text(:request_options_none, provider: "PayPal"))
+
+  def raw_request(%MishkaPay.RawRequest{} = call, keys) do
+    request(call.method, call.path, Map.new(call.params || %{}), keys,
+      key: MishkaPay.RawRequest.idempotency_key(call)
+    )
   end
 
   @impl MishkaPay.Provider

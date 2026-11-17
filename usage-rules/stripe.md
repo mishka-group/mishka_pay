@@ -4,6 +4,16 @@
 `:subscription`, `:subscription_list`, `:webhook` and the rest. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
 `mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
 
+## Raw calls
+
+- `MishkaPay.request/1` calls any `api.stripe.com` path (`"/v1/tax/settings"`) with the
+  tenant's key and answers Stripe's JSON as a map. `params:` nest as Stripe's form encoding
+  takes them (`%{"metadata" => %{"a" => "b"}}`).
+- `options: %{api_version: "2025-03-31.basil", expand: ["customer"]}` sends that
+  `Stripe-Version` and `expand[]` for this call only; typed calls always use the pinned version.
+- A write's `:reference` with its method and path makes the idempotency key; without one, a
+  write gets a fresh key that its retries reuse.
+
 ## Retries and rate limits
 
 - A read, and a write with its idempotency key, is tried again on a network error and on 408,

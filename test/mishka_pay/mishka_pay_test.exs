@@ -686,6 +686,48 @@ defmodule MishkaPayTest do
                })
     end
 
+    test "a raw call refuses a path that is not a plain API path, before the provider is asked" do
+      for path <- [
+            "//evil.com",
+            "https://evil.com/x",
+            "../v1/balance",
+            "/v1/../balance",
+            "/v1/balance?key=x",
+            "/v1/%2F%2Fevil.com",
+            "v1/balance"
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :path}]}} =
+                 MishkaPay.request(%{provider: "acme", tenant: "site-a", path: path}),
+               path
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :method}]}} =
+               MishkaPay.request(%{provider: "acme", path: "/v1/x", method: :head})
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.request(%{provider: "acme", path: "/v1/x", options: %{expand: ["A"]}})
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.request(%{provider: "acme", path: "/v1/x", headers: %{"x" => "y"}})
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :raw_request}} =
+               MishkaPay.request(%{provider: "acme", tenant: "site-a", path: "/v1/balance"})
+    end
+
+    test "a raw call's idempotency key comes from its reference, method and path" do
+      call = fn attrs ->
+        {:ok, call} = MishkaPay.RawRequest.builder(Map.merge(%{provider: "acme"}, attrs))
+        MishkaPay.RawRequest.idempotency_key(call)
+      end
+
+      key = call.(%{method: :post, path: "/v1/customers", reference: "r1"})
+      assert "mishka_pay-raw-" <> _ = key
+      assert key == call.(%{method: "post", path: "/v1/customers", reference: "r1"})
+      refute key == call.(%{method: :post, path: "/v1/products", reference: "r1"})
+      refute key == call.(%{method: :post, path: "/v1/customers", reference: "r1", tenant: "b"})
+      assert call.(%{method: :post, path: "/v1/customers"}) == nil
+    end
+
     test "a provider without credit notes refuses them, after the note is checked" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
                MishkaPay.list_credit_notes("acme", "site-a", invoice_id: "acme_in_1")

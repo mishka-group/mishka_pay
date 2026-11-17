@@ -129,6 +129,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.record_tax(provider, calculation_id, reference, tenant)` | `%MishkaPay.TaxTransaction{}`: the paid sale in the provider's tax reports |
 | `MishkaPay.create_shipping_rate(attrs)`, `list_shipping_rates(provider, tenant, active: true)` | `%MishkaPay.ShippingRate{}`: a way to ship and its price, offered by id on checkouts |
 | `MishkaPay.list_events(provider, tenant, since: dt, types: [...])` | a `MishkaPay.Page` of `%MishkaPay.Event{}` |
+| `MishkaPay.request(%{provider:, tenant:, method: :get, path: "/v1/...", params:, reference:, options: %{api_version:, expand: [...]}})` (`MishkaPay.RawRequest`) | `{:ok, map}`: the provider's own answer, for what has no typed call yet; the provider needs `:raw_request` |
 | `MishkaPay.replay_events(provider, tenant, since: dt)` | `%{delivered: n, failed: [{id, reason}]}`: missed events handed to the listeners again |
 | `MishkaPay.Check.run(tenant: t, webhook_url: url, domain: MyApp.Pay)` | `[{check, :ok \| {:error, reason}}]`: the site's setup |
 | `MishkaPay.portal_session(attrs)` | `%MishkaPay.PortalSession{url: url}`: redirect the buyer there |
@@ -321,6 +322,21 @@ redirect(conn, external: portal.url)
 - A person's erase request: `delete_customer/3` (or the Ash customer's `:remove`). It cannot be
   undone, and it ends their running subscriptions at once; past payments and invoices stay at the
   provider. Delete the host's own copy of their details as well.
+
+## Raw calls
+
+`MishkaPay.request/1` reaches what Mishka Pay does not model yet, with the tenant's keys and the
+same retries, idempotency keys, telemetry (`:raw_request`) and errors as every typed call:
+
+```elixir
+MishkaPay.request(%{provider: "stripe", tenant: site.id, path: "/v1/tax/settings"})
+```
+
+- `:path` is the API path from the root. An address (`"https://evil.test/x"`, `"//evil.test"`),
+  a dot segment, a query or an encoded slash is `Errors.Invalid` on `:path` before any request,
+  so the keys never leave the provider's host. Put the query in `:params`.
+- Give a write a `:reference` so it happens once.
+- The answer is the provider's own shape: move to the typed call once one exists.
 
 ## Errors
 

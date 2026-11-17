@@ -91,7 +91,8 @@ defmodule MishkaPay.Provider do
     * `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
     * `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
     * `:webhook`: `verify_webhook/3`;
-    * `:event_list`: `list_events/2`.
+    * `:event_list`: `list_events/2`;
+    * `:raw_request`: `raw_request/2`.
 
   Every `list_*` callback takes the list options (`:limit`, 1 to 100; `:after`, the cursor of a
   page before; and its own filters) and answers one `MishkaPay.Page`.
@@ -138,6 +139,7 @@ defmodule MishkaPay.Provider do
     :customer_balance,
     :webhook,
     :event_list,
+    :raw_request,
     :return_verify
   ]
 
@@ -190,6 +192,8 @@ defmodule MishkaPay.Provider do
     * `:customer_balance`: keeps a customer's store credit, taken off their next bills.
     * `:webhook`: sends signed messages when something changes.
     * `:event_list`: lists the messages it sent, to deliver again those a site missed.
+    * `:raw_request`: calls any path of its own API with the tenant's keys, for what Mishka Pay
+      has no typed call for yet (`MishkaPay.request/1`).
     * `:return_verify`: has no webhook; the buyer comes back to a return URL and the payment is
       checked with a call to the provider.
   """
@@ -225,6 +229,7 @@ defmodule MishkaPay.Provider do
           | :payment_list
           | :webhook
           | :event_list
+          | :raw_request
           | :return_verify
 
   @doc "The provider's id, such as `\"stripe\"`. Set by `use`."
@@ -813,6 +818,14 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Event.t()} | {:error, Splode.Error.t()}
 
   @doc """
+  With `:raw_request`. Sends one call to `:path` of the provider's own API with the tenant's keys
+  and answers the provider's decoded answer as it is, or its error as a `MishkaPay.Errors` one.
+  An option of `:options` the provider cannot send is refused before any request.
+  """
+  @callback raw_request(MishkaPay.RawRequest.t(), MishkaPay.Credentials.t()) ::
+              {:ok, map()} | {:error, Splode.Error.t()}
+
+  @doc """
   Optional. Whether the provider takes `keys`, with one read call that changes nothing
   (`MishkaPay.Check`).
   """
@@ -927,6 +940,7 @@ defmodule MishkaPay.Provider do
                       list_balance_transactions: 2,
                       adjust_customer_balance: 2,
                       list_customer_balance: 2,
+                      raw_request: 2,
                       verify_webhook: 3
 
   @operations %{
@@ -1045,7 +1059,8 @@ defmodule MishkaPay.Provider do
     entitlement: [create_feature: 2, attach_feature: 3, list_entitlements: 2],
     balance: [fetch_balance: 1, list_balance_transactions: 2],
     customer_balance: [adjust_customer_balance: 2, list_customer_balance: 2],
-    webhook: [verify_webhook: 3]
+    webhook: [verify_webhook: 3],
+    raw_request: [raw_request: 2]
   }
 
   @options [:id, :label, :capabilities, :priority]

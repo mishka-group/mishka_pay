@@ -94,6 +94,10 @@ defmodule MishkaPay.Providers.Stripe do
       balance transactions (`txn_...`), by payout (`po_...`) or type.
     * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
       (`cbtxn_...`): below zero is credit.
+    * `raw_request/2` calls any path of `api.stripe.com` with the tenant's key, the pinned
+      version or the call's own `api_version` (`Stripe-Version`) and its `expand[]`, and answers
+      Stripe's JSON as it is; a write's reference, with its method and path, makes the
+      idempotency key.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, or any of its
@@ -155,6 +159,7 @@ defmodule MishkaPay.Providers.Stripe do
       :entitlement,
       :balance,
       :customer_balance,
+      :raw_request,
       :webhook,
       :event_list
     ]
@@ -1814,6 +1819,15 @@ defmodule MishkaPay.Providers.Stripe do
   defp maybe_id(nil, _prefix, _field), do: :ok
   defp maybe_id(id, "", field), do: plain_id(id, field)
   defp maybe_id(id, prefix, field), do: stripe_id(id, prefix, field)
+
+  # The same reference on the same method and path is the same call at Stripe; a read takes no key.
+  @impl MishkaPay.Provider
+  def raw_request(%MishkaPay.RawRequest{} = call, keys) do
+    request(call.method, call.path, call.params || [], keys,
+      key: MishkaPay.RawRequest.idempotency_key(call),
+      request_options: call.options
+    )
+  end
 
   # The lightest read every key may make: one customer, or none.
   @impl MishkaPay.Provider

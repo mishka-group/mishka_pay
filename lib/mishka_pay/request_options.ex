@@ -4,7 +4,8 @@
 
 defmodule MishkaPay.RequestOptions do
   @moduledoc """
-  What one request asks of the provider beyond its path and params. A guarded_struct.
+  What one request asks of the provider beyond its path and params: the `:options` of a raw
+  call (`MishkaPay.request/1`). A guarded_struct.
 
     * `:api_version`: the provider's API version to answer in, in place of the one its adapter
       pins (Stripe: `"2026-10-28.endive"`, sent as `Stripe-Version`). Letters, digits, `.`, `-`

@@ -23,7 +23,7 @@ defmodule ShopWeb.ShopLive do
     * members and access by subscription, refunds and held payments, more checkout options
       (embedded too), saved cards and portal links, one-off bills, customer search and bill
       previews, each in its own component;
-    * reading a checkout or a payment back by its id;
+    * reading a checkout or a payment back by its id, and a raw call to any Stripe API path;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
   """
@@ -537,6 +537,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.BillsComponent} id="bills" tenant={@tenant} />
 
       <.live_component module={ShopWeb.LookupsComponent} id="lookups" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.RawCallComponent} id="raw-call" tenant={@tenant} />
 
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
