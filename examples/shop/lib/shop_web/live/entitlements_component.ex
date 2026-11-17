@@ -187,7 +187,7 @@ defmodule ShopWeb.EntitlementsComponent do
           <div class="card-body gap-2">
             <h3 class="font-medium">What a customer may use</h3>
             <label class="fieldset">
-              <span class="fieldset-legend">Customer id</span>
+              <span class="fieldset-legend">v1 Customer id (Stripe takes no account here)</span>
               <input
                 name="customer_id"
                 placeholder="cus_..."

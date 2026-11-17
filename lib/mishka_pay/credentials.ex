@@ -65,6 +65,11 @@ defmodule MishkaPay.Credentials do
       `:v1` (Stripe's Accounts v1, still needed for OAuth, Treasury, card issuing and older
       capabilities). A call's own `:api` still wins (`MishkaPay.ConnectedAccount`,
       `MishkaPay.AccountLink`, `api:` on a read, a list or a close).
+    * `:customer_api`: which of the provider's APIs makes this tenant's customers, at a provider
+      that has two. `:v2` (the default: Stripe's Accounts v2, an account with the customer
+      configuration, `acct_...`, the one Stripe recommends) or `:v1` (Stripe's Customers,
+      `cus_...`). A customer's own `:api` (`MishkaPay.Customer`) and `api:` on a list or a search
+      still win; a customer made with either is read, changed and sold to with either setting.
     * `:events`: how the provider sends this tenant's events, at a provider that has two kinds.
       `:thin` (the default: Stripe's thin events, the format Stripe recommends, a small
       notification Mishka Pay reads the rest for) or `:snapshot` (each event carries its object
@@ -132,7 +137,12 @@ defmodule MishkaPay.Credentials do
     field :connect_api, :v2 | :v1,
       default: :v2,
       derives: "validate(not_nil_value, enum=Atom[v2::v1])",
-      validator: {__MODULE__, :connect_api}
+      validator: {__MODULE__, :api}
+
+    field :customer_api, :v2 | :v1,
+      default: :v2,
+      derives: "validate(not_nil_value, enum=Atom[v2::v1])",
+      validator: {__MODULE__, :api}
 
     field :events, :thin | :snapshot,
       default: :thin,
@@ -142,7 +152,7 @@ defmodule MishkaPay.Credentials do
     field :webhook_api, :v2 | :v1,
       default: :v2,
       derives: "validate(not_nil_value, enum=Atom[v2::v1])",
-      validator: {__MODULE__, :webhook_api}
+      validator: {__MODULE__, :api}
 
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
 
@@ -317,10 +327,7 @@ defmodule MishkaPay.Credentials do
   def refunds(:refunds, refunds), do: {:ok, :refunds, refunds}
 
   @doc false
-  def connect_api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
-
-  @doc false
-  def webhook_api(field, api), do: connect_api(field, api)
+  def api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
 
   @doc false
   def events(field, kind), do: MishkaPay.Helpers.Choice.atom(field, kind, ~w(thin snapshot))

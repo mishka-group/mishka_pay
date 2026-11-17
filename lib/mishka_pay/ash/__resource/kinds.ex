@@ -467,6 +467,7 @@ if Code.ensure_loaded?(Ash) do
            arguments: [
              argument(:provider, :string, allow_nil?: false),
              argument(:tenant, :string),
+             argument(:api, :atom, constraints: [one_of: [:v2, :v1]]),
              argument(:email, :string),
              argument(:name, :string),
              argument(:phone, :string),

@@ -104,7 +104,7 @@ defmodule MishkaPay.Providers.Stripe.WebhookEndpoint do
     with :ok <- address(url),
          {:ok, keys} <- Credentials.fetch("stripe", tenant),
          {:ok, events} <- Stripe.events_kind(opts[:events], keys),
-         {:ok, api} <- Stripe.option(opts[:api] || keys.webhook_api, :api, [:v2, :v1]),
+         {:ok, api} <- Stripe.choice(:api, opts[:api], :webhook_api, keys, [:v2, :v1]),
          :ok <- thin_on_v2(events, api) do
       {:ok, keys, %{events: events, api: api, accounts: opts[:connected_accounts] == true}}
     end

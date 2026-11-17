@@ -58,6 +58,18 @@ defmodule MishkaPay.Ash.CustomerTest do
     assert id == first.id
   end
 
+  test "register makes the customer on the API it names, else the tenant's" do
+    MishkaPay.Test.start_plugin!(CustomerWatcher)
+
+    assert {:ok, _row} = register(%{api: :v1, reference: "user-v1"})
+    assert_received {:customer_changed, %Customer{api: :v1}, _record}
+
+    assert {:ok, _row} = register(%{reference: "user-default"})
+    assert_received {:customer_changed, %Customer{api: nil}, _record}
+
+    assert {:error, %Ash.Error.Invalid{}} = register(%{api: :v3, reference: "user-v3"})
+  end
+
   test "register for a person the site has already reads them again instead of making a second customer" do
     test_pid = self()
 

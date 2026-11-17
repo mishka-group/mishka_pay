@@ -30,7 +30,7 @@ if Code.ensure_loaded?(Ash) do
     defp ask(changeset, :register) do
       attrs =
         changeset
-        |> arguments([:provider | @fields])
+        |> arguments([:provider, :api | @fields])
         |> Map.update(:metadata, nil, &stringify/1)
         |> Map.put(:tenant, MishkaPay.Ash.Tenant.of(changeset))
 

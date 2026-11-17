@@ -395,8 +395,10 @@ defmodule MishkaPay do
 
   @doc """
   Makes a customer from `attrs` (see `MishkaPay.Customer`): `:provider`, `:tenant`, and the
-  buyer's `:email`, `:name`, `:phone`, `:reference`, `:metadata`. Keep its `:id` on the host's
-  user to sell to them again.
+  buyer's `:email`, `:name`, `:phone`, `:address`, `:reference`, `:metadata`; `:api` picks the
+  provider's API (else the tenant's `:customer_api`, `:v2` by default: at Stripe an account with
+  the customer configuration, `acct_...`). Keep its `:id` on the host's user to sell to them
+  again.
   """
   @spec create_customer(map()) :: {:ok, Customer.t()} | {:error, Splode.Error.t()}
   def create_customer(attrs) when is_map(attrs) do
@@ -421,7 +423,10 @@ defmodule MishkaPay do
     end)
   end
 
-  @doc "Reads customer `customer_id` again from `provider`, with `tenant`'s keys."
+  @doc """
+  Reads customer `customer_id` again from `provider`, with `tenant`'s keys, on the API its id
+  belongs to (at Stripe `acct_...` on Accounts v2, `cus_...` on Customers).
+  """
   @spec fetch_customer(String.t(), String.t(), term()) ::
           {:ok, Customer.t()} | {:error, Splode.Error.t()}
   def fetch_customer(provider, customer_id, tenant \\ nil)
@@ -443,7 +448,9 @@ defmodule MishkaPay do
 
   @doc """
   One page of customers at `provider`, newest first (`MishkaPay.Page`): `email:` only those with
-  that email, plus the list options `limit:` and `after:`.
+  that email, plus the list options `limit:` and `after:`. `api:` lists on `:v2` or `:v1` instead
+  of the tenant's `:customer_api`; Stripe's Accounts v2 lists have no email filter (find by email
+  with `search_customers/3`) and hold at most 20 a page.
   """
   @spec list_customers(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -1769,7 +1776,9 @@ defmodule MishkaPay do
   @doc """
   One page of `provider`'s customers that match every filter given (`MishkaPay.Page`): `email:`,
   `name:`, `reference:` (the host's own id given when the customer was made), plus `limit:` and
-  `after:`. A customer just made may take a minute to be found.
+  `after:`. A customer just made may take a minute to be found. `api:` (else the tenant's
+  `:customer_api`) is the API the found customers are named by: Stripe searches its Customers,
+  which include those made on Accounts v2, and on `:v2` each of those answers its account id.
   """
   @spec search_customers(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
