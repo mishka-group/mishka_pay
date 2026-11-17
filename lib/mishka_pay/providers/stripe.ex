@@ -538,9 +538,9 @@ defmodule MishkaPay.Providers.Stripe do
 
   A thin event names its object and no more. `verify_webhook/3` turns one into the same
   `MishkaPay.Event` a snapshot event gives: an id that sits inside the object (the payment of a
-  charge, the subscription of an invoice, the customer of a tax id) is read from the object, one
-  request as the event's account; an event whose object is itself the id it names (a
-  PaymentIntent, a subscription, a customer, a product) needs none. Its `:type` is the snapshot
+  charge, the subscription of an invoice, the customer of a tax id, the account a customer made
+  on Accounts v2 is) is read from the object, one request as the event's account; an event
+  whose object is itself the id it names (a PaymentIntent, a subscription, a product) needs none. Its `:type` is the snapshot
   event's (`invoice.paid` for `v1.invoice.paid`, `invoice.overpaid` for the thin-only
   `v1.invoice.overpaid`: `Mapper.event_type/1`), so a listener matches one name in either mode;
   API v2's own events keep Stripe's names (`v2.core.account.updated`).
@@ -3054,8 +3054,9 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   # The related objects whose Event ids sit inside them (a charge's payment, an invoice's
-  # subscription, a tax id's customer); a thin event about any other names its id itself.
-  @read_through ~w(checkout.session charge refund dispute invoice invoice_payment subscription_schedule tax_id payment_method setup_intent radar.early_fraud_warning review entitlements.active_entitlement_summary)
+  # subscription, a tax id's customer, a Customer's account when it was made on Accounts v2); a
+  # thin event about any other names its id itself.
+  @read_through ~w(checkout.session charge refund dispute invoice invoice_payment subscription_schedule tax_id payment_method setup_intent customer radar.early_fraud_warning review entitlements.active_entitlement_summary)
 
   # A thin event Mishka Pay maps, of a v1 resource, becomes the Event its snapshot event gives,
   # its account's objects read as that account; any other event is already whole, and one Mishka

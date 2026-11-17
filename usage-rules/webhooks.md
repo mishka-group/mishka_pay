@@ -48,9 +48,10 @@ and per call:
 - A thin event names its object only. Mishka Pay turns it into the same `MishkaPay.Event` a
   snapshot event gives, so listeners and the Ash inbox work it unchanged: an id that sits inside
   the object (a charge's payment, an invoice's subscription, a tax id's customer, a schedule's
-  subscription) is read from the object at once, one request made as the event's account; an
-  event about a PaymentIntent, subscription, customer, product or another object named by its own
-  id needs none. An object deleted since is named by its id alone; a detached payment method by
+  subscription, the account of a customer made on Accounts v2, whose `v1.customer.*` events name
+  the Customer Stripe links to it) is read from the object at once, one request made as the
+  event's account; an event about a PaymentIntent, subscription, product or another object named
+  by its own id needs none. An object deleted since is named by its id alone; a detached payment method by
   the customer the full event's `changes` give. A read Stripe refuses answers 400, so Stripe
   sends the event again. `event.type` is the snapshot name in both modes: a thin
   `v1.invoice.paid` arrives as `invoice.paid`, a thin-only `v1.invoice.overpaid` as

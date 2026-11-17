@@ -79,8 +79,6 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
           {"v1.customer.subscription.past_due",
            related("sub_1", "subscription", "/v1/subscriptions/sub_1"), :subscription_id,
            "sub_1"},
-          {"v1.customer.updated", related("cus_1", "customer", "/v1/customers/cus_1"),
-           :customer_id, "cus_1"},
           {"v1.product.default_price_changed",
            related("prod_1", "product", "/v1/products/prod_1"), :object_id, "prod_1"}
         ] do
@@ -99,7 +97,13 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
         "id" => "in_1",
         "object" => "invoice",
         "parent" => %{"subscription_details" => %{"subscription" => "sub_9"}}
-      }
+      },
+      "/v1/customers/cus_linked" => %{
+        "id" => "cus_linked",
+        "object" => "customer",
+        "customer_account" => "acct_buyer"
+      },
+      "/v1/customers/cus_1" => %{"id" => "cus_1", "object" => "customer"}
     })
 
     assert deliver("v1.charge.refunded", related("ch_1", "charge", "/v1/charges/ch_1"),
@@ -125,6 +129,18 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
 
     assert_received {:read, "GET", "/v1/invoices/in_1", nil}
     assert_received {:webhook_event, %Event{subscription_id: "sub_9", object_id: "in_1"}}
+
+    # A customer made on Accounts v2 sends v1.customer.* about the Customer Stripe links to it;
+    # the Event names the account, as the host keeps it.
+    for {id, customer_id} <- [{"cus_linked", "acct_buyer"}, {"cus_1", "cus_1"}] do
+      assert deliver("v1.customer.updated", related(id, "customer", "/v1/customers/#{id}")).status ==
+               200
+
+      assert_received {:read, "GET", "/v1/customers/" <> ^id, nil}
+
+      assert_received {:webhook_event,
+                       %Event{type: "customer.updated", object_id: ^id, customer_id: ^customer_id}}
+    end
   end
 
   test "an object gone since is named by its id, and a detached payment method by its old customer" do
