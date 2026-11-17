@@ -32,8 +32,9 @@ defmodule MishkaPay.Providers.Stripe do
       (`DELETE`) or at the period's end (`cancel_at_period_end`), take that back, and list its
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription.
-    * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` keep
-      Customers (`cus_...`), with the reference in their metadata; `create_tax_id/2`,
+    * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` and
+      `delete_customer/2` keep Customers (`cus_...`), with the reference in their metadata; a
+      delete is for good and cancels the customer's subscriptions at once; `create_tax_id/2`,
       `list_tax_ids/2` and `delete_tax_id/3` keep a customer's tax ids (`txi_...`);
       `portal_session/2` opens a
       billing portal session for one. Stripe answers a portal session only once the account's
@@ -726,6 +727,15 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def list_customers(opts, keys),
     do: page("/v1/customers", [email: opts[:email]], opts, keys, &Mapper.customer/1)
+
+  # Stripe deletes for good and cancels the customer's subscriptions at once; a read after answers
+  # it with `deleted: true` (`customer_deleted`).
+  @impl MishkaPay.Provider
+  def delete_customer(customer_id, keys) do
+    with :ok <- stripe_id(customer_id, "cus_", :customer_id),
+         {:ok, _deleted} <- request(:delete, "/v1/customers/#{customer_id}", [], keys),
+         do: :ok
+  end
 
   # A tax id has no reference of its own, so it goes without a fixed idempotency key: the same
   # number added again after a delete must make a new one.

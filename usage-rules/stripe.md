@@ -145,6 +145,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 - The customer's `reference` is kept in its metadata as `mishka_pay_reference` and comes back as
   `:reference`; `:default_payment_method` is the customer's invoice default.
+- `delete_customer/3` is `DELETE /v1/customers/:id`: for good, and Stripe cancels the customer's
+  subscriptions at once. A second delete of the same id is `Errors.Rejected` with code
+  `"resource_missing"`; reading it is `"customer_deleted"`.
 - The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
   pass `configuration: "bpc_..."` to use another.
 - Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and

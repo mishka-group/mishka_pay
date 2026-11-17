@@ -571,6 +571,25 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {status, answer}
   end
 
+  test "a customer is deleted on Stripe for good: it reads back deleted, and a second delete is refused" do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: id}} =
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        email: "erase-#{run}@example.com",
+        reference: "erase-#{run}"
+      })
+
+    assert :ok = MishkaPay.delete_customer("stripe", id)
+
+    assert {:error, %Errors.Rejected{code: "customer_deleted"}} =
+             MishkaPay.fetch_customer("stripe", id)
+
+    assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
+             MishkaPay.delete_customer("stripe", id)
+  end
+
   test "a refusal keeps Stripe's request id and error page, and its words show neither" do
     assert {:error,
             %Errors.Rejected{

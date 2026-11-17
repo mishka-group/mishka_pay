@@ -4,8 +4,10 @@ defmodule ShopWeb.CustomersComponent do
   (`MishkaPay.Ash.Resource`): register a Stripe customer (`:register`), find customers on Stripe
   by email (`MishkaPay.list_customers/3`) and keep one (`:sync`), and open one at a time: the
   stored row beside the customer read live from Stripe (`MishkaPay.fetch_customer/3`), an edit
-  form (`:edit`), its customer portal (`:portal`), and "Buy as this customer", which makes the
-  next checkout pay as that customer. The page sends it each changed customer (`changed`).
+  form (`:edit`), its customer portal (`:portal`), "Buy as this customer", which makes the
+  next checkout pay as that customer, and Delete (`:remove`), which deletes the customer on Stripe
+  for good, as an erase request asks, and keeps the row marked deleted. The page sends it each
+  changed customer (`changed`).
   """
 
   use ShopWeb, :live_component
@@ -137,6 +139,20 @@ defmodule ShopWeb.CustomersComponent do
     |> Ash.run_action(authorize?: false)
     |> case do
       {:ok, session} -> {:noreply, redirect(socket, external: session.url)}
+      {:error, error} -> {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  def handle_event("delete", %{"id" => id}, socket) do
+    with {:ok, row} <- Ash.get(Customer, id, authorize?: false),
+         {:ok, removed} <-
+           row |> Ash.Changeset.for_update(:remove, %{}) |> Ash.update(authorize?: false) do
+      {:noreply,
+       socket
+       |> stream_insert(:customers, removed, at: 0)
+       |> select(removed.id)
+       |> say(:info, "Customer deleted on Stripe. The shop keeps its row, marked deleted.")}
+    else
       {:error, error} -> {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
@@ -561,9 +577,22 @@ defmodule ShopWeb.CustomersComponent do
           >
             <.icon name="hero-arrow-path" class="size-4" /> Sync from Stripe
           </button>
+          <button
+            :if={!deleted?(@selected)}
+            class="btn btn-sm btn-error btn-outline"
+            phx-click="delete"
+            phx-value-id={@selected.id}
+            phx-target={@myself}
+            phx-disable-with="Deleting..."
+            data-confirm="Delete this customer on Stripe for good? Their saved cards go and their subscriptions end at once. This cannot be undone."
+            data-testid="customer-delete"
+          >
+            <.icon name="hero-trash" class="size-4" /> Delete on Stripe
+          </button>
           <p class="text-xs opacity-70 self-center basis-full">
             The portal is Stripe's own page: the buyer manages cards, invoices and subscriptions
-            there, then comes back here.
+            there, then comes back here. Delete is for a person's erase request
+            (Shop.Pay.Customer :remove, MishkaPay.delete_customer/3).
           </p>
         </div>
       </div>

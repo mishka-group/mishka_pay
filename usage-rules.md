@@ -114,6 +114,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_customer(attrs)` | `%MishkaPay.Customer{}` made at the provider |
 | `MishkaPay.update_customer(attrs)` | the customer after (`attrs` has `:provider` and `:id`) |
 | `MishkaPay.fetch_customer(provider, customer_id, tenant)` | `%MishkaPay.Customer{}` |
+| `MishkaPay.delete_customer(provider, customer_id, tenant)` | `:ok`: the customer is gone at the provider for good (an erase request); its saved cards and running subscriptions end with it |
 | `MishkaPay.list_customers(provider, tenant, email: email, limit: 10)` | a `MishkaPay.Page` of `%MishkaPay.Customer{}` |
 | `MishkaPay.checkout(%{mode: :setup, currency: "usd", customer: %{id: id}, ...})` | a page that saves a card without a charge; read back, `:setup_intent_id` and `:payment_method_id` |
 | `MishkaPay.list_payment_methods(provider, tenant, customer_id: id)`, `fetch_payment_method/3` | a `MishkaPay.Page` of `%MishkaPay.PaymentMethod{}` (type, card brand, last4, expiry); one read again |
@@ -294,6 +295,9 @@ redirect(conn, external: portal.url)
   status 400). Change a customer with `update_customer/1`.
 - `return_url` follows the checkout URL rule. A customer the provider deleted reads back as
   `Errors.Rejected` with code `"customer_deleted"`.
+- A person's erase request: `delete_customer/3` (or the Ash customer's `:remove`). It cannot be
+  undone, and it ends their running subscriptions at once; past payments and invoices stay at the
+  provider. Delete the host's own copy of their details as well.
 
 ## Errors
 

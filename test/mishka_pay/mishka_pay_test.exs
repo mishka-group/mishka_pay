@@ -99,6 +99,21 @@ defmodule MishkaPayTest do
   end
 
   describe "customers and the portal" do
+    test "a customer is deleted at the provider, and a provider without customers refuses before any call" do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :customer_delete, :stop]])
+
+      assert :ok = MishkaPay.delete_customer("acme", "acme_cus_1", "site-a")
+
+      assert_received {[:mishka_pay, :customer_delete, :stop], ^ref, _,
+                       %{provider: "acme", tenant: "site-a", outcome: :ok}}
+
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      assert {:error, %Errors.Unsupported{provider: "checkout_only", operation: :customer}} =
+               MishkaPay.delete_customer("checkout_only", "co_cus_1")
+    end
+
     test "a customer is made, changed, read and listed, and its portal opened" do
       assert {:ok,
               %MishkaPay.Customer{id: "acme_cus_1", email: "ava@example.com", reference: "user-1"}} =

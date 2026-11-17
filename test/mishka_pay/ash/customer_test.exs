@@ -109,6 +109,29 @@ defmodule MishkaPay.Ash.CustomerTest do
     assert gone.deleted_at
   end
 
+  test "remove deletes the customer at the provider and keeps the row, marked deleted" do
+    {:ok, row} = register()
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :customer_delete, :stop]])
+
+    assert {:ok, removed} =
+             row |> Ash.Changeset.for_update(:remove, %{}) |> Ash.update(authorize?: false)
+
+    assert_received {[:mishka_pay, :customer_delete, :stop], ^ref, _, %{outcome: :ok}}
+    assert removed.id == row.id
+    assert removed.deleted_at
+    assert {removed.email, removed.reference} == {"ava@example.com", "user-1"}
+  end
+
+  test "a customer the provider cannot delete is an error, and the row stays as it was" do
+    {:ok, row} = sync("acme_cus_gone")
+    assert gone_at = row.deleted_at
+
+    assert {:error, _error} =
+             row |> Ash.Changeset.for_update(:remove, %{}) |> Ash.update(authorize?: false)
+
+    assert Ash.get!(@customer, row.id, authorize?: false).deleted_at == gone_at
+  end
+
   test "portal opens the provider's portal for the row, and refuses an unsafe return URL" do
     {:ok, row} = register()
 
@@ -154,6 +177,42 @@ defmodule MishkaPay.Ash.CustomerTest do
              |> Ash.read!(authorize?: false)
              |> Enum.map(& &1.provider_id)
              |> Enum.sort()
+  end
+
+  test "a Stripe customer.deleted webhook marks the row deleted, keeping what it knew" do
+    MishkaPay.Test.start_plugin!(Stripe)
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a", webhook_secret: @secret})
+    MishkaPay.Test.start_plugin!(Inbox)
+    MishkaPay.Test.start_plugin!(CustomerSync)
+
+    answer_customer(%{"email" => "ava@example.com", "name" => "Ava", "created" => 1_700_000_000})
+
+    {:ok, row} =
+      Ash.create(@customer, %{provider: "stripe", customer_id: "cus_gone", tenant: "site-a"},
+        action: :sync,
+        authorize?: false
+      )
+
+    # Stripe answers a deleted customer read with only its id and `deleted: true`.
+    answer_customer(%{"deleted" => true})
+
+    assert deliver(%{"id" => "evt_gone", "type" => "customer.deleted"}, %{
+             "id" => "cus_gone",
+             "object" => "customer",
+             "deleted" => true
+           }) == 200
+
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    gone = Ash.get!(@customer, row.id, authorize?: false)
+    assert gone.deleted_at
+    assert {gone.email, gone.name, gone.tenant} == {"ava@example.com", "Ava", "site-a"}
+  end
+
+  defp answer_customer(fields) do
+    MishkaPay.Test.stub_http(fn %{request_path: "/v1/customers/cus_gone"} = conn ->
+      Req.Test.json(conn, Map.merge(%{"id" => "cus_gone", "object" => "customer"}, fields))
+    end)
   end
 
   # A signed Stripe webhook about `object`, as Stripe posts it.

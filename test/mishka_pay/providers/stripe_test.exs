@@ -420,6 +420,20 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_customer("stripe", "pi_123", "site-a")
     end
 
+    test "a customer is deleted as Stripe's spec accepts, and an id of another kind never reaches a path" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
+
+      assert :ok = MishkaPay.delete_customer("stripe", "cus_123", "site-a")
+      assert_received {_, ^ref, _, %{method: :delete, path: "/v1/customers/cus_123"}}
+
+      for id <- ["pi_123", "cus_1/../../v1/charges"] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+                 MishkaPay.delete_customer("stripe", id, "site-a")
+      end
+
+      refute_received {_, ^ref, _, _meta}
+    end
+
     test "a customer's tax ids are added, listed and removed as Stripe's spec accepts" do
       assert {:ok, %MishkaPay.TaxId{provider: "stripe", id: "txi_" <> _, type: type}} =
                MishkaPay.create_tax_id(

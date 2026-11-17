@@ -5,11 +5,12 @@
 if Code.ensure_loaded?(Ash) do
   defmodule MishkaPay.Ash.Customer.Sync do
     @moduledoc """
-    The `:register`, `:sync` and `:edit` actions of the `:customer` kind
+    The `:register`, `:sync`, `:edit` and `:remove` actions of the `:customer` kind
     (`MishkaPay.Ash.Resource`): asks the provider
     before the action's transaction starts, writes the customer as the provider answered it, and
     fires `mishka_pay:customer:changed` after. A customer the provider cannot give is an error on
-    the action, and nothing is written; one the provider deleted keeps its row with `:deleted_at`.
+    the action, and nothing is written; one the provider deleted, by `:remove` or elsewhere, keeps
+    its row with `:deleted_at`.
     """
 
     use Ash.Resource.Change
@@ -60,6 +61,13 @@ if Code.ensure_loaded?(Ash) do
       write(changeset, MishkaPay.update_customer(attrs))
     end
 
+    defp ask(%{data: row} = changeset, :remove) do
+      case MishkaPay.delete_customer(row.provider, row.provider_id, row.tenant) do
+        :ok -> deleted(changeset)
+        error -> write(changeset, error)
+      end
+    end
+
     # A person the site already registered, by the host's reference, is read again rather than
     # made twice at the provider: `:register` is safe to call on every purchase.
     defp registered(_changeset, %{reference: nil}), do: nil
@@ -87,7 +95,7 @@ if Code.ensure_loaded?(Ash) do
     end
 
     defp write(changeset, {:error, %Errors.Rejected{code: "customer_deleted"}}),
-      do: Ash.Changeset.force_change_attributes(changeset, %{deleted_at: now(), synced_at: now()})
+      do: deleted(changeset)
 
     defp write(changeset, {:error, error}),
       do: Ash.Changeset.add_error(changeset, MishkaPay.Ash.to_ash_error(error))
@@ -120,6 +128,9 @@ if Code.ensure_loaded?(Ash) do
         deleted_at: nil
       }
     end
+
+    defp deleted(changeset),
+      do: Ash.Changeset.force_change_attributes(changeset, %{deleted_at: now(), synced_at: now()})
 
     defp now, do: DateTime.utc_now()
 

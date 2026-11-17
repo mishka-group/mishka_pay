@@ -150,6 +150,13 @@ defmodule MishkaPay.Providers.PayPalTest do
                MishkaPay.fetch_payment("paypal", "ORDER2", "site-a")
     end
 
+    test "a customer cannot be deleted at PayPal: refused before any request" do
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :customer}} =
+               MishkaPay.delete_customer("paypal", "CUSTOMER1", "site-a")
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "a decline and a refusal keep PayPal's debug id and error page, never in their words" do
       PayPalStub.order("ORDER3", "APPROVED", declined: true)
 

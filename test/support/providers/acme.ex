@@ -225,6 +225,13 @@ defmodule MishkaPay.Support.Acme do
   def update_customer(%Customer{} = customer, %{secret_key: "sk_acme"}), do: {:ok, customer}
 
   @impl MishkaPay.Provider
+  def delete_customer("acme_cus_gone", %{secret_key: "sk_acme"}),
+    do:
+      {:error, Errors.Rejected.exception(provider: "acme", status: 404, code: "resource_missing")}
+
+  def delete_customer("acme_cus_" <> _, %{secret_key: "sk_acme"}), do: :ok
+
+  @impl MishkaPay.Provider
   def search_customers(opts, keys), do: list_customers(opts, keys)
 
   @impl MishkaPay.Provider

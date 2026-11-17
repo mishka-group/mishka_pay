@@ -59,7 +59,7 @@ defmodule MishkaPay.Provider do
     * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
-      `search_customers/2`;
+      `search_customers/2`, `delete_customer/2`;
     * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
     * `:tax`: `calculate_tax/2`, `record_tax/3`;
     * `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2` (and a checkout's
@@ -142,7 +142,7 @@ defmodule MishkaPay.Provider do
     * `:subscription_change`: changes a running subscription's plan or quantity with proration,
       previews what that bills, and pauses or resumes its collection.
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
-    * `:customer`: keeps buyers (create, read, update, list).
+    * `:customer`: keeps buyers (create, read, update, list, delete).
     * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
     * `:tax`: counts the tax on a sale made outside its checkout, and records the sale for the
       site's tax reports.
@@ -384,6 +384,13 @@ defmodule MishkaPay.Provider do
   @doc "With `:customer`. One page of customers, newest first; only those with `:email` when given."
   @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:customer`. Deletes a customer at the provider for good, as a person's erase request
+  asks: what the provider keeps on them (saved cards, running subscriptions) goes with it.
+  """
+  @callback delete_customer(customer_id :: String.t(), MishkaPay.Credentials.t()) ::
+              :ok | {:error, Splode.Error.t()}
 
   @doc "With `:tax_id`. Adds a tax id to the customer it names (`:customer_id`), and answers it."
   @callback create_tax_id(MishkaPay.TaxId.t(), MishkaPay.Credentials.t()) ::
@@ -676,6 +683,7 @@ defmodule MishkaPay.Provider do
                       fetch_customer: 2,
                       update_customer: 2,
                       list_customers: 2,
+                      delete_customer: 2,
                       create_tax_id: 2,
                       list_tax_ids: 2,
                       delete_tax_id: 3,
@@ -765,7 +773,8 @@ defmodule MishkaPay.Provider do
       fetch_customer: 2,
       update_customer: 2,
       list_customers: 2,
-      search_customers: 2
+      search_customers: 2,
+      delete_customer: 2
     ],
     tax_id: [create_tax_id: 2, list_tax_ids: 2, delete_tax_id: 3],
     tax: [calculate_tax: 2, record_tax: 3],

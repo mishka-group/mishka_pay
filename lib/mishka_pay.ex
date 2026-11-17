@@ -6,7 +6,7 @@ defmodule MishkaPay do
   @moduledoc """
   The calls a project makes to take money: open a checkout, read a payment, refund one; for a
   subscription (started by a checkout in `mode: :subscription`) read it, cancel it, take a cancel
-  back and list its invoices; keep customers (create, read, update, list) and open their billing
+  back and list its invoices; keep customers (create, read, update, list, delete) and open their billing
   portal; save a customer's card with a checkout in `mode: :setup` and keep their saved payment
   methods; keep coupons and promotion codes; keep a catalog of products and prices; make payment
   links that sell them; end an open
@@ -56,7 +56,7 @@ defmodule MishkaPay do
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
-      `:customer_search`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
+      `:customer_search`, `:customer_delete`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
       `:tax_id_delete`;
     * saved payment methods: `:payment_method_list`, `:payment_method`,
       `:payment_method_detach`, `:payment_method_default`;
@@ -252,6 +252,18 @@ defmodule MishkaPay do
   def fetch_customer(provider, customer_id, tenant \\ nil)
       when is_binary(provider) and is_binary(customer_id) do
     capable(:customer, :customer, provider, tenant, & &1.fetch_customer(customer_id, &2))
+  end
+
+  @doc """
+  Deletes customer `customer_id` at `provider` for good, such as for a person's erase request.
+  The provider drops their saved cards and ends their running subscriptions at once (Stripe
+  does); past payments and invoices stay. The customer reads back as deleted after
+  (`MishkaPay.Errors.Rejected` with code `"customer_deleted"`).
+  """
+  @spec delete_customer(String.t(), String.t(), term()) :: :ok | {:error, Splode.Error.t()}
+  def delete_customer(provider, customer_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(customer_id) do
+    capable(:customer, :customer_delete, provider, tenant, & &1.delete_customer(customer_id, &2))
   end
 
   @doc """
