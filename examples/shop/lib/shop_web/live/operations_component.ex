@@ -2,10 +2,12 @@ defmodule ShopWeb.OperationsComponent do
   @moduledoc """
   Running the site: every setup check for it (`MishkaPay.Check.run/1`: provider, keys, webhook
   secret and endpoint, listeners, inbox), its Stripe webhook endpoint for a URL
-  (`MishkaPay.Providers.Stripe.WebhookEndpoint.check/2`, made or completed only on a click with
-  `ensure/2`), Stripe's events of the last hour (`MishkaPay.list_events/3`), delivering again
-  what a site missed (`MishkaPay.replay_events/3`), and whether Stripe has a newer API version
-  than the one Mishka Pay pins (`MishkaPay.Providers.Stripe.latest_version/0` and `version/0`).
+  (`MishkaPay.Providers.Stripe.WebhookEndpoint.check/3`, made or completed only on a click with
+  `ensure/3`), of the kind the site uses (its keys' `:events` and `:webhook_api`: a thin event
+  destination by default) or another one picked, Stripe's events of the last hour of that kind
+  (`MishkaPay.list_events/3`), delivering again what a site missed (`MishkaPay.replay_events/3`),
+  and whether Stripe has a newer API version than the one Mishka Pay pins
+  (`MishkaPay.Providers.Stripe.latest_version/0` and `version/0`).
   """
 
   use ShopWeb, :live_component
@@ -16,6 +18,13 @@ defmodule ShopWeb.OperationsComponent do
   alias MishkaPay.Providers.Stripe.WebhookEndpoint
 
   @windows %{"15m" => 15 * 60, "1h" => 3600, "1d" => 86_400}
+
+  # The endpoint kinds a site can pick, each with the options `WebhookEndpoint` takes.
+  @kinds [
+    {"thin", "Thin events, event destination (API v2)", [events: :thin, api: :v2]},
+    {"snapshot", "Snapshot events, event destination (API v2)", [events: :snapshot, api: :v2]},
+    {"snapshot_v1", "Snapshot events, v1 webhook endpoint", [events: :snapshot, api: :v1]}
+  ]
 
   @impl true
   def mount(socket) do
@@ -29,6 +38,8 @@ defmodule ShopWeb.OperationsComponent do
        replaying: false,
        window: "1h",
        versions: nil,
+       site_kind: nil,
+       kind: nil,
        notice: nil,
        error: nil
      )}
@@ -37,12 +48,21 @@ defmodule ShopWeb.OperationsComponent do
   @impl true
   def update(assigns, socket) do
     url = socket.assigns.url || "#{ShopWeb.Endpoint.url()}/pay/webhooks/stripe/#{assigns.tenant}"
-    {:ok, assign(socket, tenant: assigns.tenant, url: url)}
+    site_kind = socket.assigns.site_kind || site_kind(assigns.tenant)
+
+    {:ok,
+     assign(socket,
+       tenant: assigns.tenant,
+       url: url,
+       site_kind: site_kind,
+       kind: socket.assigns.kind || site_kind
+     )}
   end
 
   @impl true
-  def handle_event("setup", %{"intent" => "checks", "url" => url}, socket) do
+  def handle_event("setup", %{"intent" => "checks", "url" => url} = params, socket) do
     url = blank(url)
+    socket = assign(socket, kind: kind(params["kind"]))
 
     checks =
       MishkaPay.Check.run(
@@ -55,8 +75,8 @@ defmodule ShopWeb.OperationsComponent do
     {:noreply, assign(socket, checks: checks, url: url || "", notice: nil, error: nil)}
   end
 
-  def handle_event("setup", %{"intent" => intent, "url" => url}, socket) do
-    socket = assign(socket, url: String.trim(url))
+  def handle_event("setup", %{"intent" => intent, "url" => url} = params, socket) do
+    socket = assign(socket, url: String.trim(url), kind: kind(params["kind"]))
 
     case blank(url) do
       nil -> {:noreply, assign(socket, error: "Type the webhook URL first.", notice: nil)}
@@ -68,7 +88,9 @@ defmodule ShopWeb.OperationsComponent do
   def handle_event("events", _params, socket) do
     since = DateTime.add(DateTime.utc_now(), -3600, :second)
 
-    case MishkaPay.list_events("stripe", socket.assigns.tenant, since: since, limit: 20) do
+    opts = [since: since, limit: 20, events: events_of(socket.assigns.kind)]
+
+    case MishkaPay.list_events("stripe", socket.assigns.tenant, opts) do
       {:ok, page} -> {:noreply, assign(socket, events: page.items, notice: nil, error: nil)}
       {:error, error} -> {:noreply, failed(socket, error)}
     end
@@ -84,11 +106,12 @@ defmodule ShopWeb.OperationsComponent do
     seconds = Map.fetch!(@windows, socket.assigns.window)
     since = DateTime.add(DateTime.utc_now(), -seconds, :second)
     tenant = socket.assigns.tenant
+    opts = [since: since, events: events_of(socket.assigns.kind)]
 
     {:noreply,
      socket
      |> assign(replayed: nil, replaying: true, notice: nil, error: nil)
-     |> start_async(:replay, fn -> MishkaPay.replay_events("stripe", tenant, since: since) end)}
+     |> start_async(:replay, fn -> MishkaPay.replay_events("stripe", tenant, opts) end)}
   end
 
   def handle_event("version", _params, socket) do
@@ -123,7 +146,7 @@ defmodule ShopWeb.OperationsComponent do
   end
 
   defp check(socket, url) do
-    case WebhookEndpoint.check(socket.assigns.tenant, url) do
+    case WebhookEndpoint.check(socket.assigns.tenant, url, kind_opts(socket.assigns.kind)) do
       {:ok, found} -> assign(socket, endpoint: found, notice: nil, error: nil)
       {:error, error} -> socket |> assign(endpoint: nil) |> failed(error)
     end
@@ -131,7 +154,7 @@ defmodule ShopWeb.OperationsComponent do
 
   # The signing secret Stripe answers for a new endpoint is never shown or kept here.
   defp ensure(socket, url) do
-    case WebhookEndpoint.ensure(socket.assigns.tenant, url) do
+    case WebhookEndpoint.ensure(socket.assigns.tenant, url, kind_opts(socket.assigns.kind)) do
       {:ok, endpoint} ->
         message =
           case endpoint.secret do
@@ -161,8 +184,14 @@ defmodule ShopWeb.OperationsComponent do
         events Stripe sent, and the API version.
       </p>
       <.hint>
-        MishkaPay.Check.run/1, Stripe.WebhookEndpoint.check/2, MishkaPay.list_events/3, replay_events/3
+        MishkaPay.Check.run/1, Stripe.WebhookEndpoint.check/3, ensure/3, MishkaPay.list_events/3, replay_events/3
       </.hint>
+      <p class="text-sm" data-testid="operations-site-kind" data-kind={@site_kind}>
+        This site takes <strong>{kind_label(@site_kind)}</strong>
+        (its keys' <code>events</code>
+        and <code>webhook_api</code>). The webhook takes either kind;
+        a thin event names its object, and Mishka Pay reads the rest.
+      </p>
 
       <div
         :if={@notice}
@@ -187,6 +216,18 @@ defmodule ShopWeb.OperationsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Webhook URL (Stripe must reach it)</span>
             <input name="url" value={@url} class="input input-sm w-full" data-testid="operations-url" />
+          </label>
+          <label class="fieldset">
+            <span class="fieldset-legend">Kind of endpoint (also the events read and replayed)</span>
+            <select name="kind" class="select select-sm w-full" data-testid="operations-kind">
+              <option
+                :for={{value, label, _opts} <- kinds()}
+                value={value}
+                selected={value == @kind}
+              >
+                {label}
+              </option>
+            </select>
           </label>
           <div class="flex flex-wrap gap-2">
             <button
@@ -241,15 +282,21 @@ defmodule ShopWeb.OperationsComponent do
             data-testid="endpoint-result"
           >
             <p :if={!@endpoint.endpoint} data-testid="endpoint-none">
-              No endpoint at this URL. "Make endpoint" makes one.
+              No endpoint of this kind at this URL. "Make endpoint" makes one.
             </p>
             <dl :if={@endpoint.endpoint} class="grid grid-cols-2 gap-y-1 max-w-xl">
               <dt class="opacity-70">Endpoint</dt>
               <dd class="font-mono text-xs" data-testid="endpoint-id">{@endpoint.endpoint.id}</dd>
+              <dt class="opacity-70">Events</dt>
+              <dd data-testid="endpoint-events">{@endpoint.endpoint.events}</dd>
+              <dt class="opacity-70">Changed through</dt>
+              <dd data-testid="endpoint-api">API {@endpoint.endpoint.api}</dd>
+              <dt class="opacity-70">Events from</dt>
+              <dd data-testid="endpoint-from">{Enum.join(@endpoint.endpoint.events_from, ", ")}</dd>
               <dt class="opacity-70">State</dt>
               <dd data-testid="endpoint-status">{@endpoint.endpoint.status}</dd>
               <dt class="opacity-70">API version</dt>
-              <dd>{@endpoint.endpoint.api_version}</dd>
+              <dd>{@endpoint.endpoint.api_version || "none (thin events carry no version)"}</dd>
             </dl>
             <p :if={@endpoint.missing == []} class="text-success" data-testid="endpoint-complete">
               It sends every event Mishka Pay acts on.
@@ -374,6 +421,28 @@ defmodule ShopWeb.OperationsComponent do
 
   defp reason({:error, reason}), do: reason
   defp reason(_ok), do: ""
+
+  # The kind the site's keys set up: thin events on an event destination unless they say other.
+  defp site_kind(tenant) do
+    case MishkaPay.Credentials.fetch("stripe", tenant) do
+      {:ok, %{events: :snapshot, webhook_api: :v1}} -> "snapshot_v1"
+      {:ok, %{events: :snapshot}} -> "snapshot"
+      _thin_or_no_keys -> "thin"
+    end
+  end
+
+  # A kind the form does not offer falls back to thin.
+  defp kind(value) do
+    case List.keyfind(@kinds, value, 0) do
+      nil -> "thin"
+      {kind, _label, _opts} -> kind
+    end
+  end
+
+  defp kinds, do: @kinds
+  defp kind_opts(kind), do: @kinds |> List.keyfind(kind, 0) |> elem(2)
+  defp events_of(kind), do: kind |> kind_opts() |> Keyword.fetch!(:events)
+  defp kind_label(kind), do: @kinds |> List.keyfind(kind, 0) |> elem(1)
 
   defp time(nil), do: ""
   defp time(%DateTime{} = time), do: Calendar.strftime(time, "%H:%M:%S")

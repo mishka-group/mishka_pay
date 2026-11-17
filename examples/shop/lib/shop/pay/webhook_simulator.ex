@@ -5,11 +5,17 @@ defmodule Shop.Pay.WebhookSimulator do
   signature check, the inbox, an Oban job, the payment sync and `mishka_pay:payment:changed`.
   With `:bad_signature` it signs with the wrong secret, to show the endpoint refuse it; with
   `:rolled_secret`, with the secret from before a roll, which the endpoint still takes.
+
+  A `v1.` type is sent as a thin event notification, as a Stripe event destination with the thin
+  payload sends it (the shape of `MishkaPay.Test.signed_thin_event/4`): it names its object only. The thin
+  types here are about a PaymentIntent or a subscription, which name the id the event needs, so
+  the webhook reads nothing from Stripe for them (a thin `v1.charge.refunded` or
+  `v1.invoice.paid` would be read from Stripe, which knows no simulated object).
   """
 
   alias MishkaPay.Providers.Stripe
 
-  @types [
+  @snapshot_types [
     "payment_intent.succeeded",
     "payment_intent.payment_failed",
     "payment_intent.canceled",
@@ -20,7 +26,17 @@ defmodule Shop.Pay.WebhookSimulator do
     "invoice.payment_failed"
   ]
 
-  @doc "The event types the simulator sends."
+  @thin_types [
+    "v1.payment_intent.succeeded",
+    "v1.payment_intent.payment_failed",
+    "v1.customer.subscription.updated",
+    "v1.customer.subscription.active",
+    "v1.customer.subscription.past_due"
+  ]
+
+  @types @snapshot_types ++ @thin_types
+
+  @doc "The event types the simulator sends: snapshot ones, then thin ones (`v1.`)."
   def types, do: @types
 
   @situations [
@@ -62,15 +78,10 @@ defmodule Shop.Pay.WebhookSimulator do
     event_type = if situation == :listener_fails, do: Shop.Pay.FailingListener.type(), else: type
 
     body =
-      JSON.encode!(%{
-        "id" => event_id,
-        "object" => "event",
-        "type" => event_type,
-        "created" => time,
-        "livemode" => false,
-        "api_version" => Stripe.version(),
-        "data" => %{"object" => object(type, id), "padding" => padding(situation)}
-      })
+      type
+      |> event(event_type, id, time)
+      |> Map.merge(%{"id" => event_id, "livemode" => false, "padding" => padding(situation)})
+      |> JSON.encode!()
 
     secret = secret(situation)
 
@@ -81,6 +92,37 @@ defmodule Shop.Pay.WebhookSimulator do
 
     {Enum.map(1..times, fn _try -> deliver(request) end), event_id}
   end
+
+  # A thin notification names its object, with Stripe's time in RFC 3339; a snapshot event
+  # carries it, with the pinned API version.
+  defp event("v1." <> snapshot_type, event_type, id, time) do
+    object = object(snapshot_type, id)
+
+    %{
+      "object" => "v2.core.event",
+      "type" => event_type,
+      "created" => time |> DateTime.from_unix!() |> DateTime.to_iso8601(),
+      "context" => nil,
+      "related_object" => %{
+        "id" => object["id"],
+        "type" => object["object"],
+        "url" => url(object)
+      }
+    }
+  end
+
+  defp event(type, event_type, id, time) do
+    %{
+      "object" => "event",
+      "type" => event_type,
+      "created" => time,
+      "api_version" => Stripe.version(),
+      "data" => %{"object" => object(type, id)}
+    }
+  end
+
+  defp url(%{"object" => "subscription", "id" => id}), do: "/v1/subscriptions/#{id}"
+  defp url(%{"object" => "payment_intent", "id" => id}), do: "/v1/payment_intents/#{id}"
 
   defp secret(:bad_signature), do: "whsec_not_the_right_one"
   defp secret(:rolled_secret), do: List.first(Shop.Pay.Keys.old_webhook_secrets())
