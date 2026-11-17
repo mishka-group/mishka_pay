@@ -221,16 +221,18 @@ if Code.ensure_loaded?(Ash) do
     provider made it, when it was last synced, and `:deleted_at` once the provider deleted it.
 
       * `:register` makes the customer at its provider (`MishkaPay.create_customer/1`) from
-        `:provider`, `:tenant`, `:email`, `:name`, `:phone`, `:reference` and `:metadata`. The
-        same `:reference` and fields registered twice within a day are one customer and one row.
+        `:provider`, `:tenant`, `:email`, `:name`, `:phone`, `:reference` and `:metadata`, on
+        `:api` (`:v2` or `:v1`) when given, else the tenant's `:customer_api` (at Stripe an
+        account with the customer configuration, `acct_...`, by default). The same `:reference`
+        and fields registered twice within a day are one customer and one row.
       * `:sync` takes `:provider`, `:customer_id` and `:tenant` (`MishkaPay.fetch_customer/3`). A
         customer the provider deleted keeps its row, with `:deleted_at` set.
       * `:edit` changes `:email`, `:name`, `:phone` or `:metadata` at the provider
         (`MishkaPay.update_customer/1`).
       * `:remove` deletes the customer at the provider for good (`MishkaPay.delete_customer/3`),
-        as a person's erase request asks, and keeps the row with `:deleted_at` set. A host that
-        must erase its own copy too destroys the row after. A `customer.deleted` webhook marks
-        the row the same way.
+        as a person's erase request asks, and keeps the row with `:deleted_at` set (at Stripe a
+        customer made on Accounts v2 is closed). A host that must erase its own copy too
+        destroys the row after. A `customer.deleted` webhook marks the row the same way.
       * `:portal` (generic) takes the row's `:id` and a `:return_url` (and the provider's
         `:configuration`) and answers a `MishkaPay.PortalSession`: redirect the buyer to its
         `:url`, where they manage their cards, invoices and subscriptions.
