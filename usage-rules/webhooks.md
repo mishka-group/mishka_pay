@@ -62,7 +62,8 @@ webhook endpoint to these:
 | `subscription_schedule.created`, `.updated`, `.released`, `.canceled`, `.completed`, `.aborted`, `.expiring` | the subscription it runs (or let go); `:object_id` is the schedule |
 | `radar.early_fraud_warning.created`, `.updated` | its payment (synced again); `:object_id` is the warning (`:object_type` `"radar.early_fraud_warning"`), read with `fetch_fraud_warning/3` |
 | `review.opened`, `.closed` | its payment (synced again); `:object_id` is the review (`:object_type` `"review"`), read with `fetch_fraud_review/3` |
-| `account.updated`, `account.application.deauthorized` | nothing kept: the connected account is `event.account` (`:object_id` is the account, or the platform's application when it left), read with `fetch_connected_account/3` |
+| `account.updated`, `account.application.deauthorized` | nothing kept: the connected account is `event.account` (`:object_id` is the account, or the platform's application when it left), read with `fetch_connected_account/4` |
+| `v2.core.account.*`, `v2.core.account[requirements].updated` and the other thin events of `Stripe.thin_events/0` (from an event destination with the thin payload, its secret in `webhook_secrets`) | nothing kept: `:object_id` and `event.account` are the account, read with `fetch_connected_account/4` |
 | `transfer.created`, `.updated`, `.reversed` | nothing kept: `:object_id` is the transfer, read with `fetch_transfer/3` |
 | `payout.created`, `.updated`, `.paid`, `.failed`, `.canceled`, `.reconciliation_completed` | nothing kept: `:object_id` is the payout (`fetch_payout/3`); a seller's carries `event.account` |
 | `application_fee.created`, `.refunded`, `.refund.updated` | nothing kept: `:object_id` is the fee, or its refund (`:object_type` `"fee_refund"`), read with `fetch_application_fee/3` |

@@ -52,6 +52,12 @@ defmodule MishkaPay.Credentials do
       from these keys: no call, request option or raw request can set the header. A provider
       without `:connect` (PayPal) never reads it. `MishkaPay.create_connected_account/1`
       makes one with the platform's keys.
+    * `:connect_api`: which of the provider's APIs keeps this tenant's connected accounts, at a
+      provider that has two. `:v2` (the default: Stripe's Accounts v2, the one Stripe recommends
+      and the only one a platform that turned Connect on lately may use to make accounts) or
+      `:v1` (Stripe's Accounts v1, still needed for OAuth, Treasury, card issuing and older
+      capabilities). A call's own `:api` still wins (`MishkaPay.ConnectedAccount`,
+      `MishkaPay.AccountLink`, `api:` on a read, a list or a close).
 
   These are read at runtime on every call, never from `config.exs`, so each tenant of a
   multi-site project carries its own and a change in its settings applies to the next call.
@@ -97,6 +103,11 @@ defmodule MishkaPay.Credentials do
     field :account_id, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=255)",
       validator: {__MODULE__, :account_id}
+
+    field :connect_api, :v2 | :v1,
+      default: :v2,
+      derives: "validate(not_nil_value, enum=Atom[v2::v1])",
+      validator: {__MODULE__, :connect_api}
 
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
 
@@ -269,6 +280,9 @@ defmodule MishkaPay.Credentials do
     do: {:ok, :refunds, String.to_existing_atom(refunds)}
 
   def refunds(:refunds, refunds), do: {:ok, :refunds, refunds}
+
+  @doc false
+  def connect_api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
 
   defp missing(provider, tenant, reason),
     do:

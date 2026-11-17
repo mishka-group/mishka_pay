@@ -10,19 +10,24 @@ defmodule MishkaPay.AccountLink do
   `MishkaPay.account_link/1` makes one from what the caller gives:
 
     * `:provider`, `:tenant`, `:account_id`: whose account, with the platform's keys.
+    * `:api`: which of the provider's APIs makes the link, `:v2` or `:v1` (Stripe's
+      `/v2/core/account_links` or `/v1/account_links`); left out, the tenant's `:connect_api`
+      setting (`:v2` by default). Either API links an account made with either.
     * `:type`: `:onboarding` (the default: the seller fills in what the provider needs before
       they take money) or `:update` (they change their details later; only where the platform
       collects them, such as a `:custom` account).
     * `:refresh_url`: where the seller lands when the link ran out or was used already; that page
       makes a new link and sends them on.
     * `:return_url`: where they come back when they are done or leave. Coming back does not mean
-      the account is ready: read it again (`:details_submitted`, `:charges_enabled`).
+      the account is ready: read it again (`:details_submitted`, `:charges_enabled`,
+      `:requirements_due`).
 
   Both URLs are `https`, or `http` on `localhost`.
 
   `MishkaPay.login_link/3` makes the other kind, `type: :login`: a link into the seller's own
   light dashboard at the provider (Stripe's Express dashboard), only for an `:express` account
-  that finished onboarding.
+  that finished onboarding. Stripe makes it only on `/v1/accounts/:id/login_links` (Accounts v2
+  has none), which takes an account made with either API.
 
   What the provider fills in: `:url`, and `:expires_at` for an onboarding or update link (minutes
   at Stripe). Make one per click and never store it.
@@ -42,6 +47,10 @@ defmodule MishkaPay.AccountLink do
     field :account_id, String.t(),
       enforce: true,
       derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+
+    field :api, :v2 | :v1,
+      derives: "validate(enum=Atom[v2::v1])",
+      validator: {MishkaPay.ConnectedAccount, :api}
 
     field :type, :onboarding | :update | :login,
       default: :onboarding,

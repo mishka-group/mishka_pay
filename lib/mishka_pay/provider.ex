@@ -100,8 +100,8 @@ defmodule MishkaPay.Provider do
     * `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
     * `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
     * `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
-    * `:connect`: `create_connected_account/2`, `fetch_connected_account/2`,
-      `update_connected_account/2`, `list_connected_accounts/2`, `reject_connected_account/3`,
+    * `:connect`: `create_connected_account/2`, `fetch_connected_account/3`,
+      `update_connected_account/2`, `list_connected_accounts/2`, `close_connected_account/3`,
       `account_link/2`, `login_link/2`, `fetch_application_fee/2`, `list_application_fees/2`,
       `refund_application_fee/3` (and a checkout's `:application_fee`,
       `:application_fee_percent`, `:destination` and `:on_behalf_of`);
@@ -1003,8 +1003,12 @@ defmodule MishkaPay.Provider do
   @callback create_connected_account(MishkaPay.ConnectedAccount.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:connect`. Reads one connected account."
-  @callback fetch_connected_account(account_id :: String.t(), MishkaPay.Credentials.t()) ::
+  @doc "With `:connect`. Reads one connected account; `opts` may name the `:api` to read it with."
+  @callback fetch_connected_account(
+              account_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) ::
               {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:connect`. Changes the details of connected account `:id` that are given."
@@ -1016,10 +1020,10 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc """
-  With `:connect`. Turns a connected account down for good, for the `:reason` in `opts`; it can
-  take no more payments or payouts.
+  With `:connect`. Closes a connected account for good: it takes no more payments or payouts.
+  `opts` may name the `:api`, and a `:reason` where the provider takes one.
   """
-  @callback reject_connected_account(
+  @callback close_connected_account(
               account_id :: String.t(),
               opts :: keyword(),
               MishkaPay.Credentials.t()
@@ -1251,10 +1255,10 @@ defmodule MishkaPay.Provider do
                       adjust_customer_balance: 2,
                       list_customer_balance: 2,
                       create_connected_account: 2,
-                      fetch_connected_account: 2,
+                      fetch_connected_account: 3,
                       update_connected_account: 2,
                       list_connected_accounts: 2,
-                      reject_connected_account: 3,
+                      close_connected_account: 3,
                       account_link: 2,
                       login_link: 2,
                       fetch_application_fee: 2,
@@ -1418,10 +1422,10 @@ defmodule MishkaPay.Provider do
     customer_balance: [adjust_customer_balance: 2, list_customer_balance: 2],
     connect: [
       create_connected_account: 2,
-      fetch_connected_account: 2,
+      fetch_connected_account: 3,
       update_connected_account: 2,
       list_connected_accounts: 2,
-      reject_connected_account: 3,
+      close_connected_account: 3,
       account_link: 2,
       login_link: 2,
       fetch_application_fee: 2,

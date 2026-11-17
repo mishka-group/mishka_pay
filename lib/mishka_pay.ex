@@ -94,7 +94,7 @@ defmodule MishkaPay do
     * money views: `:balance`, `:balance_transaction_list`, `:customer_balance_adjust`,
       `:customer_balance_list`;
     * a platform's sellers: `:connected_account_create`, `:connected_account`,
-      `:connected_account_update`, `:connected_account_list`, `:connected_account_reject`,
+      `:connected_account_update`, `:connected_account_list`, `:connected_account_close`,
       `:account_link`, `:login_link`, `:application_fee`, `:application_fee_list`,
       `:application_fee_refund`; money between accounts: `:transfer_create`, `:transfer`,
       `:transfer_list`, `:transfer_reverse`, `:payout`, `:payout_list`, `:payout_cancel`;
@@ -1479,8 +1479,9 @@ defmodule MishkaPay do
 
   @doc """
   Makes a connected account for a seller from `attrs` (see `MishkaPay.ConnectedAccount`), with
-  the platform's keys: `:type` (`:express` by default), `:country`, `:email`, `:capabilities`
-  and a `:reference` that makes it once. Then send the seller to `account_link/1`, and give the
+  the platform's keys: `:configurations` (`[:merchant, :recipient]` by default), `:dashboard`
+  (`:express` by default), `:country`, `:email`, `:capabilities`, `:api` (else the tenant's
+  `:connect_api`, `:v2` by default) and a `:reference` that makes it once. Then send the seller to `account_link/1`, and give the
   seller's site its id as `:account_id` in its keys.
   """
   @spec create_connected_account(map()) ::
@@ -1498,24 +1499,27 @@ defmodule MishkaPay do
 
   @doc """
   Reads connected account `account_id` (`MishkaPay.ConnectedAccount`): whether it can take
-  payments and payouts yet, and what the provider still needs from the seller.
+  payments, payouts and transfers yet, and what the provider still needs from the seller.
+  `api:` reads it with `:v2` or `:v1` instead of the tenant's `:connect_api` (at Stripe either
+  reads an account made with either).
   """
-  @spec fetch_connected_account(String.t(), String.t(), term()) ::
+  @spec fetch_connected_account(String.t(), String.t(), term(), keyword()) ::
           {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
-  def fetch_connected_account(provider, account_id, tenant \\ nil)
+  def fetch_connected_account(provider, account_id, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(account_id) do
     capable(
       :connect,
       :connected_account,
       provider,
       tenant,
-      & &1.fetch_connected_account(account_id, &2)
+      & &1.fetch_connected_account(account_id, opts, &2)
     )
   end
 
   @doc """
   Changes the connected account `attrs` names by `:id`: the `:email`, `:business_name`,
-  `:capabilities` (asked for on top of those it has) or `:metadata` given. Answers it after.
+  `:configurations` and `:capabilities` (asked for on top of those it has) or `:metadata` given.
+  Answers it after.
   """
   @spec update_connected_account(map()) ::
           {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
@@ -1532,7 +1536,10 @@ defmodule MishkaPay do
 
   @doc """
   One page of the platform's connected accounts, newest first (`MishkaPay.Page` of
-  `MishkaPay.ConnectedAccount`), with `limit:` and `after:`.
+  `MishkaPay.ConnectedAccount`), with `limit:` and `after:`, and `api:` (`:v2` or `:v1`, else
+  the tenant's `:connect_api`). A Stripe v2 page holds at most 20. On v2 also `configurations:` (only accounts with all of them)
+  and `closed: true` (only closed ones; left out, only open ones); each account answers its own
+  fields only, so read one for its states.
   """
   @spec list_connected_accounts(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -1547,20 +1554,22 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Turns connected account `account_id` down for good: it takes no more payments or payouts.
-  `reason:` is the provider's word for why (Stripe: `"fraud_other"`, `"terms_of_service"`,
-  `"credit"`, `"other"`...; `"other"` when left out). Answers the account after.
+  Closes connected account `account_id` for good: it takes no more payments or payouts, and is
+  still read with `closed: true`. `api:` as in `fetch_connected_account/4`. At Stripe on v2 the
+  account is read first, since Stripe closes it only with every configuration it has; on v1 it
+  is turned down (rejected) with `reason:` (`"fraud_other"`, `"terms_of_service"`, `"credit"`,
+  `"other"`...; `"other"` when left out). Answers the account after.
   """
-  @spec reject_connected_account(String.t(), String.t(), term(), keyword()) ::
+  @spec close_connected_account(String.t(), String.t(), term(), keyword()) ::
           {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
-  def reject_connected_account(provider, account_id, tenant \\ nil, opts \\ [])
+  def close_connected_account(provider, account_id, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(account_id) do
     capable(
       :connect,
-      :connected_account_reject,
+      :connected_account_close,
       provider,
       tenant,
-      & &1.reject_connected_account(account_id, opts, &2)
+      & &1.close_connected_account(account_id, opts, &2)
     )
   end
 

@@ -81,6 +81,11 @@ defmodule MishkaPay.Messages do
           | :account_invalid
           | :capability_names
           | :connect_not_set_up
+          | :connect_v1_customer
+          | :connect_capability_v1
+          | :connect_capability_v2
+          | :connect_needs_sandbox
+          | :connect_v1_refused
           | :fee_percent
           | :fee_currency
           | :stripe_shipping_five
@@ -456,7 +461,42 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The capabilities field must be a list of names in lowercase letters, digits and underscores"
+        "The capabilities field must be a list of names in lowercase letters, digits and underscores, with dots between their parts"
+      )
+
+  defp msgid(:connect_v1_customer),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The configurations field cannot hold customer on Accounts v1: make the account with Accounts v2"
+      )
+
+  defp msgid(:connect_capability_v1),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field takes plain names on Accounts v1, such as transfers"
+      )
+
+  defp msgid(:connect_capability_v2),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field takes each name under its configuration on Accounts v2, such as merchant.card_payments or recipient.stripe_balance.stripe_transfers"
+      )
+
+  defp msgid(:connect_needs_sandbox),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes this onboarding link only in a sandbox: an account with transfers cannot be onboarded by link in test mode"
+      )
+
+  defp msgid(:connect_v1_refused),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes new connected accounts on this platform only with Accounts v2: leave connect_api at v2"
       )
 
   defp msgid(:connect_not_set_up),

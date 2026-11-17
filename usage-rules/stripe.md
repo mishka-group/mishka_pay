@@ -13,13 +13,18 @@
   `Stripe-Version` and `expand[]` for this call only; typed calls always use the pinned version.
 - A write's `:reference` with its method and path makes the idempotency key; without one, a
   write gets a fresh key that its retries reuse.
+- A `/v2/...` path is Stripe's API v2: a write's `params:` go as a JSON body (nest them as maps
+  and lists, `true` stays a boolean), a read's as a query with indexed lists (`include[0]=...`).
+  v2 has no `expand`; ask for more with `"include" => [...]` in `params:`. The site's
+  `account_id` goes in `Stripe-Context` there instead of `Stripe-Account`.
 
 ## Connect: a platform and its sites
 
 - A platform (Mishka Cloud, a marketplace) keeps one Stripe secret key and gives each site its
   own connected account (`acct_...`). The site's keys answer the platform's `secret_key` with
   the site's `account_id`; every Stripe request for that tenant then carries
-  `Stripe-Account: acct_...`, so its payments, customers and refunds live on the site's account.
+  `Stripe-Account: acct_...` (`Stripe-Context` on an API v2 path), so its payments, customers
+  and refunds live on the site's account.
   Keys without `account_id` are the platform itself.
 - The header comes only from the keys. No call, `RequestOptions` or `MishkaPay.request/1` can
   set it: a raw call has no header field. An `account_id` that is not `acct_` and plain is
@@ -34,24 +39,62 @@
   Connect endpoint at a site's URL when the platform has more than one connected account: it
   receives every account's events, refuses the others, and Stripe retries them until it turns
   the endpoint off.
-- `create_connected_account/1` is `POST /v1/accounts` with the platform's keys. Stripe's `type`
-  is deprecated on this API version: `:express` is sent as `controller` (Express dashboard, the
-  platform pays fees and answers for losses), `:standard` as a full dashboard, `:custom` as no
-  dashboard with the platform collecting requirements. Its `:reference` makes the idempotency key
-  and is kept in metadata. A platform that has not signed up for Connect in the Dashboard is
-  `Errors.Rejected` with code `"connect_not_set_up"`.
-- `account_link/1` is `POST /v1/account_links` (`account_onboarding` or `account_update`); its
-  URL runs out in minutes and works once, so make it per click and redirect at once. Both pages
-  are `https` (or `http` on `localhost`). Coming back to `return_url` does not mean the account
-  is ready: read it (`:details_submitted`, `:charges_enabled`, `:requirements_due`). `login_link/3`
-  works only for an Express account that finished onboarding.
-- `reject_connected_account/4` is for good; Stripe's reasons on this API version are `credit`,
-  `fraud_no_intent_to_fulfill`, `fraud_other`, `fraud_payment_method_casher`,
-  `fraud_payment_method_tester`, `terms_of_service` and `other` (the default). Account ids start
-  with `acct_`.
+- Two account APIs, one set of calls: `connect_api: :v2` (the default, Stripe's Accounts v2,
+  `/v2/core/accounts` and `/v2/core/account_links`) or `connect_api: :v1` (Accounts v1,
+  `/v1/accounts` and `/v1/account_links`) in the platform's keys, and `api:` on a call
+  (`MishkaPay.ConnectedAccount`, `MishkaPay.AccountLink`, `api:` on
+  `fetch_connected_account/4`, `list_connected_accounts/3`, `close_connected_account/4`) wins
+  over it. Both answer the same `MishkaPay.ConnectedAccount`, with `:api` saying which read it.
+  Keep v2 unless the platform needs what only v1 does: OAuth connections, Treasury, card
+  issuing, older or retired capabilities (`legacy_payments`). Stripe refuses
+  `POST /v1/accounts` for a platform that turned Connect on lately (`Errors.Rejected` code
+  `"connect_v1_refused"`); such a platform makes accounts only on v2.
+- Either API reads an account made with either: Stripe's v1 reads a v2 account as a v1 account
+  (its v1 capabilities, `controller`), and v2 manages accounts made on v1 (Stripe's
+  migration guide; not checked live, since a platform that may only use v2 has none).
+- `create_connected_account/1` with the platform's keys: `:configurations`
+  (`[:merchant, :recipient]` when left out: a merchant asks for card payments, a recipient for
+  transfers into its balance; `:customer` only on v2), `:dashboard` (`:express` when left out,
+  `:full`, `:none`), `:fees_collector` and `:losses_collector` (`:application` or `:stripe`;
+  left out, what the dashboard needs: Stripe takes an Express account only with both
+  `:application`), `:country`, `:email`, `:business_name` (v2 `display_name`) and
+  `:capabilities` for more (v2: `"merchant.klarna_payments"`, under its configuration; v1:
+  `"klarna_payments"`). On v1 the same choices go as `controller` and `capabilities`. Its
+  `:reference` makes the idempotency key and is kept in metadata. A platform that has not signed
+  up for Connect is `Errors.Rejected` with code `"connect_not_set_up"`.
+- A v2 read includes the configurations, requirements, defaults and identity:
+  `:charges_enabled` is the merchant's `card_payments`, `:payouts_enabled` a `stripe_balance.payouts`,
+  `:transfers_enabled` the recipient's `stripe_balance.stripe_transfers`, each `:active`;
+  `:capability_status` holds each by its dotted name (`"merchant.card_payments" => :restricted`);
+  `:requirements_due` is what Stripe waits for from the seller (due now or past due), and
+  `:details_submitted` is true once nothing at all waits on the seller. A v2 list answers only
+  each account's own fields (no states): read the one the seller looks at, when they look.
+  A v2 page holds at most 20.
+- `account_link/1` makes an `account_onboarding` or `account_update` link; its URL runs out in
+  minutes and works once, so make it per click and redirect at once. Both pages are `https` (or
+  `http` on `localhost`). `account_update` is only for an account whose details the platform
+  collects (`dashboard: :none`); Stripe refuses it for an Express account. Coming back to
+  `return_url` does not mean the account is ready: read it (`:requirements_due`,
+  `:charges_enabled`, `:transfers_enabled`). In an account's test mode (not a Stripe sandbox)
+  Stripe refuses an onboarding link for a v2 account that asked for transfers
+  (`Errors.Rejected` code `"connect_needs_sandbox"`); a merchant-only account gets one there.
+- `login_link/3` is Stripe's `/v1/accounts/:id/login_links` for either API (v2 has no login
+  link); it works only for an Express account that finished onboarding.
+- `close_connected_account/4` is for good. On v2 it reads the account first and sends every
+  configuration it has (Stripe closes none otherwise); the account still reads, `closed: true`.
+  On v1 it is a reject with `reason:` `credit`, `fraud_no_intent_to_fulfill`, `fraud_other`,
+  `fraud_payment_method_casher`, `fraud_payment_method_tester`, `terms_of_service` or `other`
+  (the default). Account ids start with `acct_`.
 - Stripe sends `account.updated` (onboarding moved on, a capability turned on or off) and
   `account.application.deauthorized` (a Standard account left the platform) to the platform's
-  Connect endpoint; `event.account` names the account.
+  Connect endpoint as snapshot events; `event.account` names the account. Accounts v2 also sends
+  thin events (`MishkaPay.Providers.Stripe.thin_events/0`: `v2.core.account.created`,
+  `.updated`, `.closed`, `v2.core.account[requirements].updated`,
+  `v2.core.account[configuration.merchant].capability_status_updated` and the rest) only to an
+  event destination with the thin payload (Workbench, Webhooks; a `/v1/webhook_endpoints`
+  endpoint cannot take them). Point it at the platform's webhook URL and add its signing secret
+  to the platform tenant's `webhook_secrets`; each becomes an Event whose `:object_id` and
+  `:account` are the account. A thin event carries no state: read the account.
 
 ## Connect: money between accounts
 
@@ -63,6 +106,10 @@
   `application_fee_percent:` is `subscription_data[application_fee_percent]`; both go to the
   platform. Mishka Pay makes PaymentIntents only through a checkout, so these are the only
   places it sends them.
+- Transfers, payouts, application fees, a checkout's `destination:` and `on_behalf_of:`, and
+  a site's `account_id` all take a v2 account's id as they take a v1 one (checked live). Money
+  reaches a v2 account only once its recipient's `stripe_balance.stripe_transfers` is active
+  (`:transfers_enabled`); before that Stripe answers code `"insufficient_capabilities_for_transfer"`.
 - `create_transfer/1` is `POST /v1/transfers` from the platform's balance: `:reference` is
   required, makes the idempotency key and is kept in metadata; `:source_charge_id` (`ch_...`)
   is `source_transaction`, so the transfer waits for that sale's money. A destination that is

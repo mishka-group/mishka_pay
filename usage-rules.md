@@ -77,7 +77,8 @@ default, or `:live`), `merchant_of_record` (Stripe Managed Payments, `true`/`fal
 `refunds` (`:once` default, or `:many`), `automatic_tax` (`true` counts the tax of every checkout
 and payment link of this site with Stripe Tax; a checkout's own choice wins), `account_id` (the
 connected account the site acts for on a Stripe Connect platform: `acct_...`, sent as
-`Stripe-Account` on every request; see `usage-rules/stripe.md`), `extra` (a map). Answer `nil` for a tenant without keys.
+`Stripe-Account` on every request; see `usage-rules/stripe.md`), `connect_api` (`:v2` default,
+Stripe's Accounts v2 for connected accounts, or `:v1`; a call's `api:` wins), `extra` (a map). Answer `nil` for a tenant without keys.
 
 Mount the webhook endpoint **before** `Plug.Parsers` in the endpoint (it needs the raw body):
 
@@ -159,7 +160,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_balance(provider, tenant)` | `%MishkaPay.Balance{available: [money], pending: [money]}`, one money per currency |
 | `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` | a `MishkaPay.Page` of `%MishkaPay.BalanceTransaction{}` (amount, fee, net, type, source) |
 | `MishkaPay.adjust_customer_balance(provider, customer_id, money, tenant, description: d, reference: r)`, `list_customer_balance/4` | `%MishkaPay.CustomerBalanceTransaction{}`: below zero is store credit |
-| `MishkaPay.create_connected_account(attrs)` (`MishkaPay.ConnectedAccount`: `:type` `:express`/`:standard`/`:custom`, `:country`, `:email`, `:business_name`, `:capabilities`, `:reference`), `fetch_connected_account/3`, `update_connected_account/1`, `list_connected_accounts/3`, `reject_connected_account(p, id, tenant, reason: "fraud_other")` | `%MishkaPay.ConnectedAccount{}`: a seller's account under the platform, with `:charges_enabled`, `:payouts_enabled`, `:requirements_due`; the provider needs `:connect`. The site's keys then name it as `account_id` |
+| `MishkaPay.create_connected_account(attrs)` (`MishkaPay.ConnectedAccount`: `:configurations` `[:merchant, :recipient]`, `:dashboard` `:express`/`:full`/`:none`, `:fees_collector`, `:losses_collector`, `:country`, `:email`, `:business_name`, `:capabilities`, `:api` `:v2`/`:v1`, `:reference`), `fetch_connected_account(p, id, tenant, api: :v1)`, `update_connected_account/1`, `list_connected_accounts(p, tenant, configurations: [:merchant])`, `close_connected_account(p, id, tenant)` | `%MishkaPay.ConnectedAccount{}`: a seller's account under the platform, with `:charges_enabled`, `:payouts_enabled`, `:transfers_enabled`, `:requirements_due`, `:closed`; the provider needs `:connect`. Stripe's Accounts v2 by default (the keys' `connect_api: :v1` or a call's `api: :v1` for v1). The site's keys then name it as `account_id` |
 | `MishkaPay.account_link(%{provider:, account_id:, refresh_url:, return_url:, type: :onboarding})`, `login_link(provider, account_id, tenant)` | `%MishkaPay.AccountLink{url: url}`: redirect the seller to it at once; it runs out in minutes |
 | `MishkaPay.list_application_fees(provider, tenant, charge_id: id)`, `fetch_application_fee/3`, `refund_application_fee(p, fee_id, tenant, amount: money, reference: r)` | `%MishkaPay.ApplicationFee{}`: the platform's cut of a seller's sale, and what of it went back |
 | `MishkaPay.create_transfer(%{provider:, amount:, destination: "acct_...", reference:})` (`MishkaPay.Transfer`: also `:source_charge_id`, `:transfer_group`), `fetch_transfer/3`, `list_transfers(p, tenant, destination: id)`, `reverse_transfer(p, id, tenant, amount: money, reference: r)` | `%MishkaPay.Transfer{}`: money from the platform's balance to a seller, sent once per reference; the provider needs `:transfer` |

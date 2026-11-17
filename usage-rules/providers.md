@@ -88,9 +88,9 @@ end
   - `:tax_setup`: `create_tax_registration/2`, `list_tax_registrations/2` (`:status`),
     `expire_tax_registration/3` (the registration's id and when, `nil` for now),
     `fetch_tax_settings/1`, `update_tax_settings/2`;
-  - `:connect`: `create_connected_account/2`, `fetch_connected_account/2`,
-    `update_connected_account/2`, `list_connected_accounts/2`, `reject_connected_account/3`
-    (`:reason`), `account_link/2`, `login_link/2`, `fetch_application_fee/2`,
+  - `:connect`: `create_connected_account/2`, `fetch_connected_account/3` (`:api`),
+    `update_connected_account/2`, `list_connected_accounts/2` (`:api`, `:configurations`,
+    `:closed`), `close_connected_account/3` (`:api`, `:reason`), `account_link/2`, `login_link/2`, `fetch_application_fee/2`,
     `list_application_fees/2` (`:charge_id`), `refund_application_fee/3` (`:amount`,
     `:reference`, `:tenant`), and a checkout's `:destination`, `:on_behalf_of`,
     `:application_fee` and `:application_fee_percent`; the tenant's keys' `:account_id` is the
