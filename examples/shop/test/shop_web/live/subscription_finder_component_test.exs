@@ -56,6 +56,7 @@ defmodule ShopWeb.SubscriptionFinderComponentTest do
   test "a search sends Stripe's query, and a refused id says why", %{conn: conn} do
     StripeRoutes.stub(%{{"GET", "/v1/subscriptions/search"} => page([], false)})
     {:ok, view, _html} = live(conn, ~p"/")
+    view |> form("[data-testid=sub-finder-form]", %{"mode" => "search"}) |> render_change()
 
     view
     |> form("[data-testid=sub-finder-form]", %{
@@ -73,6 +74,8 @@ defmodule ShopWeb.SubscriptionFinderComponentTest do
 
     assert has_element?(view, "[data-testid=sub-finder-empty]")
 
+    view |> form("[data-testid=sub-finder-form]", %{"mode" => "list"}) |> render_change()
+
     view
     |> form("[data-testid=sub-finder-form]", %{"mode" => "list", "customer_id" => "sub_wrong"})
     |> render_submit()
@@ -80,6 +83,28 @@ defmodule ShopWeb.SubscriptionFinderComponentTest do
     refute_received {:stripe, "GET", "/v1/subscriptions", _params}
     assert view |> element("#flash-error") |> render() =~ "cus_"
     refute has_element?(view, "[data-testid=sub-finder-rows]")
+  end
+
+  test "metadata without = says it must be key=value, and a mode shows only its own filters",
+       %{conn: conn} do
+    StripeRoutes.stub(%{})
+    {:ok, view, _html} = live(conn, ~p"/")
+    form = "[data-testid=sub-finder-form]"
+
+    view |> form(form, %{"mode" => "list", "customer_id" => "cus_ada"}) |> render_change()
+    refute has_element?(view, "[data-testid=sub-finder-metadata]")
+
+    view |> form(form, %{"mode" => "search"}) |> render_change()
+    refute has_element?(view, "[data-testid=sub-finder-customer]")
+
+    view |> form(form, %{"mode" => "search", "metadata" => "novalue"}) |> render_submit()
+    refute_received {:stripe, "GET", "/v1/subscriptions/search", _params}
+    assert view |> element("#flash-error") |> render() =~ "key=value"
+
+    view |> form(form, %{"mode" => "list"}) |> render_change()
+    assert has_element?(view, "[data-testid=sub-finder-customer]")
+    refute has_element?(view, "[data-testid=sub-finder-customer][value]")
+    refute has_element?(view, "[data-testid=sub-finder-metadata]")
   end
 
   defp page(items, more?), do: %{StripeRoutes.list(items) | "has_more" => more?}

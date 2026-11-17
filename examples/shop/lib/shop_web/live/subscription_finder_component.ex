@@ -2,7 +2,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
   @moduledoc """
   Finds subscriptions on Stripe, beside the ones the shop keeps: a list by customer, price and
   status (`MishkaPay.list_subscriptions/3`), or Stripe's search by status, reference and metadata
-  (`MishkaPay.search_subscriptions/3`), a page at a time with "Next page". "Open" keeps the one
+  (`MishkaPay.search_subscriptions/3`), a page at a time with "Next page". The form shows only the
+  chosen way's own filters, and metadata typed without `=` is refused here. "Open" keeps the one
   found in the shop (the subscriptions part's `read`, given as `open_target`) and shows it.
   """
 
@@ -29,6 +30,20 @@ defmodule ShopWeb.SubscriptionFinderComponent do
     do: {:ok, assign(socket, tenant: assigns.tenant, open_target: assigns.open_target)}
 
   @impl true
+  def handle_event("draft", params, socket), do: {:noreply, assign(socket, form: params)}
+
+  def handle_event("find", %{"mode" => "search", "metadata" => metadata} = params, socket)
+      when metadata != "" do
+    case pair(params) do
+      nil ->
+        send(self(), {:flash, :error, "Metadata is a key=value pair, like plan=pro."})
+        {:noreply, assign(socket, form: params)}
+
+      _pair ->
+        {:noreply, socket |> assign(form: params, page: 0) |> read(nil)}
+    end
+  end
+
   def handle_event("find", params, socket) do
     {:noreply, socket |> assign(form: params, page: 0) |> read(nil)}
   end
@@ -42,6 +57,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
       <h4 class="font-medium">Find subscriptions on Stripe</h4>
       <.hint>MishkaPay.list_subscriptions/3 and MishkaPay.search_subscriptions/3</.hint>
       <form
+        id="sub-finder-form"
+        phx-change="draft"
         phx-submit="find"
         phx-target={@myself}
         class="grid gap-2 sm:grid-cols-3 lg:grid-cols-6 items-end"
@@ -68,8 +85,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
             </option>
           </select>
         </label>
-        <label class="fieldset">
-          <span class="fieldset-legend">Customer (list)</span>
+        <label :if={@form["mode"] != "search"} class="fieldset">
+          <span class="fieldset-legend">Customer</span>
           <input
             name="customer_id"
             value={@form["customer_id"]}
@@ -78,8 +95,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
             data-testid="sub-finder-customer"
           />
         </label>
-        <label class="fieldset">
-          <span class="fieldset-legend">Price (list)</span>
+        <label :if={@form["mode"] != "search"} class="fieldset">
+          <span class="fieldset-legend">Price</span>
           <input
             name="price_id"
             value={@form["price_id"]}
@@ -88,8 +105,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
             data-testid="sub-finder-price"
           />
         </label>
-        <label class="fieldset">
-          <span class="fieldset-legend">Reference (search)</span>
+        <label :if={@form["mode"] == "search"} class="fieldset">
+          <span class="fieldset-legend">Reference</span>
           <input
             name="reference"
             value={@form["reference"]}
@@ -98,8 +115,8 @@ defmodule ShopWeb.SubscriptionFinderComponent do
             data-testid="sub-finder-reference"
           />
         </label>
-        <label class="fieldset">
-          <span class="fieldset-legend">Metadata (search)</span>
+        <label :if={@form["mode"] == "search"} class="fieldset">
+          <span class="fieldset-legend">Metadata</span>
           <input
             name="metadata"
             value={@form["metadata"]}
@@ -226,8 +243,14 @@ defmodule ShopWeb.SubscriptionFinderComponent do
 
   defp pair(form) do
     case String.split(form["metadata"] || "", "=", parts: 2) do
-      [key, value] when key != "" -> %{String.trim(key) => String.trim(value)}
-      _none -> nil
+      [key, value] ->
+        case String.trim(key) do
+          "" -> nil
+          key -> %{key => String.trim(value)}
+        end
+
+      _none ->
+        nil
     end
   end
 
