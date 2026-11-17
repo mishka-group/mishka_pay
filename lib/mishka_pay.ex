@@ -1541,9 +1541,11 @@ defmodule MishkaPay do
   @doc """
   Delivers again every event `provider` sent `tenant` since `since:`, to the
   `mishka_pay:webhook:received` listeners (`MishkaPay.Webhook.deliver/1`), oldest first: what a
-  site missed while its webhook endpoint was down. Only the events the provider handles
-  (`types:`, by default every event Mishka Pay acts on, when the provider says which) are read.
-  A listener keeps each event once, so one already taken is not done twice.
+  site missed while its webhook endpoint was down. Only the events Mishka Pay acts on are
+  delivered, when the provider says which: the window is read once, a hundred events a request,
+  and the others are left out. `types:` names the events to deliver instead, and asks the
+  provider for only those (Stripe takes 20 types a request). A listener keeps each event once, so
+  one already taken is not done twice.
 
   Answers how many were delivered and which failed, by event id.
   """
@@ -1552,8 +1554,7 @@ defmodule MishkaPay do
           | {:error, Splode.Error.t()}
   def replay_events(provider, tenant \\ nil, opts) when is_binary(provider) do
     with {:ok, module} <- Provider.capable(provider, :event_list),
-         opts = Keyword.put_new_lazy(opts, :types, fn -> handled(module) end),
-         {:ok, events} <- all_events(provider, tenant, opts) do
+         {:ok, events} <- replayed(provider, tenant, opts, handled(module)) do
       events
       |> Enum.reverse()
       |> Enum.map(&{&1.id, MishkaPay.Webhook.deliver(%{&1 | tenant: tenant})})
@@ -1567,10 +1568,26 @@ defmodule MishkaPay do
 
   defp handled(module) do
     case function_exported?(module, :handled_events, 0) do
-      true -> module.handled_events() |> Map.keys() |> Enum.sort()
+      true -> module.handled_events()
       false -> nil
     end
   end
+
+  # Without `types:` the window is read unfiltered and only the handled events are kept: one
+  # request for a quiet window, where asking by type needs one for each chunk of types.
+  defp replayed(provider, tenant, opts, handled) when is_map(handled) do
+    case Keyword.has_key?(opts, :types) do
+      true ->
+        all_events(provider, tenant, opts)
+
+      false ->
+        with {:ok, events} <- all_events(provider, tenant, opts) do
+          {:ok, Enum.filter(events, &is_map_key(handled, &1.type))}
+        end
+    end
+  end
+
+  defp replayed(provider, tenant, opts, nil), do: all_events(provider, tenant, opts)
 
   # Every page of every chunk of types (a provider takes a few types a call), newest first, each
   # event once.
