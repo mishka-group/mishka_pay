@@ -65,6 +65,11 @@ defmodule MishkaPay.Credentials do
       `:v1` (Stripe's Accounts v1, still needed for OAuth, Treasury, card issuing and older
       capabilities). A call's own `:api` still wins (`MishkaPay.ConnectedAccount`,
       `MishkaPay.AccountLink`, `api:` on a read, a list or a close).
+    * `:customer_api`: which of the provider's APIs makes this tenant's customers, at a provider
+      that has two. `:v2` (the default: Stripe's Accounts v2, an account with the customer
+      configuration, `acct_...`, the one Stripe recommends) or `:v1` (Stripe's Customers,
+      `cus_...`). A customer's own `:api` (`MishkaPay.Customer`) and `api:` on a list or a search
+      still win; a customer made with either is read, changed and sold to with either setting.
 
   These are read at runtime on every call, never from `config.exs`, so each tenant of a
   multi-site project carries its own and a change in its settings applies to the next call.
@@ -122,7 +127,12 @@ defmodule MishkaPay.Credentials do
     field :connect_api, :v2 | :v1,
       default: :v2,
       derives: "validate(not_nil_value, enum=Atom[v2::v1])",
-      validator: {__MODULE__, :connect_api}
+      validator: {__MODULE__, :api}
+
+    field :customer_api, :v2 | :v1,
+      default: :v2,
+      derives: "validate(not_nil_value, enum=Atom[v2::v1])",
+      validator: {__MODULE__, :api}
 
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
 
@@ -297,7 +307,7 @@ defmodule MishkaPay.Credentials do
   def refunds(:refunds, refunds), do: {:ok, :refunds, refunds}
 
   @doc false
-  def connect_api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
+  def api(field, api), do: MishkaPay.Helpers.Choice.atom(field, api, ~w(v2 v1))
 
   defp missing(provider, tenant, reason),
     do:

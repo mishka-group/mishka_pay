@@ -482,7 +482,8 @@ defmodule MishkaPay.Provider do
 
   @doc """
   With `:customer`. One page of customers that match every filter given: `:email`, `:name`,
-  `:reference` (the host's own id kept on the customer).
+  `:reference` (the host's own id kept on the customer); `:api`, at a provider with two customer
+  APIs, the one the answers are named by.
   """
   @callback search_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
@@ -573,11 +574,14 @@ defmodule MishkaPay.Provider do
   @callback list_payments(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:customer`. Makes a customer at the provider and answers it with its `:id`."
+  @doc """
+  With `:customer`. Makes a customer at the provider and answers it with its `:id`, on the
+  customer's `:api`, else the tenant's `:customer_api`, at a provider with two.
+  """
   @callback create_customer(MishkaPay.Customer.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:customer`. Reads one customer again."
+  @doc "With `:customer`. Reads one customer again, on the API its id belongs to."
   @callback fetch_customer(customer_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
 
@@ -585,7 +589,10 @@ defmodule MishkaPay.Provider do
   @callback update_customer(MishkaPay.Customer.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Customer.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:customer`. One page of customers, newest first; only those with `:email` when given."
+  @doc """
+  With `:customer`. One page of customers, newest first; only those with `:email` when given, on
+  `:api`, else the tenant's `:customer_api`, at a provider with two.
+  """
   @callback list_customers(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 

@@ -82,6 +82,7 @@ defmodule MishkaPay.Messages do
           | :capability_names
           | :connect_not_set_up
           | :connect_v1_customer
+          | :customer_v2_email
           | :connect_capability_v1
           | :connect_capability_v2
           | :connect_needs_sandbox
@@ -474,6 +475,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The configurations field cannot hold customer on Accounts v1: make the account with Accounts v2"
+      )
+
+  defp msgid(:customer_v2_email),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Accounts v2 lists customers without an email filter: search customers by email, or list them with api v1"
       )
 
   defp msgid(:connect_capability_v1),
