@@ -324,9 +324,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     do: %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
 
   # Stripe takes the money at once with `automatic_async`, its default and recommended way (it
-  # answers sooner than `automatic`); `manual` holds it. Left out, Stripe's default applies.
+  # answers sooner than `automatic`, still there for a site that asks for it); `manual` holds
+  # it. Left out, Stripe's default applies.
   defp capture_method(nil), do: nil
   defp capture_method(:automatic), do: "automatic_async"
+  defp capture_method(:automatic_sync), do: "automatic"
   defp capture_method(:manual), do: "manual"
 
   # The seller a platform's sale is for: where the money goes, and who sells it.

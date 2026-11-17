@@ -80,7 +80,9 @@ defmodule MishkaPay.Checkout do
     * `:capture`: in a one-time checkout, `:manual` only holds the money on the buyer's card: the
       payment waits as `:authorized` until `MishkaPay.capture_payment/4` takes it, all or part,
       or `MishkaPay.cancel_payment/3` lets it go. Needs `:capture`. `:automatic` (the default)
-      takes it at once, the provider's recommended way (Stripe's `automatic_async`). Card holds end on their own after some days (Stripe: 7 by default).
+      takes it at once, the provider's recommended way (Stripe's `automatic_async`);
+      `:automatic_sync` takes it at once the older way, where the provider still has one
+      (Stripe's `automatic`, which answers only once the money is taken). Card holds end on their own after some days (Stripe: 7 by default).
     * `:shipping_countries`: two-letter country codes (`["NL", "DE"]`): the page asks the buyer
       for a shipping address in one of them. A subscription may ask for one too.
     * `:shipping_rates`: in a one-time checkout, the ways to ship the buyer picks from: a rate the
@@ -170,8 +172,8 @@ defmodule MishkaPay.Checkout do
       derives: "sanitize(trim) validate(string)",
       validator: {__MODULE__, :return_url}
 
-    field :capture, :automatic | :manual,
-      derives: "validate(enum=Atom[automatic::manual])",
+    field :capture, :automatic | :automatic_sync | :manual,
+      derives: "validate(enum=Atom[automatic::automatic_sync::manual])",
       validator: {__MODULE__, :capture}
 
     field :customer, struct(), struct: MishkaPay.Customer
@@ -293,7 +295,7 @@ defmodule MishkaPay.Checkout do
 
   @doc false
   def capture(field, value),
-    do: Choice.atom(field, value, ~w(automatic manual))
+    do: Choice.atom(field, value, ~w(automatic automatic_sync manual))
 
   @doc false
   def billing_mode(field, value),

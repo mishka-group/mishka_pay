@@ -165,6 +165,10 @@ defmodule ShopWeb.CardFormTest do
     assert_received {:stripe, "POST", "/v1/payment_intents",
                      %{"capture_method" => "manual", "amount" => "1500"}}
 
+    view |> form(pay, %{capture: "automatic_sync"}) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/payment_intents", %{"capture_method" => "automatic"}}
+
     view |> form(server) |> render_submit()
 
     assert_received {:stripe, "POST", "/v1/setup_intents/seti_card_1/confirm",

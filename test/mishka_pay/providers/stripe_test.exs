@@ -4960,7 +4960,12 @@ defmodule MishkaPay.Providers.StripeTest do
            }) == %{"description" => "New"}
 
     # Taken at once is Stripe's recommended automatic_async; held stays manual; left out, unsent.
-    for {capture, sent} <- [{:automatic, "automatic_async"}, {:manual, "manual"}, {nil, nil}] do
+    for {capture, sent} <- [
+          {:automatic, "automatic_async"},
+          {:automatic_sync, "automatic"},
+          {:manual, "manual"},
+          {nil, nil}
+        ] do
       intent = %MishkaPay.PaymentIntent{
         provider: "stripe",
         amount: Money.new(:USD, "5"),

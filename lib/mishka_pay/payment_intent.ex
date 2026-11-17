@@ -22,7 +22,8 @@ defmodule MishkaPay.PaymentIntent do
     * `:customer_id`: the provider customer who pays (`MishkaPay.create_customer/1`).
     * `:payment_method_id`: a payment method the customer saved, to charge it without the form.
     * `:capture`: `:automatic` (the default) takes the money when it is confirmed, the
-      provider's recommended way (Stripe's `automatic_async`); `:manual` holds
+      provider's recommended way (Stripe's `automatic_async`); `:automatic_sync` the older way
+      (Stripe's `automatic`); `:manual` holds
       it, read as `:requires_capture`, until `MishkaPay.capture_payment/4` takes it or
       `MishkaPay.cancel_payment_intent/3` lets it go.
     * `:setup_future_usage`: `:off_session` keeps the payment method on the customer for later
@@ -62,8 +63,8 @@ defmodule MishkaPay.PaymentIntent do
     field :customer_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
     field :payment_method_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
 
-    field :capture, :automatic | :manual,
-      derives: "validate(enum=Atom[automatic::manual])",
+    field :capture, :automatic | :automatic_sync | :manual,
+      derives: "validate(enum=Atom[automatic::automatic_sync::manual])",
       validator: {MishkaPay.Checkout, :capture}
 
     field :setup_future_usage, :on_session | :off_session,
