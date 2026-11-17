@@ -167,7 +167,12 @@ defmodule ShopWeb.CatalogComponent do
       <div class="flex flex-wrap items-center gap-3">
         <h3 class="font-medium">Read from Stripe</h3>
         <.hint>MishkaPay.list_products/3, {@page_size} a page</.hint>
-        <form phx-change="filter" phx-target={@myself} data-testid="catalog-filter">
+        <form
+          id="catalog-filter"
+          phx-change="filter"
+          phx-target={@myself}
+          data-testid="catalog-filter"
+        >
           <select name="active" class="select select-sm">
             <option value="true" selected={@active == "true"}>On sale</option>
             <option value="false" selected={@active == "false"}>Archived</option>

@@ -578,7 +578,12 @@ defmodule ShopWeb.PayComponents do
         <span data-testid="stats-taken">taken <b>{money(@taken, "USD")}</b></span>
         <span data-testid="stats-refunded">refunded <b>{money(@refunded, "USD")}</b></span>
       </div>
-      <form phx-change="filter" class="flex flex-wrap gap-1" data-testid="status-filter">
+      <form
+        id="status-filter"
+        phx-change="filter"
+        class="flex flex-wrap gap-1"
+        data-testid="status-filter"
+      >
         <label
           :for={status <- ["all" | @statuses]}
           class={["btn btn-xs", (@filter == status && "btn-primary") || "btn-ghost"]}
