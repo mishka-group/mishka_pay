@@ -1171,6 +1171,153 @@ defmodule MishkaPay.Providers.StripeTest do
       assert map_size(change) == 1
     end
 
+    test "credit notes are made, previewed, read, voided and listed with their lines as Stripe's spec accepts" do
+      note = %{
+        provider: "stripe",
+        tenant: "site-a",
+        invoice_id: "in_123",
+        lines: [
+          %{invoice_line_id: "il_123", quantity: 1},
+          %{name: "Goodwill", unit_amount: %{amount: "5.00", currency: "USD"}}
+        ],
+        reason: :order_change,
+        refund_amount: %{amount: "10.00", currency: "USD"},
+        credit_amount: %{amount: "2.00", currency: "USD"},
+        memo: "Sorry for the wait",
+        reference: "credit-1",
+        metadata: %{"team" => "ops"}
+      }
+
+      assert {:ok, %MishkaPay.CreditNote{id: "cn_" <> _, status: :issued, lines: [_ | _]}} =
+               MishkaPay.preview_credit_note(note)
+
+      assert {:ok, %MishkaPay.CreditNote{id: "cn_" <> _ = id, provider: "stripe"}} =
+               MishkaPay.create_credit_note(note)
+
+      assert {:ok, %MishkaPay.CreditNote{}} =
+               MishkaPay.create_credit_note(%{
+                 provider: "stripe",
+                 invoice_id: "in_123",
+                 amount: %{amount: "1.00", currency: "USD"},
+                 out_of_band_amount: %{amount: "1.00", currency: "USD"}
+               })
+
+      assert {:ok, %MishkaPay.CreditNote{id: ^id}} =
+               MishkaPay.fetch_credit_note("stripe", id, "site-a")
+
+      assert {:ok, %MishkaPay.CreditNote{}} = MishkaPay.void_credit_note("stripe", id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote{} | _]}} =
+               MishkaPay.list_credit_notes("stripe", "site-a", invoice_id: "in_123", limit: 3)
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNoteLine{amount: %Money{}} | _]}} =
+               MishkaPay.list_credit_note_lines("stripe", id, "site-a", limit: 2)
+    end
+
+    test "a credit note goes to Stripe by line or by amount, keyed by its reference" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        key = Plug.Conn.get_req_header(conn, "idempotency-key")
+        params = Plug.Conn.Query.decode(Enum.join([conn.query_string, body], "&"))
+        send(test, {:stripe, conn.method, conn.request_path, params, key})
+
+        Req.Test.json(conn, %{
+          "object" => "credit_note",
+          "id" => "cn_1",
+          "currency" => "eur",
+          "status" => "issued"
+        })
+      end)
+
+      note = %{
+        provider: "stripe",
+        tenant: "site-a",
+        invoice_id: "in_1",
+        lines: [
+          %{invoice_line_id: "il_1", amount: %{amount: "3.50", currency: "EUR"}},
+          %{name: "Late delivery", unit_amount: %{amount: "2", currency: "EUR"}, quantity: 2}
+        ],
+        refund_amount: %{amount: "7.50", currency: "EUR"},
+        reason: "product_unsatisfactory",
+        reference: "credit-7"
+      }
+
+      {:ok, _note} = MishkaPay.create_credit_note(note)
+      {:ok, _again} = MishkaPay.create_credit_note(note)
+
+      assert_received {:stripe, "POST", "/v1/credit_notes", params, [key]}
+
+      assert params == %{
+               "invoice" => "in_1",
+               "lines" => %{
+                 "0" => %{
+                   "type" => "invoice_line_item",
+                   "invoice_line_item" => "il_1",
+                   "amount" => "350"
+                 },
+                 "1" => %{
+                   "type" => "custom_line_item",
+                   "description" => "Late delivery",
+                   "quantity" => "2",
+                   "unit_amount_decimal" => "200"
+                 }
+               },
+               "refund_amount" => "750",
+               "reason" => "product_unsatisfactory",
+               "metadata" => %{"mishka_pay_reference" => "credit-7"}
+             }
+
+      assert_received {:stripe, "POST", "/v1/credit_notes", _params, [^key]}
+
+      {:ok, _preview} =
+        MishkaPay.preview_credit_note(%{
+          provider: "stripe",
+          invoice_id: "in_1",
+          amount: %{amount: "1", currency: "EUR"},
+          credit_amount: %{amount: "1", currency: "EUR"}
+        })
+
+      assert_received {:stripe, "GET", "/v1/credit_notes/preview", preview, []}
+
+      assert preview == %{"invoice" => "in_1", "amount" => "100", "credit_amount" => "100"}
+    end
+
+    test "a credit note that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      usd = fn amount -> %{amount: amount, currency: "USD"} end
+      base = %{provider: "stripe", invoice_id: "in_123", amount: usd.("5")}
+      lined = fn line -> base |> Map.delete(:amount) |> Map.put(:lines, [line]) end
+
+      for {attrs, field} <- [
+            {Map.delete(base, :amount), :amount},
+            {Map.put(base, :lines, [%{invoice_line_id: "il_1", quantity: 1}]), :amount},
+            {Map.delete(base, :invoice_id), :invoice_id},
+            {%{base | invoice_id: "sub_1"}, :invoice_id},
+            {Map.put(base, :refund_amount, %{amount: "5", currency: "EUR"}), :amount},
+            {Map.put(base, :reason, :requested_by_customer), :reason},
+            {%{base | amount: %{amount: "1.005", currency: "KWD"}}, :amount},
+            {lined.(%{invoice_line_id: "il_1"}), :lines},
+            {lined.(%{name: "Credit"}), :lines},
+            {lined.(%{invoice_line_id: "ii_1", quantity: 1}), :lines}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.create_credit_note(attrs)
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+
+      for call <- [
+            fn -> MishkaPay.fetch_credit_note("stripe", "cn_1/../../v1/charges") end,
+            fn -> MishkaPay.void_credit_note("stripe", "in_1") end,
+            fn -> MishkaPay.list_credit_note_lines("stripe", "cnli_1") end
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :credit_note_id}]}} = call.()
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :invoice_id}]}} =
+               MishkaPay.list_credit_notes("stripe", nil, invoice_id: "cus_1")
+    end
+
     test "an invoice item that cannot be right is refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
       base = %{provider: "stripe", customer_id: "cus_123", price_id: "price_123"}
@@ -2834,6 +2981,75 @@ defmodule MishkaPay.Providers.StripeTest do
              })
   end
 
+  test "a credit note maps with its lines, refunds, tax and reference" do
+    note = %{
+      "object" => "credit_note",
+      "id" => "cn_1",
+      "invoice" => "in_1",
+      "customer" => "cus_1",
+      "currency" => "usd",
+      "amount" => 1_210,
+      "total_taxes" => [%{"amount" => 210}],
+      "out_of_band_amount" => nil,
+      "memo" => "",
+      "number" => "ABCD-0001-CN-01",
+      "status" => "void",
+      "type" => "post_payment",
+      "reason" => "order_change",
+      "pdf" => "https://pay.stripe.com/credit_notes/cn_1/pdf",
+      "refunds" => [%{"refund" => "re_1", "amount_refunded" => 1_210}, %{"refund" => nil}],
+      "voided_at" => 1_794_000_100,
+      "created" => 1_794_000_000,
+      "metadata" => %{"mishka_pay_reference" => "credit-1", "team" => "ops"},
+      "lines" => %{
+        "data" => [
+          %{
+            "id" => "cnli_1",
+            "type" => "invoice_line_item",
+            "invoice_line_item" => "il_1",
+            "quantity" => 1,
+            "amount" => 1_000,
+            "unit_amount_decimal" => nil
+          },
+          %{
+            "id" => "cnli_2",
+            "type" => "custom_line_item",
+            "description" => "Goodwill",
+            "quantity" => 2,
+            "amount" => 0,
+            "unit_amount_decimal" => "0"
+          }
+        ]
+      }
+    }
+
+    assert {:ok, %MishkaPay.CreditNote{} = mapped} = Stripe.Mapper.credit_note(note)
+
+    assert {mapped.id, mapped.invoice_id, mapped.customer_id, mapped.number} ==
+             {"cn_1", "in_1", "cus_1", "ABCD-0001-CN-01"}
+
+    assert {mapped.status, mapped.type, mapped.reason, mapped.memo} ==
+             {:void, :post_payment, :order_change, nil}
+
+    assert {mapped.amount, mapped.amount_tax} ==
+             {Money.new(:USD, "12.10"), Money.new(:USD, "2.10")}
+
+    assert {mapped.refund_ids, mapped.reference} == {["re_1"], "credit-1"}
+    assert mapped.metadata == %{"team" => "ops"}
+    assert mapped.voided_at == DateTime.from_unix!(1_794_000_100)
+
+    assert [
+             %MishkaPay.CreditNoteLine{
+               type: :invoice_line,
+               invoice_line_id: "il_1",
+               amount: line
+             },
+             %MishkaPay.CreditNoteLine{type: :custom, name: "Goodwill", quantity: 2}
+           ] = mapped.lines
+
+    assert line == Money.new(:USD, "10.00")
+  end
+
   test "an invoice item maps with its price of one, its total, its bill and its reference" do
     item = %{
       "object" => "invoiceitem",
@@ -3397,7 +3613,13 @@ defmodule MishkaPay.Providers.StripeTest do
       "customer" => "cus_1",
       "entitlements" => %{"object" => "list", "data" => []}
     },
-    "customer.tax_id" => %{"object" => "tax_id", "id" => "txi_1", "customer" => "cus_1"}
+    "customer.tax_id" => %{"object" => "tax_id", "id" => "txi_1", "customer" => "cus_1"},
+    "credit_note" => %{
+      "object" => "credit_note",
+      "id" => "cn_1",
+      "invoice" => "in_1",
+      "customer" => "cus_1"
+    }
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do

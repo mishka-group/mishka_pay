@@ -62,6 +62,12 @@ defmodule MishkaPay.Providers.Stripe do
       `list_invoice_items/2` keep Invoice Items (`ii_...`) on their own: a charge that waits for
       the customer's next invoice, or goes on a draft one; the reference makes the idempotency
       key and is kept in the item's metadata.
+    * `create_credit_note/2`, `preview_credit_note/2`, `fetch_credit_note/2`,
+      `void_credit_note/2`, `list_credit_notes/2` and `list_credit_note_lines/3` use Credit
+      Notes (`cn_...`) on finalized invoices: by `amount` or by line (an invoice line `il_...`
+      or a custom one), with `refund_amount`, `credit_amount` and `out_of_band_amount`; the
+      reference makes the idempotency key and is kept in the note's metadata. A note's lines
+      carry no currency, so its lines are read with the note first.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
     * `upload_file/2` sends a file to `files.stripe.com` as `multipart/form-data`; dispute
@@ -128,6 +134,7 @@ defmodule MishkaPay.Providers.Stripe do
       :subscription_list,
       :invoice,
       :invoice_item,
+      :credit_note,
       :customer,
       :tax_id,
       :tax,
@@ -147,6 +154,7 @@ defmodule MishkaPay.Providers.Stripe do
     Checkout,
     Client,
     Coupon,
+    CreditNote,
     Customer,
     Errors,
     InvoiceItem,
@@ -224,6 +232,9 @@ defmodule MishkaPay.Providers.Stripe do
     "invoice.updated" => [:invoice],
     "invoice.sent" => [:invoice],
     "invoice.deleted" => [:invoice],
+    "credit_note.created" => [:credit_note],
+    "credit_note.updated" => [:credit_note],
+    "credit_note.voided" => [:credit_note],
     "product.created" => [:product],
     "product.updated" => [:product],
     "product.deleted" => [:product],
@@ -255,7 +266,8 @@ defmodule MishkaPay.Providers.Stripe do
   @doc """
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
   (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
-  `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`. Each is mapped to its
+  `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`; or the
+  provider object it is about (`:credit_note`). Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -666,6 +678,84 @@ defmodule MishkaPay.Providers.Stripe do
 
       page("/v1/invoiceitems", filters, opts, keys, &Mapper.invoice_item/1)
     end
+  end
+
+  # A credit note's reference makes the idempotency key, so a retry never credits twice.
+  @impl MishkaPay.Provider
+  def create_credit_note(%CreditNote{} = note, keys) do
+    with :ok <- note_fits(note),
+         {:ok, answer} <-
+           request(:post, "/v1/credit_notes", Mapper.credit_note_params(note), keys,
+             key: ProviderKit.idempotency_key("credit-note", note.tenant, note.reference)
+           ) do
+      Mapper.credit_note(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def preview_credit_note(%CreditNote{} = note, keys) do
+    with :ok <- note_fits(note),
+         {:ok, answer} <-
+           request(:get, "/v1/credit_notes/preview", Mapper.credit_note_params(note), keys) do
+      Mapper.credit_note(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_credit_note(credit_note_id, keys) do
+    with :ok <- stripe_id(credit_note_id, "cn_", :credit_note_id),
+         {:ok, answer} <- request(:get, "/v1/credit_notes/#{credit_note_id}", [], keys) do
+      Mapper.credit_note(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def void_credit_note(credit_note_id, keys) do
+    with :ok <- stripe_id(credit_note_id, "cn_", :credit_note_id),
+         {:ok, answer} <- request(:post, "/v1/credit_notes/#{credit_note_id}/void", %{}, keys) do
+      Mapper.credit_note(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_credit_notes(opts, keys) do
+    with :ok <- maybe_id(opts[:invoice_id], "in_", :invoice_id),
+         :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
+      filters = [invoice: opts[:invoice_id], customer: opts[:customer_id]]
+      page("/v1/credit_notes", filters, opts, keys, &Mapper.credit_note/1)
+    end
+  end
+
+  # Stripe's line items carry no currency: the note gives it.
+  @impl MishkaPay.Provider
+  def list_credit_note_lines(credit_note_id, opts, keys) do
+    with :ok <- stripe_id(credit_note_id, "cn_", :credit_note_id),
+         {:ok, %{"currency" => currency}} <-
+           request(:get, "/v1/credit_notes/#{credit_note_id}", [], keys) do
+      page(
+        "/v1/credit_notes/#{credit_note_id}/lines",
+        [],
+        opts,
+        keys,
+        &Mapper.credit_note_line(&1, currency)
+      )
+    end
+  end
+
+  # A finalized bill by its Stripe id, invoice lines by theirs, amounts Stripe counts, metadata it
+  # keeps.
+  defp note_fits(note) do
+    lines = note.lines || []
+    money = [note.amount, note.refund_amount, note.credit_amount, note.out_of_band_amount]
+
+    with :ok <- stripe_id(note.invoice_id, "in_", :invoice_id),
+         :ok <- all_fine(lines, &maybe_id(&1.invoice_line_id, "il_", :lines)),
+         :ok <-
+           money
+           |> Kernel.++(Enum.flat_map(lines, &[&1.amount, &1.unit_amount]))
+           |> Enum.map(&%{amount: &1})
+           |> currencies(),
+         do: metadata(note.metadata)
   end
 
   # A catalog price by its Stripe id, an amount in a currency Stripe counts, metadata it keeps.

@@ -61,6 +61,8 @@ defmodule MishkaPay.Provider do
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:invoice_item`: `create_invoice_item/2`, `update_invoice_item/2`, `delete_invoice_item/2`,
       `list_invoice_items/2`;
+    * `:credit_note`: `create_credit_note/2`, `preview_credit_note/2`, `fetch_credit_note/2`,
+      `void_credit_note/2`, `list_credit_notes/2`, `list_credit_note_lines/3`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
       `search_customers/2`, `delete_customer/2`;
     * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
@@ -113,6 +115,7 @@ defmodule MishkaPay.Provider do
     :subscription_list,
     :invoice,
     :invoice_item,
+    :credit_note,
     :customer,
     :tax_id,
     :tax,
@@ -155,6 +158,9 @@ defmodule MishkaPay.Provider do
     * `:invoice_item`: keeps charges on their own (add, change, remove, list) that wait for a
       customer's next bill, or go on a draft one. Apart from `:invoice`: a provider may bill
       without keeping charges between bills (PayPal's invoices hold their items only inside one).
+    * `:credit_note`: takes back part or all of a finalized bill with a credit note (by amount or
+      by line, refunded, credited to the customer's balance or settled outside), previews one,
+      reads, lists and voids them.
     * `:customer`: keeps buyers (create, read, update, list, delete).
     * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
     * `:tax`: counts the tax on a sale made outside its checkout, and records the sale for the
@@ -191,6 +197,7 @@ defmodule MishkaPay.Provider do
           | :subscription_list
           | :invoice
           | :invoice_item
+          | :credit_note
           | :customer
           | :tax_id
           | :tax
@@ -322,6 +329,39 @@ defmodule MishkaPay.Provider do
   """
   @callback list_invoice_items(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:credit_note`. Makes a credit note on `:invoice_id` for `:amount` or `:lines`, and
+  answers it with its `:id`.
+  """
+  @callback create_credit_note(MishkaPay.CreditNote.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:credit_note`. The note `create_credit_note/2` would make, without making it."
+  @callback preview_credit_note(MishkaPay.CreditNote.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:credit_note`. Reads one credit note again, with its lines."
+  @callback fetch_credit_note(credit_note_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:credit_note`. Voids an issued credit note, and answers it after."
+  @callback void_credit_note(credit_note_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:credit_note`. One page of credit notes, newest first; only those on `:invoice_id` or of
+  `:customer_id` when given.
+  """
+  @callback list_credit_notes(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:credit_note`. One page of a credit note's lines (`MishkaPay.CreditNoteLine`)."
+  @callback list_credit_note_lines(
+              credit_note_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:event_list`. One page of the provider's events, newest first: `:since` (a `DateTime`)
@@ -750,6 +790,12 @@ defmodule MishkaPay.Provider do
                       update_invoice_item: 2,
                       delete_invoice_item: 2,
                       list_invoice_items: 2,
+                      create_credit_note: 2,
+                      preview_credit_note: 2,
+                      fetch_credit_note: 2,
+                      void_credit_note: 2,
+                      list_credit_notes: 2,
+                      list_credit_note_lines: 3,
                       list_refunds: 2,
                       fetch_subscription: 2,
                       cancel_subscription: 3,
@@ -861,6 +907,14 @@ defmodule MishkaPay.Provider do
       update_invoice_item: 2,
       delete_invoice_item: 2,
       list_invoice_items: 2
+    ],
+    credit_note: [
+      create_credit_note: 2,
+      preview_credit_note: 2,
+      fetch_credit_note: 2,
+      void_credit_note: 2,
+      list_credit_notes: 2,
+      list_credit_note_lines: 3
     ],
     customer: [
       create_customer: 2,

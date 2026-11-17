@@ -58,7 +58,7 @@
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -116,6 +116,24 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   cannot change or be deleted (`Errors.Rejected`). A changed `:amount` is in the item's own
   currency. `:amount` reads back as the price of one, `:total` as all of it.
 - `list_invoice_items/3` filters by `customer_id:`, `invoice_id:` and `pending: true`.
+
+## Credit notes
+
+- A credit note (`cn_...`) is `POST /v1/credit_notes` on a finalized invoice; a draft cannot
+  take one. Its `:reference` makes the idempotency key and is kept in its metadata.
+  `preview_credit_note/1` is `GET /v1/credit_notes/preview` with the same fields.
+- `:amount` credits the whole bill, `:lines` each line: a line of the bill by its id (`il_...`,
+  an `MishkaPay.InvoiceLine`'s `:id`) with a `:quantity` or an `:amount`, or a line of its own
+  (`:name`, `:unit_amount`, `:quantity`).
+- On an open bill the note lowers what is due (`type: :pre_payment`). On a paid one
+  (`:post_payment`) `:refund_amount` + `:credit_amount` + `:out_of_band_amount` must make the
+  note's amount; a bill paid by hand has no charge to refund, so use the other two.
+- `void_credit_note/3` works only while the note's bill is still open; on a paid bill Stripe
+  refuses it (`Errors.Rejected`).
+- A note's lines carry no currency: `list_credit_note_lines/4` reads the note first (two
+  requests).
+- Stripe sends `credit_note.created`, `.updated` and `.voided`; the event's `:object_id` is the
+  note.
 
 ## Listing subscriptions
 

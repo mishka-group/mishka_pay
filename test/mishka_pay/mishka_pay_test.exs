@@ -669,6 +669,21 @@ defmodule MishkaPayTest do
                MishkaPay.fetch_subscription("checkout_only", "sub_1")
     end
 
+    test "a provider without credit notes refuses them, after the note is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
+               MishkaPay.list_credit_notes("acme", "site-a", invoice_id: "acme_in_1")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
+               MishkaPay.create_credit_note(%{
+                 provider: "acme",
+                 invoice_id: "acme_in_1",
+                 amount: %{amount: "5", currency: "USD"}
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.preview_credit_note(%{provider: "acme", invoice_id: "acme_in_1"})
+    end
+
     test "a provider that bills without keeping charges between bills refuses invoice items" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :invoice_item}} =
                MishkaPay.list_invoice_items("acme", "site-a", customer_id: "acme_cus_1")

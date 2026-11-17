@@ -1119,6 +1119,84 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:error, %Errors.Rejected{}} = MishkaPay.fetch_invoice("stripe", fourth)
   end
 
+  test "a credit note is previewed, made once per reference by line, listed and voided on an open bill, then made on a paid one",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "credit-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer_id, &1)) end)
+
+    {:ok, %Invoice{id: invoice_id}} =
+      MishkaPay.create_invoice(%{
+        provider: "stripe",
+        customer_id: customer_id,
+        collection: :send_invoice,
+        reference: "credit-bill-#{run}",
+        items: [
+          %{name: "Seat", amount: %{amount: "30.00", currency: "USD"}, quantity: 2},
+          %{name: "Setup", amount: %{amount: "50.00", currency: "USD"}}
+        ]
+      })
+
+    {:ok, %Invoice{status: :open, lines: lines}} =
+      MishkaPay.finalize_invoice("stripe", invoice_id)
+
+    %{id: "il_" <> _ = seat_line} = Enum.find(lines, &(&1.description == "Seat"))
+
+    note = %{
+      provider: "stripe",
+      invoice_id: invoice_id,
+      lines: [%{invoice_line_id: seat_line, quantity: 1}],
+      reason: :order_change,
+      memo: "One seat less",
+      reference: "credit-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.CreditNote{amount: preview_amount, type: :pre_payment}} =
+             MishkaPay.preview_credit_note(note)
+
+    assert Money.equal?(preview_amount, Money.new(:USD, "30.00"))
+
+    assert {:ok, %MishkaPay.CreditNote{id: "cn_" <> _ = id, status: :issued} = made} =
+             MishkaPay.create_credit_note(note)
+
+    assert {made.amount, made.reference, made.memo} ==
+             {preview_amount, "credit-#{run}", "One seat less"}
+
+    assert {:ok, %MishkaPay.CreditNote{id: ^id}} = MishkaPay.create_credit_note(note)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote{id: ^id}]}} =
+             MishkaPay.list_credit_notes("stripe", nil, invoice_id: invoice_id)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNoteLine{} = line]}} =
+             MishkaPay.list_credit_note_lines("stripe", id)
+
+    assert {line.type, line.invoice_line_id, line.quantity, line.amount} ==
+             {:invoice_line, seat_line, 1, Money.new(:USD, "30.00")}
+
+    assert {:ok, %MishkaPay.CreditNote{id: ^id, status: :void, voided_at: %DateTime{}}} =
+             MishkaPay.void_credit_note("stripe", id)
+
+    assert {:ok, %Invoice{status: :paid}} =
+             MishkaPay.pay_invoice("stripe", invoice_id, nil, out_of_band: true)
+
+    ten = %{amount: "10.00", currency: "USD"}
+
+    assert {:ok, %MishkaPay.CreditNote{type: :post_payment, out_of_band_amount: given} = paid} =
+             MishkaPay.create_credit_note(%{
+               provider: "stripe",
+               invoice_id: invoice_id,
+               amount: ten,
+               out_of_band_amount: ten,
+               reason: :product_unsatisfactory,
+               reference: "credit-paid-#{run}"
+             })
+
+    assert {paid.status, given} == {:issued, Money.new(:USD, "10.00")}
+  end
+
   test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
     url = "https://example.com/pay/webhooks/stripe/live-#{run_id()}"
 

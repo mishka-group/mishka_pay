@@ -57,7 +57,8 @@ defmodule MishkaPay do
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`, and charges kept for a bill:
       `:invoice_item_create`, `:invoice_item_update`, `:invoice_item_delete`,
-      `:invoice_item_list`;
+      `:invoice_item_list`, and credit notes: `:credit_note_create`, `:credit_note_preview`,
+      `:credit_note`, `:credit_note_void`, `:credit_note_list`, `:credit_note_line_list`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
       `:customer_search`, `:customer_delete`, `:portal`, the portal's setups:
       `:portal_configuration_create`, `:portal_configuration_update`, `:portal_configuration`,
@@ -1271,6 +1272,112 @@ defmodule MishkaPay do
       provider,
       tenant,
       & &1.list_invoice_items(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Makes a credit note from `attrs` (see `MishkaPay.CreditNote`) on finalized bill
+  `:invoice_id`: an `:amount` of it or `:lines`, a `:reason`, and on a paid bill where the money
+  goes (`:refund_amount`, `:credit_amount` onto the customer's balance, `:out_of_band_amount`).
+  Its `:reference` makes it once. Try it first with `preview_credit_note/1`.
+
+      MishkaPay.create_credit_note(%{provider: "stripe", tenant: site_id, invoice_id: bill.id,
+                                     amount: %{amount: "20", currency: "USD"},
+                                     refund_amount: %{amount: "20", currency: "USD"},
+                                     reason: :order_change, reference: "credit-" <> order.id})
+  """
+  @spec create_credit_note(map()) ::
+          {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+  def create_credit_note(attrs) when is_map(attrs) do
+    made(
+      :credit_note_create,
+      :credit_note,
+      attrs,
+      MishkaPay.CreditNote,
+      [:provider, :invoice_id],
+      :create_credit_note
+    )
+  end
+
+  @doc """
+  The credit note `create_credit_note/1` would make with the same `attrs`, with its amount, tax
+  and lines, without making it.
+  """
+  @spec preview_credit_note(map()) ::
+          {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+  def preview_credit_note(attrs) when is_map(attrs) do
+    made(
+      :credit_note_preview,
+      :credit_note,
+      attrs,
+      MishkaPay.CreditNote,
+      [:provider, :invoice_id],
+      :preview_credit_note
+    )
+  end
+
+  @doc "Reads credit note `credit_note_id` again from `provider`, with `tenant`'s keys."
+  @spec fetch_credit_note(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+  def fetch_credit_note(provider, credit_note_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(credit_note_id) do
+    capable(
+      :credit_note,
+      :credit_note,
+      provider,
+      tenant,
+      & &1.fetch_credit_note(credit_note_id, &2)
+    )
+  end
+
+  @doc """
+  Voids credit note `credit_note_id`: it stays on record and credits nothing. A provider may
+  void one only while its bill is open (Stripe does).
+  """
+  @spec void_credit_note(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.CreditNote.t()} | {:error, Splode.Error.t()}
+  def void_credit_note(provider, credit_note_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(credit_note_id) do
+    capable(
+      :credit_note,
+      :credit_note_void,
+      provider,
+      tenant,
+      & &1.void_credit_note(credit_note_id, &2)
+    )
+  end
+
+  @doc """
+  One page of credit notes at `provider`, newest first (`MishkaPay.Page` of
+  `MishkaPay.CreditNote`): `invoice_id:` those on one bill, `customer_id:` one customer's, plus
+  `limit:` and `after:`.
+  """
+  @spec list_credit_notes(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_credit_notes(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :credit_note,
+      :credit_note_list,
+      provider,
+      tenant,
+      & &1.list_credit_notes(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  One page of credit note `credit_note_id`'s lines (`MishkaPay.Page` of
+  `MishkaPay.CreditNoteLine`), plus `limit:` and `after:`.
+  """
+  @spec list_credit_note_lines(String.t(), String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_credit_note_lines(provider, credit_note_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(credit_note_id) do
+    capable(
+      :credit_note,
+      :credit_note_line_list,
+      provider,
+      tenant,
+      & &1.list_credit_note_lines(credit_note_id, limited(opts), &2)
     )
   end
 

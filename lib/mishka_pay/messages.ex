@@ -113,6 +113,8 @@ defmodule MishkaPay.Messages do
           | :subscription_search_needs
           | :subscription_status
           | :invoice_item_moves
+          | :credit_note_one_of
+          | :credit_line_needs
           | :choices
           | :fields_three
           | :merchant_of_record_off
@@ -645,6 +647,16 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:choices),
     do: dgettext_noop("mishka_pay", "The %{field} field takes only: %{choices}")
+
+  defp msgid(:credit_note_one_of),
+    do: dgettext_noop("mishka_pay", "A credit note takes an amount or lines, one of them")
+
+  defp msgid(:credit_line_needs),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A credit note line names a line of the bill with a quantity or an amount, or a name with the credit for one"
+      )
 
   defp msgid(:invoice_item_moves),
     do:

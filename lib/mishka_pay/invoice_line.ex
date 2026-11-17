@@ -7,12 +7,14 @@ defmodule MishkaPay.InvoiceLine do
   One line of a `MishkaPay.Invoice`: what it bills, how much and for which period. A
   guarded_struct the provider fills in. A line with `proration: true` is the credit for time not
   used on the old plan, or the charge for the rest of the period on the new one, after a
-  `MishkaPay.change_subscription/1`.
+  `MishkaPay.change_subscription/1`. Its `:id` (`il_...` at Stripe) names it in a
+  `MishkaPay.CreditNoteLine`.
   """
 
   use GuardedStruct
 
   guardedstruct authorized_fields: true do
+    field :id, String.t(), derives: "validate(string)"
     field :description, String.t(), derives: "validate(string)"
     field :amount, Money.t(), validator: {MishkaPay.Money, :signed_field}
     field :quantity, non_neg_integer(), derives: "validate(integer)"

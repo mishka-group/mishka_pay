@@ -56,6 +56,7 @@ webhook endpoint to these:
 | `setup_intent.succeeded`, `.setup_failed`; `payment_method.attached`, `.detached`, `.updated`, `.automatically_updated` | the customer it names |
 | `entitlements.active_entitlement_summary.updated` | the customer whose entitlements changed (`:customer_id`) |
 | `customer.tax_id.created`, `.updated`, `.deleted` | the customer the tax id belongs to |
+| `credit_note.created`, `.updated`, `.voided` | nothing kept: `:object_id` is the note (`:object_type` `"credit_note"`), read with `fetch_credit_note/3` |
 
 Any other event is verified and stored, and changes nothing.
 

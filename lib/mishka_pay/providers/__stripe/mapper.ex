@@ -12,6 +12,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Address,
     Checkout,
     Coupon,
+    CreditNote,
+    CreditNoteLine,
     Customer,
     Event,
     Invoice,
@@ -997,11 +999,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
   end
 
-  defp item_metadata(%InvoiceItem{metadata: nil, reference: nil}), do: %{}
-
   defp item_metadata(%InvoiceItem{} = item) do
-    reference = (item.reference && %{@reference => item.reference}) || %{}
-    %{"metadata" => Map.merge(item.metadata || %{}, reference)}
+    case with_reference(item.metadata, item.reference) do
+      nil -> %{}
+      metadata -> %{"metadata" => metadata}
+    end
   end
 
   @doc "A Stripe invoice item (`object: \"invoiceitem\"`) as a `MishkaPay.InvoiceItem`."
@@ -1040,6 +1042,117 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp unit_money(_none, _currency), do: nil
 
+  @doc """
+  Params of `POST /v1/credit_notes` (and of its preview): the bill, the amount or the lines, where
+  the money goes, and the reference in its metadata.
+  """
+  @spec credit_note_params(CreditNote.t()) :: map()
+  def credit_note_params(%CreditNote{} = note) do
+    %{
+      "invoice" => note.invoice_id,
+      "amount" => minor_of(note.amount),
+      "lines" => credit_lines_params(note.lines),
+      "reason" => note.reason && Atom.to_string(note.reason),
+      "refund_amount" => minor_of(note.refund_amount),
+      "credit_amount" => minor_of(note.credit_amount),
+      "out_of_band_amount" => minor_of(note.out_of_band_amount),
+      "memo" => note.memo,
+      "metadata" => with_reference(note.metadata, note.reference)
+    }
+    |> reject_nil()
+  end
+
+  defp credit_lines_params(lines) when lines in [nil, []], do: nil
+  defp credit_lines_params(lines), do: Enum.map(lines, &credit_line_params/1)
+
+  defp credit_line_params(%CreditNoteLine{invoice_line_id: id} = line) when is_binary(id) do
+    %{
+      "type" => "invoice_line_item",
+      "invoice_line_item" => id,
+      "quantity" => line.quantity,
+      "amount" => minor_of(line.amount)
+    }
+    |> reject_nil()
+  end
+
+  defp credit_line_params(%CreditNoteLine{} = line) do
+    %{
+      "type" => "custom_line_item",
+      "description" => line.name,
+      "quantity" => line.quantity || 1,
+      "unit_amount_decimal" => line.unit_amount |> minor() |> Integer.to_string()
+    }
+  end
+
+  defp minor_of(nil), do: nil
+  defp minor_of(money), do: minor(money)
+
+  defp with_reference(nil, nil), do: nil
+  defp with_reference(metadata, nil), do: metadata
+  defp with_reference(metadata, reference), do: Map.put(metadata || %{}, @reference, reference)
+
+  @credit_line_types %{"invoice_line_item" => :invoice_line, "custom_line_item" => :custom}
+
+  @doc "A Stripe credit note (`object: \"credit_note\"`) as a `MishkaPay.CreditNote`, with its lines."
+  @spec credit_note(map()) :: {:ok, CreditNote.t()} | {:error, Splode.Error.t()}
+  def credit_note(note) do
+    currency = note["currency"]
+
+    %{
+      provider: "stripe",
+      id: note["id"],
+      invoice_id: id_of(note["invoice"]),
+      customer_id: id_of(note["customer"]),
+      amount: money(note["amount"], currency),
+      amount_tax: money(tax_of(note), currency),
+      lines:
+        note
+        |> get_in(["lines", "data"])
+        |> List.wrap()
+        |> Enum.map(&credit_line(&1, currency)),
+      reason: known(note["reason"], ~w(duplicate fraudulent order_change product_unsatisfactory)),
+      out_of_band_amount: money(note["out_of_band_amount"], currency),
+      memo: blank(note["memo"]),
+      number: note["number"],
+      status: known(note["status"], ~w(issued void)),
+      type: known(note["type"], ~w(pre_payment post_payment mixed)),
+      refund_ids:
+        note["refunds"] |> List.wrap() |> Enum.map(&id_of(&1["refund"])) |> Enum.reject(&is_nil/1),
+      pdf_url: note["pdf"],
+      reference: get_in(note, ["metadata", @reference]),
+      metadata: Map.delete(note["metadata"] || %{}, @reference),
+      voided_at: time(note["voided_at"]),
+      created_at: time(note["created"])
+    }
+    |> CreditNote.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  A Stripe credit note line item as a `MishkaPay.CreditNoteLine`, in its note's `currency` (the
+  line carries none).
+  """
+  @spec credit_note_line(map(), String.t()) ::
+          {:ok, CreditNoteLine.t()} | {:error, Splode.Error.t()}
+  def credit_note_line(line, currency) do
+    line
+    |> credit_line(currency)
+    |> CreditNoteLine.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp credit_line(line, currency) do
+    %{
+      id: line["id"],
+      type: Map.get(@credit_line_types, line["type"]),
+      invoice_line_id: id_of(line["invoice_line_item"]),
+      name: blank(line["description"]),
+      quantity: line["quantity"],
+      unit_amount: unit_money(line["unit_amount_decimal"], currency),
+      amount: money(line["amount"], currency)
+    }
+  end
+
   # Stripe sums an invoice's taxes in `total_taxes`.
   defp tax_of(%{"total_taxes" => taxes}) when is_list(taxes),
     do: Enum.reduce(taxes, 0, &((&1["amount"] || 0) + &2))
@@ -1048,6 +1161,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp line(line, currency) do
     %{
+      id: line["id"],
       description: line["description"],
       amount: signed_money(line["amount"], currency),
       quantity: line["quantity"],

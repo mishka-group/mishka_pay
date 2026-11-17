@@ -167,6 +167,24 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no credit notes: every credit note call is refused before any request" do
+      note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
+
+      for call <- [
+            fn -> MishkaPay.create_credit_note(note) end,
+            fn -> MishkaPay.preview_credit_note(note) end,
+            fn -> MishkaPay.fetch_credit_note("paypal", "CN1", "site-a") end,
+            fn -> MishkaPay.void_credit_note("paypal", "CN1", "site-a") end,
+            fn -> MishkaPay.list_credit_notes("paypal", "site-a", invoice_id: "INV2-1") end,
+            fn -> MishkaPay.list_credit_note_lines("paypal", "CN1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :credit_note}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal keeps no charges between bills: every invoice item call is refused before any request" do
       for call <- [
             fn ->

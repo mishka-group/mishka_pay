@@ -9,7 +9,8 @@ defmodule ShopWeb.BillsComponent do
   Stripe sells as merchant of record only through checkouts and payment links: with merchant of
   record on, Stripe refuses a one-off bill, and the page says so.
 
-  Below it, `ShopWeb.InvoiceItemsComponent` keeps charges that wait for a customer's next bill.
+  An open or paid bill takes credit notes (`ShopWeb.CreditNotesComponent`). Below it,
+  `ShopWeb.InvoiceItemsComponent` keeps charges that wait for a customer's next bill.
   """
 
   use ShopWeb, :live_component
@@ -36,6 +37,16 @@ defmodule ShopWeb.BillsComponent do
   end
 
   @impl true
+  # A credit note changed what the bill owes: it is read again (`ShopWeb.CreditNotesComponent`).
+  def update(%{reread: id}, %{assigns: %{bill: %{id: id}}} = socket) do
+    case MishkaPay.fetch_invoice("stripe", id, socket.assigns.tenant) do
+      {:ok, bill} -> {:ok, socket |> assign(bill: bill) |> step("Read again", bill)}
+      {:error, error} -> {:ok, refused(socket, error)}
+    end
+  end
+
+  def update(%{reread: _another}, socket), do: {:ok, socket}
+
   def update(assigns, socket),
     do: {:ok, assign(socket, tenant: assigns.tenant, customers: customers())}
 
@@ -241,6 +252,13 @@ defmodule ShopWeb.BillsComponent do
             Bill <code>{@deleted}</code> was a draft and is deleted.
           </p>
           <.bill :if={@bill} bill={@bill} myself={@myself} />
+          <.live_component
+            :if={@bill && @bill.status in [:open, :paid]}
+            module={ShopWeb.CreditNotesComponent}
+            id="credit-notes"
+            tenant={@tenant}
+            bill={@bill}
+          />
           <ol :if={@steps != []} class="text-xs space-y-1 border-t border-base-300 pt-2">
             <li
               :for={step <- Enum.reverse(@steps)}
