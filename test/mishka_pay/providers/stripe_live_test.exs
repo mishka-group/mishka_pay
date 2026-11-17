@@ -2144,5 +2144,121 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
   end
 
+  # The account this key reaches is checked by Stripe, not by Mishka Pay: a site's keys that name
+  # an account the platform does not have are refused plainly, and the key never shows.
+  test "a site's keys naming a connected account the platform does not have are a plain rejection",
+       %{key: key} do
+    MishkaPay.Test.put_keys("stripe", %{secret_key: key, account_id: "acct_1doesnotexist0"}, "x")
+
+    assert {:error, %Errors.Rejected{code: "account_invalid"} = error} =
+             MishkaPay.fetch_balance("stripe", "x")
+
+    assert Exception.message(error) =~ "connected account"
+    refute Exception.message(error) =~ "sk_test"
+  end
+
+  # Stripe makes connected accounts only for a platform that signed up for Connect in its
+  # Dashboard; a sandbox that has not is told so plainly, and that is all this test can check there.
+  test "an express account is made once per reference, read, changed, listed and onboarded by link" do
+    run = run_id()
+
+    attrs = %{
+      provider: "stripe",
+      type: :express,
+      country: "US",
+      email: "seller-#{run}@example.com",
+      capabilities: ["card_payments", "transfers"],
+      reference: "site-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.Page{items: listed}} =
+             MishkaPay.list_connected_accounts("stripe", nil, limit: 5)
+
+    assert Enum.all?(listed, &match?(%MishkaPay.ConnectedAccount{id: "acct_" <> _}, &1))
+
+    case MishkaPay.create_connected_account(attrs) do
+      {:ok, %MishkaPay.ConnectedAccount{id: "acct_" <> _ = id, type: :express} = account} ->
+        with_account(id, fn -> onboarded_by_link(account, attrs, run) end)
+
+      {:error, %Errors.Rejected{code: "connect_not_set_up"} = error} ->
+        assert Exception.message(error) =~ "signed up for Connect"
+    end
+  end
+
+  # Money can reach only a connected account that finished onboarding, which a test cannot do on
+  # its own; what runs live is reading the lists, and that an account or object that is not there
+  # is refused plainly, for a transfer and for a checkout made for a seller.
+  test "transfers, payouts and application fees are listed, and money for a seller that is not there is refused" do
+    run = run_id()
+
+    for {list, item} <- [
+          {MishkaPay.list_transfers("stripe", nil, limit: 5), MishkaPay.Transfer},
+          {MishkaPay.list_payouts("stripe", nil, limit: 5), MishkaPay.Payout},
+          {MishkaPay.list_application_fees("stripe", nil, limit: 5), MishkaPay.ApplicationFee}
+        ] do
+      assert {:ok, %MishkaPay.Page{items: items}} = list
+      assert Enum.all?(items, &is_struct(&1, item))
+    end
+
+    for missing <- [
+          MishkaPay.fetch_transfer("stripe", "tr_doesnotexist"),
+          MishkaPay.fetch_payout("stripe", "po_doesnotexist"),
+          MishkaPay.fetch_application_fee("stripe", "fee_doesnotexist"),
+          MishkaPay.create_transfer(%{
+            provider: "stripe",
+            amount: %{amount: "1.00", currency: "USD"},
+            destination: "acct_1doesnotexist0",
+            reference: "transfer-#{run}"
+          })
+        ] do
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} = missing
+    end
+
+    assert {:error, %Errors.Rejected{}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false,
+               destination: "acct_1doesnotexist0",
+               application_fee: %{amount: "2.00", currency: "USD"},
+               reference: "seller-#{run}"
+             })
+  end
+
+  # A test account is deleted when the test is done with it, whatever happened.
+  defp with_account(id, fun) do
+    fun.()
+  after
+    MishkaPay.request(%{provider: "stripe", method: :delete, path: "/v1/accounts/#{id}"})
+  end
+
+  defp onboarded_by_link(%{id: id} = account, attrs, run) do
+    assert account.reference == "site-#{run}"
+    assert account.charges_enabled == false
+    assert {:ok, %{id: ^id}} = MishkaPay.create_connected_account(attrs)
+
+    name = "Shop #{run}"
+
+    assert {:ok, %MishkaPay.ConnectedAccount{id: ^id, business_name: ^name}} =
+             MishkaPay.update_connected_account(%{
+               provider: "stripe",
+               id: id,
+               business_name: name
+             })
+
+    assert {:ok, %MishkaPay.AccountLink{url: "https://connect.stripe.com/" <> _}} =
+             MishkaPay.account_link(%{
+               provider: "stripe",
+               account_id: id,
+               refresh_url: "https://shop.test/connect/again",
+               return_url: "https://shop.test/connect/done"
+             })
+
+    # A login link needs an account that finished onboarding.
+    assert {:error, %Errors.Rejected{}} = MishkaPay.login_link("stripe", id)
+  end
+
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

@@ -341,6 +341,53 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no connected accounts: every Connect call is refused before any request" do
+      link = %{
+        provider: "paypal",
+        tenant: "site-a",
+        account_id: "A1",
+        refresh_url: "https://shop.test/again",
+        return_url: "https://shop.test/done"
+      }
+
+      for call <- [
+            fn -> MishkaPay.create_connected_account(%{provider: "paypal", tenant: "site-a"}) end,
+            fn -> MishkaPay.fetch_connected_account("paypal", "A1", "site-a") end,
+            fn -> MishkaPay.update_connected_account(%{provider: "paypal", id: "A1"}) end,
+            fn -> MishkaPay.list_connected_accounts("paypal", "site-a") end,
+            fn -> MishkaPay.reject_connected_account("paypal", "A1", "site-a") end,
+            fn -> MishkaPay.account_link(link) end,
+            fn -> MishkaPay.login_link("paypal", "A1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :connect}} = call.()
+      end
+
+      for {call, capability} <- [
+            {fn -> MishkaPay.fetch_application_fee("paypal", "F1", "site-a") end, :connect},
+            {fn -> MishkaPay.list_application_fees("paypal", "site-a") end, :connect},
+            {fn -> MishkaPay.refund_application_fee("paypal", "F1", "site-a") end, :connect},
+            {fn ->
+               MishkaPay.create_transfer(%{
+                 provider: "paypal",
+                 amount: %{amount: "5", currency: "USD"},
+                 destination: "A1",
+                 reference: "t-1"
+               })
+             end, :transfer},
+            {fn -> MishkaPay.fetch_transfer("paypal", "T1", "site-a") end, :transfer},
+            {fn -> MishkaPay.list_transfers("paypal", "site-a") end, :transfer},
+            {fn -> MishkaPay.reverse_transfer("paypal", "T1", "site-a") end, :transfer},
+            {fn -> MishkaPay.fetch_payout("paypal", "P1", "site-a") end, :payout},
+            {fn -> MishkaPay.list_payouts("paypal", "site-a") end, :payout},
+            {fn -> MishkaPay.cancel_payout("paypal", "P1", "site-a") end, :payout}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: ^capability}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal has no credit notes: every credit note call is refused before any request" do
       note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
 

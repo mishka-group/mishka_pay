@@ -14,6 +14,73 @@
 - A write's `:reference` with its method and path makes the idempotency key; without one, a
   write gets a fresh key that its retries reuse.
 
+## Connect: a platform and its sites
+
+- A platform (Mishka Cloud, a marketplace) keeps one Stripe secret key and gives each site its
+  own connected account (`acct_...`). The site's keys answer the platform's `secret_key` with
+  the site's `account_id`; every Stripe request for that tenant then carries
+  `Stripe-Account: acct_...`, so its payments, customers and refunds live on the site's account.
+  Keys without `account_id` are the platform itself.
+- The header comes only from the keys. No call, `RequestOptions` or `MishkaPay.request/1` can
+  set it: a raw call has no header field. An `account_id` that is not `acct_` and plain is
+  `Errors.Invalid` on `:account_id` before any request.
+- Webhooks: a tenant with `account_id` takes only events that name that account (Stripe's
+  top-level `account`); an event of the platform's own account or of another connected account
+  is refused with 400 (`BadSignature`, reason `:account`). Mishka Pay never routes an event to
+  another tenant: it keeps no map from account to site, and a message checked with one tenant's
+  secret must never act on another's data. A platform subscribes **one** Connect endpoint
+  ("Events from: Connected accounts") to its own tenant's URL (keys without `account_id`); each
+  event there names its `:account`, and the host's listener finds the site by it. Never point a
+  Connect endpoint at a site's URL when the platform has more than one connected account: it
+  receives every account's events, refuses the others, and Stripe retries them until it turns
+  the endpoint off.
+- `create_connected_account/1` is `POST /v1/accounts` with the platform's keys. Stripe's `type`
+  is deprecated on this API version: `:express` is sent as `controller` (Express dashboard, the
+  platform pays fees and answers for losses), `:standard` as a full dashboard, `:custom` as no
+  dashboard with the platform collecting requirements. Its `:reference` makes the idempotency key
+  and is kept in metadata. A platform that has not signed up for Connect in the Dashboard is
+  `Errors.Rejected` with code `"connect_not_set_up"`.
+- `account_link/1` is `POST /v1/account_links` (`account_onboarding` or `account_update`); its
+  URL runs out in minutes and works once, so make it per click and redirect at once. Both pages
+  are `https` (or `http` on `localhost`). Coming back to `return_url` does not mean the account
+  is ready: read it (`:details_submitted`, `:charges_enabled`, `:requirements_due`). `login_link/3`
+  works only for an Express account that finished onboarding.
+- `reject_connected_account/4` is for good; Stripe's reasons on this API version are `credit`,
+  `fraud_no_intent_to_fulfill`, `fraud_other`, `fraud_payment_method_casher`,
+  `fraud_payment_method_tester`, `terms_of_service` and `other` (the default). Account ids start
+  with `acct_`.
+- Stripe sends `account.updated` (onboarding moved on, a capability turned on or off) and
+  `account.application.deauthorized` (a Standard account left the platform) to the platform's
+  Connect endpoint; `event.account` names the account.
+
+## Connect: money between accounts
+
+- Two ways to sell for a seller. **Destination charge**: the platform's keys (no `account_id`)
+  and a checkout with `destination:` (and usually `on_behalf_of:`): the payment lives on the
+  platform and Stripe moves it on (`payment_intent_data[transfer_data][destination]`). **Direct
+  charge**: the site's keys name its `account_id`, so the checkout is made on the seller's own
+  account. Either way `application_fee:` is `application_fee_amount` (one-time) and
+  `application_fee_percent:` is `subscription_data[application_fee_percent]`; both go to the
+  platform. Mishka Pay makes PaymentIntents only through a checkout, so these are the only
+  places it sends them.
+- `create_transfer/1` is `POST /v1/transfers` from the platform's balance: `:reference` is
+  required, makes the idempotency key and is kept in metadata; `:source_charge_id` (`ch_...`)
+  is `source_transaction`, so the transfer waits for that sale's money. A destination that is
+  not the platform's is `Errors.Rejected` with code `"resource_missing"` (param `destination`).
+- `reverse_transfer/4` is `POST /v1/transfers/:id/reversals` with `expand[]=transfer`, so one
+  request answers the transfer after (`:amount_reversed`, `:reversed`). `refund_application_fee/4`
+  is `POST /v1/application_fees/:id/refunds` with `expand[]=fee`, the same way. Each with a
+  `:reference` is made once; the same reference on another transfer or fee is another call.
+- `list_payouts/3` (`status:` `:pending`, `:in_transit`, `:paid`, `:failed`, `:canceled`),
+  `fetch_payout/3` and `cancel_payout/3` act on the account the keys act for: the platform, or
+  with a site's `account_id` the seller's. Only a `:pending` payout can be canceled.
+- Ids: transfers `tr_`, payouts `po_`, application fees `fee_`, accounts `acct_`; a wrong kind is
+  `Errors.Invalid` before any request.
+- Stripe sends `transfer.created`, `.updated`, `.reversed`; `payout.created`, `.updated`,
+  `.paid`, `.failed`, `.canceled`, `.reconciliation_completed`; `application_fee.created`,
+  `.refunded`, `.refund.updated`. A seller's payout events reach the platform's Connect endpoint
+  with `event.account` set.
+
 ## Retries and rate limits
 
 - A read, and a write with its idempotency key, is tried again on a network error and on 408,

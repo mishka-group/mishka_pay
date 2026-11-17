@@ -93,6 +93,11 @@ defmodule MishkaPay do
     * entitlements: `:feature_create`, `:feature_attach`, `:entitlement_list`;
     * money views: `:balance`, `:balance_transaction_list`, `:customer_balance_adjust`,
       `:customer_balance_list`;
+    * a platform's sellers: `:connected_account_create`, `:connected_account`,
+      `:connected_account_update`, `:connected_account_list`, `:connected_account_reject`,
+      `:account_link`, `:login_link`, `:application_fee`, `:application_fee_list`,
+      `:application_fee_refund`; money between accounts: `:transfer_create`, `:transfer`,
+      `:transfer_list`, `:transfer_reverse`, `:payout`, `:payout_list`, `:payout_cancel`;
     * events: `:event_list`;
     * a call to the provider's own API: `:raw_request`.
   """
@@ -175,7 +180,7 @@ defmodule MishkaPay do
   def capture_payment(provider, payment_id, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(payment_id) do
     capable(:capture, :payment_capture, provider, tenant, fn module, keys ->
-      with {:ok, amount} <- capture_amount(opts[:amount]),
+      with {:ok, amount} <- part_amount(opts[:amount]),
            do: module.capture_payment(payment_id, [amount: amount], keys)
     end)
   end
@@ -343,10 +348,10 @@ defmodule MishkaPay do
     end
   end
 
-  # The part to take: money above zero, or nil for all of it.
-  defp capture_amount(nil), do: {:ok, nil}
+  # The part to take or give back: money above zero, or nil for all of it.
+  defp part_amount(nil), do: {:ok, nil}
 
-  defp capture_amount(amount) do
+  defp part_amount(amount) do
     case MishkaPay.Money.field(:amount, amount) do
       {:ok, :amount, %Money{} = money} ->
         if Money.positive?(money),
@@ -1471,6 +1476,259 @@ defmodule MishkaPay do
     )
   end
 
+  @doc """
+  Makes a connected account for a seller from `attrs` (see `MishkaPay.ConnectedAccount`), with
+  the platform's keys: `:type` (`:express` by default), `:country`, `:email`, `:capabilities`
+  and a `:reference` that makes it once. Then send the seller to `account_link/1`, and give the
+  seller's site its id as `:account_id` in its keys.
+  """
+  @spec create_connected_account(map()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def create_connected_account(attrs) when is_map(attrs) do
+    made(
+      :connected_account_create,
+      :connect,
+      attrs,
+      MishkaPay.ConnectedAccount,
+      [:provider],
+      :create_connected_account
+    )
+  end
+
+  @doc """
+  Reads connected account `account_id` (`MishkaPay.ConnectedAccount`): whether it can take
+  payments and payouts yet, and what the provider still needs from the seller.
+  """
+  @spec fetch_connected_account(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def fetch_connected_account(provider, account_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(account_id) do
+    capable(
+      :connect,
+      :connected_account,
+      provider,
+      tenant,
+      & &1.fetch_connected_account(account_id, &2)
+    )
+  end
+
+  @doc """
+  Changes the connected account `attrs` names by `:id`: the `:email`, `:business_name`,
+  `:capabilities` (asked for on top of those it has) or `:metadata` given. Answers it after.
+  """
+  @spec update_connected_account(map()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def update_connected_account(attrs) when is_map(attrs) do
+    made(
+      :connected_account_update,
+      :connect,
+      attrs,
+      MishkaPay.ConnectedAccount,
+      [:provider, :id],
+      :update_connected_account
+    )
+  end
+
+  @doc """
+  One page of the platform's connected accounts, newest first (`MishkaPay.Page` of
+  `MishkaPay.ConnectedAccount`), with `limit:` and `after:`.
+  """
+  @spec list_connected_accounts(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_connected_accounts(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :connect,
+      :connected_account_list,
+      provider,
+      tenant,
+      & &1.list_connected_accounts(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Turns connected account `account_id` down for good: it takes no more payments or payouts.
+  `reason:` is the provider's word for why (Stripe: `"fraud_other"`, `"terms_of_service"`,
+  `"credit"`, `"other"`...; `"other"` when left out). Answers the account after.
+  """
+  @spec reject_connected_account(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+  def reject_connected_account(provider, account_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(account_id) do
+    capable(
+      :connect,
+      :connected_account_reject,
+      provider,
+      tenant,
+      & &1.reject_connected_account(account_id, opts, &2)
+    )
+  end
+
+  @doc """
+  Makes a one-time link (`MishkaPay.AccountLink`) that sends a seller to the provider's pages for
+  their connected account: `:account_id`, `:type` (`:onboarding` or `:update`), `:refresh_url`
+  and `:return_url`. Redirect the seller to its `:url` at once; it runs out in minutes.
+  """
+  @spec account_link(map()) :: {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  def account_link(attrs) when is_map(attrs) do
+    made(
+      :account_link,
+      :connect,
+      attrs,
+      MishkaPay.AccountLink,
+      [:provider, :account_id],
+      :account_link
+    )
+  end
+
+  @doc """
+  Makes a one-time link into connected account `account_id`'s own dashboard at the provider
+  (`MishkaPay.AccountLink`, `type: :login`), for a seller who finished onboarding.
+  """
+  @spec login_link(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  def login_link(provider, account_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(account_id) do
+    capable(:connect, :login_link, provider, tenant, & &1.login_link(account_id, &2))
+  end
+
+  @doc """
+  Reads application fee `fee_id` (`MishkaPay.ApplicationFee`): the platform's cut of a seller's
+  sale, and what of it was given back.
+  """
+  @spec fetch_application_fee(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.ApplicationFee.t()} | {:error, Splode.Error.t()}
+  def fetch_application_fee(provider, fee_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(fee_id) do
+    capable(:connect, :application_fee, provider, tenant, & &1.fetch_application_fee(fee_id, &2))
+  end
+
+  @doc """
+  One page of the platform's application fees, newest first (`MishkaPay.Page` of
+  `MishkaPay.ApplicationFee`): `charge_id:` only one sale's, plus `limit:` and `after:`.
+  """
+  @spec list_application_fees(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_application_fees(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :connect,
+      :application_fee_list,
+      provider,
+      tenant,
+      & &1.list_application_fees(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Gives application fee `fee_id` back to the seller: all of it, or `amount:` (money in the fee's
+  currency). `reference:` makes it once. Answers the fee after, with `:amount_refunded`.
+  """
+  @spec refund_application_fee(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.ApplicationFee.t()} | {:error, Splode.Error.t()}
+  def refund_application_fee(provider, fee_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(fee_id) do
+    capable(:connect, :application_fee_refund, provider, tenant, fn module, keys ->
+      with {:ok, amount} <- part_amount(opts[:amount]),
+           do: module.refund_application_fee(fee_id, part(opts, amount, tenant), keys)
+    end)
+  end
+
+  @doc """
+  Sends money from the platform's balance to a connected account, from `attrs` (see
+  `MishkaPay.Transfer`): `:amount`, `:destination` and a `:reference` that sends it once.
+  """
+  @spec create_transfer(map()) :: {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+  def create_transfer(attrs) when is_map(attrs) do
+    made(
+      :transfer_create,
+      :transfer,
+      attrs,
+      MishkaPay.Transfer,
+      [:provider, :amount, :destination, :reference],
+      :create_transfer
+    )
+  end
+
+  @doc "Reads transfer `transfer_id` (`MishkaPay.Transfer`), with what was taken back of it."
+  @spec fetch_transfer(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+  def fetch_transfer(provider, transfer_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(transfer_id) do
+    capable(:transfer, :transfer, provider, tenant, & &1.fetch_transfer(transfer_id, &2))
+  end
+
+  @doc """
+  One page of the platform's transfers, newest first (`MishkaPay.Page` of `MishkaPay.Transfer`):
+  `destination:` only those to one connected account, `transfer_group:` one order's, plus
+  `limit:` and `after:`.
+  """
+  @spec list_transfers(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_transfers(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:transfer, :transfer_list, provider, tenant, & &1.list_transfers(limited(opts), &2))
+  end
+
+  @doc """
+  Takes transfer `transfer_id` back from its connected account: all of it, or `amount:` (money
+  in the transfer's currency). `reference:` makes it once. Answers the transfer after, with
+  `:amount_reversed`.
+  """
+  @spec reverse_transfer(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+  def reverse_transfer(provider, transfer_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(transfer_id) do
+    capable(:transfer, :transfer_reverse, provider, tenant, fn module, keys ->
+      with {:ok, amount} <- part_amount(opts[:amount]),
+           do: module.reverse_transfer(transfer_id, part(opts, amount, tenant), keys)
+    end)
+  end
+
+  @doc """
+  Reads payout `payout_id` (`MishkaPay.Payout`) of the account `tenant`'s keys act for: the
+  platform's own, or the connected account they name.
+  """
+  @spec fetch_payout(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+  def fetch_payout(provider, payout_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payout_id) do
+    capable(:payout, :payout, provider, tenant, & &1.fetch_payout(payout_id, &2))
+  end
+
+  @doc """
+  One page of payouts, newest first (`MishkaPay.Page` of `MishkaPay.Payout`): `status:` only
+  `:pending`, `:in_transit`, `:paid`, `:failed` or `:canceled` ones, plus `limit:` and `after:`.
+  """
+  @spec list_payouts(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_payouts(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:payout, :payout_list, provider, tenant, fn module, keys ->
+      case opts[:status] in [nil, :pending, :in_transit, :paid, :failed, :canceled] do
+        true ->
+          module.list_payouts(limited(opts), keys)
+
+        false ->
+          ProviderKit.invalid(
+            :status,
+            Messages.text(:choices,
+              field: :status,
+              choices: "pending, in_transit, paid, failed, canceled"
+            )
+          )
+      end
+    end)
+  end
+
+  @doc "Stops payout `payout_id` while it is still `:pending`; answers it `:canceled`."
+  @spec cancel_payout(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+  def cancel_payout(provider, payout_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payout_id) do
+    capable(:payout, :payout_cancel, provider, tenant, & &1.cancel_payout(payout_id, &2))
+  end
+
+  # The options of a part given back: its checked amount, and the tenant its reference is for.
+  defp part(opts, amount, tenant),
+    do: opts |> Keyword.take([:reference]) |> Keyword.merge(amount: amount, tenant: tenant)
+
   # A struct built from the caller's map and handed to the provider's `callback`.
   defp made(operation, capability, attrs, struct_module, needed, callback) do
     span(operation, attrs, fn ->
@@ -2200,14 +2458,19 @@ defmodule MishkaPay do
   end
 
   # Each choice that needs more than `:checkout` asks the provider for its capability: a
-  # subscription, an embedded form, a hold on the card, a card saved without a charge, shipping.
+  # subscription, an embedded form, a hold on the card, a card saved without a charge, shipping,
+  # a sale for a seller of a platform.
   defp mode_capable(%Checkout{provider: provider} = checkout) do
     [
       {checkout.mode == :subscription, :subscription},
       {checkout.ui_mode == :embedded, :embedded_checkout},
       {checkout.capture == :manual, :capture},
       {checkout.mode == :setup, :payment_method},
-      {not is_nil(checkout.shipping_countries) or not is_nil(checkout.shipping_rates), :shipping}
+      {not is_nil(checkout.shipping_countries) or not is_nil(checkout.shipping_rates), :shipping},
+      {Enum.any?(
+         [:destination, :on_behalf_of, :application_fee, :application_fee_percent],
+         &(not is_nil(Map.get(checkout, &1)))
+       ), :connect}
     ]
     |> Enum.reduce_while(:ok, fn
       {true, capability}, :ok ->

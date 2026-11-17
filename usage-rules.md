@@ -75,7 +75,9 @@ Keys fields: `secret_key` (required), `publishable_key`, `webhook_secret`, `webh
 (older secrets still accepted while a rolled one runs out, see `usage-rules/webhooks.md`), `mode` (`:test`
 default, or `:live`), `merchant_of_record` (Stripe Managed Payments, `true`/`false`/absent),
 `refunds` (`:once` default, or `:many`), `automatic_tax` (`true` counts the tax of every checkout
-and payment link of this site with Stripe Tax; a checkout's own choice wins), `extra` (a map). Answer `nil` for a tenant without keys.
+and payment link of this site with Stripe Tax; a checkout's own choice wins), `account_id` (the
+connected account the site acts for on a Stripe Connect platform: `acct_...`, sent as
+`Stripe-Account` on every request; see `usage-rules/stripe.md`), `extra` (a map). Answer `nil` for a tenant without keys.
 
 Mount the webhook endpoint **before** `Plug.Parsers` in the endpoint (it needs the raw body):
 
@@ -157,6 +159,11 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_balance(provider, tenant)` | `%MishkaPay.Balance{available: [money], pending: [money]}`, one money per currency |
 | `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` | a `MishkaPay.Page` of `%MishkaPay.BalanceTransaction{}` (amount, fee, net, type, source) |
 | `MishkaPay.adjust_customer_balance(provider, customer_id, money, tenant, description: d, reference: r)`, `list_customer_balance/4` | `%MishkaPay.CustomerBalanceTransaction{}`: below zero is store credit |
+| `MishkaPay.create_connected_account(attrs)` (`MishkaPay.ConnectedAccount`: `:type` `:express`/`:standard`/`:custom`, `:country`, `:email`, `:business_name`, `:capabilities`, `:reference`), `fetch_connected_account/3`, `update_connected_account/1`, `list_connected_accounts/3`, `reject_connected_account(p, id, tenant, reason: "fraud_other")` | `%MishkaPay.ConnectedAccount{}`: a seller's account under the platform, with `:charges_enabled`, `:payouts_enabled`, `:requirements_due`; the provider needs `:connect`. The site's keys then name it as `account_id` |
+| `MishkaPay.account_link(%{provider:, account_id:, refresh_url:, return_url:, type: :onboarding})`, `login_link(provider, account_id, tenant)` | `%MishkaPay.AccountLink{url: url}`: redirect the seller to it at once; it runs out in minutes |
+| `MishkaPay.list_application_fees(provider, tenant, charge_id: id)`, `fetch_application_fee/3`, `refund_application_fee(p, fee_id, tenant, amount: money, reference: r)` | `%MishkaPay.ApplicationFee{}`: the platform's cut of a seller's sale, and what of it went back |
+| `MishkaPay.create_transfer(%{provider:, amount:, destination: "acct_...", reference:})` (`MishkaPay.Transfer`: also `:source_charge_id`, `:transfer_group`), `fetch_transfer/3`, `list_transfers(p, tenant, destination: id)`, `reverse_transfer(p, id, tenant, amount: money, reference: r)` | `%MishkaPay.Transfer{}`: money from the platform's balance to a seller, sent once per reference; the provider needs `:transfer` |
+| `MishkaPay.list_payouts(provider, tenant, status: :paid)`, `fetch_payout/3`, `cancel_payout/3` | `%MishkaPay.Payout{}`: money paid out to the bank of the account the keys act for; the provider needs `:payout` |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every
@@ -253,6 +260,12 @@ MishkaPay.checkout(%{
   `:shipping_address` (a `MishkaPay.Address`), `:shipping_rate_id` and `:amount_shipping` say
   where it goes and what shipping cost.
 - `expire_checkout/3` ends an open checkout when the buyer walks away, so held stock is free again.
+- A sale for a seller of a platform (the provider needs `:connect`): `destination: "acct_..."`
+  sends the money on to the seller's connected account, `on_behalf_of:` makes that account the
+  seller of record, `application_fee:` (money, one-time checkouts, in the items' currency) or
+  `application_fee_percent:` (subscriptions, above 0 up to 100) is the platform's cut. A site
+  whose keys name its own `account_id` sells on its account directly, and its
+  `application_fee` still goes to the platform. None of these goes with `mode: :setup`.
 - A provider refuses an option it cannot send (`Errors.Unsupported`); it never drops one.
 
 ## The catalog

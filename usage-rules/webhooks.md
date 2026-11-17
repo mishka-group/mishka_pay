@@ -35,6 +35,9 @@ plug Plug.Parsers, ...
 | 500 | a listener failed, raised, exited or took over 15 s | sends again later |
 
 An unknown tenant gets the same 400 as a bad signature, so strangers cannot tell which sites exist.
+A tenant whose keys name a connected account (`account_id`) gets 400 (`:account`) for an event
+about any other account; the platform's own URL takes its connected accounts' events with
+`event.account` set (`usage-rules/stripe.md`, Connect).
 A refused message is never stored.
 
 ## The events that change anything
@@ -59,6 +62,10 @@ webhook endpoint to these:
 | `subscription_schedule.created`, `.updated`, `.released`, `.canceled`, `.completed`, `.aborted`, `.expiring` | the subscription it runs (or let go); `:object_id` is the schedule |
 | `radar.early_fraud_warning.created`, `.updated` | its payment (synced again); `:object_id` is the warning (`:object_type` `"radar.early_fraud_warning"`), read with `fetch_fraud_warning/3` |
 | `review.opened`, `.closed` | its payment (synced again); `:object_id` is the review (`:object_type` `"review"`), read with `fetch_fraud_review/3` |
+| `account.updated`, `account.application.deauthorized` | nothing kept: the connected account is `event.account` (`:object_id` is the account, or the platform's application when it left), read with `fetch_connected_account/3` |
+| `transfer.created`, `.updated`, `.reversed` | nothing kept: `:object_id` is the transfer, read with `fetch_transfer/3` |
+| `payout.created`, `.updated`, `.paid`, `.failed`, `.canceled`, `.reconciliation_completed` | nothing kept: `:object_id` is the payout (`fetch_payout/3`); a seller's carries `event.account` |
+| `application_fee.created`, `.refunded`, `.refund.updated` | nothing kept: `:object_id` is the fee, or its refund (`:object_type` `"fee_refund"`), read with `fetch_application_fee/3` |
 | `credit_note.created`, `.updated`, `.voided` | nothing kept: `:object_id` is the note (`:object_type` `"credit_note"`), read with `fetch_credit_note/3` |
 | `tax_rate.created`, `.updated` | nothing kept: `:object_id` is the rate (`:object_type` `"tax_rate"`), read with `fetch_tax_rate/3` |
 

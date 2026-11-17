@@ -100,6 +100,14 @@ defmodule MishkaPay.Provider do
     * `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
     * `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
     * `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
+    * `:connect`: `create_connected_account/2`, `fetch_connected_account/2`,
+      `update_connected_account/2`, `list_connected_accounts/2`, `reject_connected_account/3`,
+      `account_link/2`, `login_link/2`, `fetch_application_fee/2`, `list_application_fees/2`,
+      `refund_application_fee/3` (and a checkout's `:application_fee`,
+      `:application_fee_percent`, `:destination` and `:on_behalf_of`);
+    * `:transfer`: `create_transfer/2`, `fetch_transfer/2`, `list_transfers/2`,
+      `reverse_transfer/3`;
+    * `:payout`: `fetch_payout/2`, `list_payouts/2`, `cancel_payout/2`;
     * `:webhook`: `verify_webhook/3`;
     * `:event_list`: `list_events/2`;
     * `:raw_request`: `raw_request/2`.
@@ -151,6 +159,9 @@ defmodule MishkaPay.Provider do
     :entitlement,
     :balance,
     :customer_balance,
+    :connect,
+    :transfer,
+    :payout,
     :webhook,
     :event_list,
     :raw_request,
@@ -218,6 +229,13 @@ defmodule MishkaPay.Provider do
     * `:entitlement`: attaches features to products and tells which ones a customer may use.
     * `:balance`: reads the seller's balance and the movements that made it.
     * `:customer_balance`: keeps a customer's store credit, taken off their next bills.
+    * `:connect`: runs a platform of sellers: makes their connected accounts and the links that
+      onboard them, acts for one when a tenant's keys name it (`:account_id`), takes the
+      platform's cut of their sales (a checkout's `:application_fee`, `:destination`,
+      `:on_behalf_of`) and gives it back.
+    * `:transfer`: sends money from the platform's balance to a connected account, and takes it
+      back.
+    * `:payout`: reads the payouts of an account's balance to its bank, and stops a pending one.
     * `:webhook`: sends signed messages when something changes.
     * `:event_list`: lists the messages it sent, to deliver again those a site missed.
     * `:raw_request`: calls any path of its own API with the tenant's keys, for what Mishka Pay
@@ -258,6 +276,9 @@ defmodule MishkaPay.Provider do
           | :entitlement
           | :balance
           | :customer_balance
+          | :connect
+          | :transfer
+          | :payout
           | :payment_list
           | :webhook
           | :event_list
@@ -976,6 +997,98 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc """
+  With `:connect`. Makes a connected account for a seller; its `:reference` makes the
+  idempotency key.
+  """
+  @callback create_connected_account(MishkaPay.ConnectedAccount.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. Reads one connected account."
+  @callback fetch_connected_account(account_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. Changes the details of connected account `:id` that are given."
+  @callback update_connected_account(MishkaPay.ConnectedAccount.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. One page of the platform's connected accounts, newest first."
+  @callback list_connected_accounts(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:connect`. Turns a connected account down for good, for the `:reason` in `opts`; it can
+  take no more payments or payouts.
+  """
+  @callback reject_connected_account(
+              account_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. Makes a one-time onboarding or update link for a connected account."
+  @callback account_link(MishkaPay.AccountLink.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. Makes a one-time link into a connected account's own dashboard."
+  @callback login_link(account_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. Reads one application fee, the platform's cut of a seller's sale."
+  @callback fetch_application_fee(fee_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ApplicationFee.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:connect`. One page of application fees, newest first; only `:charge_id`'s when given."
+  @callback list_application_fees(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:connect`. Gives an application fee back to the seller: all of it, or `:amount`;
+  `:reference` makes the idempotency key. Answers the fee after.
+  """
+  @callback refund_application_fee(
+              fee_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.ApplicationFee.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:transfer`. Sends money to a connected account; its `:reference` makes it once."
+  @callback create_transfer(MishkaPay.Transfer.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:transfer`. Reads one transfer."
+  @callback fetch_transfer(transfer_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:transfer`. One page of transfers, newest first; only those to `:destination` or of
+  `:transfer_group` when given.
+  """
+  @callback list_transfers(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:transfer`. Takes a transfer back from the connected account: all of it, or `:amount`;
+  `:reference` makes the idempotency key. Answers the transfer after.
+  """
+  @callback reverse_transfer(
+              transfer_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payout`. Reads one payout of the account the keys act for."
+  @callback fetch_payout(payout_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payout`. One page of payouts, newest first; only those of `:status` when given."
+  @callback list_payouts(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payout`. Stops a payout that is still pending; its money stays in the balance."
+  @callback cancel_payout(payout_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+
+  @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
   the tenant's webhook secret and answers it as a `MishkaPay.Event`, or a
   `MishkaPay.Errors.BadSignature` error.
@@ -1137,6 +1250,23 @@ defmodule MishkaPay.Provider do
                       list_balance_transactions: 2,
                       adjust_customer_balance: 2,
                       list_customer_balance: 2,
+                      create_connected_account: 2,
+                      fetch_connected_account: 2,
+                      update_connected_account: 2,
+                      list_connected_accounts: 2,
+                      reject_connected_account: 3,
+                      account_link: 2,
+                      login_link: 2,
+                      fetch_application_fee: 2,
+                      list_application_fees: 2,
+                      refund_application_fee: 3,
+                      create_transfer: 2,
+                      fetch_transfer: 2,
+                      list_transfers: 2,
+                      reverse_transfer: 3,
+                      fetch_payout: 2,
+                      list_payouts: 2,
+                      cancel_payout: 2,
                       raw_request: 2,
                       verify_webhook: 3
 
@@ -1286,6 +1416,20 @@ defmodule MishkaPay.Provider do
     entitlement: [create_feature: 2, attach_feature: 3, list_entitlements: 2],
     balance: [fetch_balance: 1, list_balance_transactions: 2],
     customer_balance: [adjust_customer_balance: 2, list_customer_balance: 2],
+    connect: [
+      create_connected_account: 2,
+      fetch_connected_account: 2,
+      update_connected_account: 2,
+      list_connected_accounts: 2,
+      reject_connected_account: 3,
+      account_link: 2,
+      login_link: 2,
+      fetch_application_fee: 2,
+      list_application_fees: 2,
+      refund_application_fee: 3
+    ],
+    transfer: [create_transfer: 2, fetch_transfer: 2, list_transfers: 2, reverse_transfer: 3],
+    payout: [fetch_payout: 2, list_payouts: 2, cancel_payout: 2],
     webhook: [verify_webhook: 3],
     raw_request: [raw_request: 2]
   }

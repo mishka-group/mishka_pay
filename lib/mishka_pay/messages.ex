@@ -77,6 +77,12 @@ defmodule MishkaPay.Messages do
           | :managed_payments_shipping
           | :shipping_countries
           | :webhook_secrets
+          | :account_id_plain
+          | :account_invalid
+          | :capability_names
+          | :connect_not_set_up
+          | :fee_percent
+          | :fee_currency
           | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
@@ -427,6 +433,48 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The webhook_secrets field must be a list of secrets, none of them empty"
+      )
+
+  defp msgid(:account_id_plain),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The account_id field must be an account id of letters, digits and underscores only"
+      )
+
+  defp msgid(:account_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} does not know this site's connected account, or the platform's key has no access to it"
+      )
+
+  defp msgid(:capability_names),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field must be a list of names in lowercase letters, digits and underscores"
+      )
+
+  defp msgid(:connect_not_set_up),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes connected accounts only once the platform has signed up for Connect in its dashboard"
+      )
+
+  defp msgid(:fee_percent),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The application_fee_percent field must be a share above 0 and up to 100, with at most two decimals"
+      )
+
+  defp msgid(:fee_currency),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The application_fee field must be in the same currency as the items"
       )
 
   defp msgid(:shipping_countries),

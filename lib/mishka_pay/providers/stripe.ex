@@ -117,6 +117,25 @@ defmodule MishkaPay.Providers.Stripe do
       balance transactions (`txn_...`), by payout (`po_...`) or type.
     * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
       (`cbtxn_...`): below zero is credit.
+    * `create_connected_account/2`, `fetch_connected_account/2`, `update_connected_account/2`,
+      `list_connected_accounts/2` and `reject_connected_account/3` keep Connect accounts
+      (`acct_...`): an `:express`, `:standard` or `:custom` account is made with the matching
+      `controller` (Stripe's `type` is deprecated), and its reference makes the idempotency key
+      and is kept in its metadata. `account_link/2` makes an `account_onboarding` or
+      `account_update` Account Link, and `login_link/2` an Express dashboard login link. Stripe
+      sends `account.updated` and `account.application.deauthorized` about them. A platform that
+      has not signed up for Connect is refused with code `"connect_not_set_up"`.
+    * A checkout's `:application_fee`, `:destination` and `:on_behalf_of` go in its
+      `payment_intent_data` (`application_fee_amount`, `transfer_data[destination]`,
+      `on_behalf_of`), and `:application_fee_percent` with them in `subscription_data`; ids are
+      `acct_...` and the fee is in the items' currency. `fetch_application_fee/2`,
+      `list_application_fees/2` and `refund_application_fee/3` keep the fees (`fee_...`); a refund
+      answers its fee expanded, in one request.
+    * `create_transfer/2`, `fetch_transfer/2`, `list_transfers/2` and `reverse_transfer/3` use
+      Transfers (`tr_...`): the reference makes the idempotency key and is kept in metadata, and a
+      reversal answers its transfer expanded. `fetch_payout/2`, `list_payouts/2` and
+      `cancel_payout/2` read and stop Payouts (`po_...`) of the account the keys act for. Stripe
+      sends `transfer.*`, `payout.*` and `application_fee.*` about them.
     * `raw_request/2` calls any path of `api.stripe.com` with the tenant's key, the pinned
       version or the call's own `api_version` (`Stripe-Version`) and its `expand[]`, and answers
       Stripe's JSON as it is; a write's reference, with its method and path, makes the
@@ -128,6 +147,12 @@ defmodule MishkaPay.Providers.Stripe do
       `v1` signature in it, signed within the last five minutes
       (`config :mishka_pay, MishkaPay.Providers.Stripe, webhook_tolerance: seconds`), and from the
       same mode (live or test) as the tenant's keys.
+
+  A tenant whose keys name a connected account (`:account_id`, `acct_...`) acts as that account:
+  every request carries it in the `Stripe-Account` header, and only from the keys. Such a tenant
+  takes only webhook messages about its own account (Stripe's `account` on the event); one about
+  the platform or another connected account is refused like a bad signature. Keys without one
+  are the platform's own, and take its connected accounts' events, each with its `:account`.
 
   Stripe answers 402 for a declined card (`MishkaPay.Errors.Declined`, with Stripe's decline code)
   and other errors as `MishkaPay.Errors.Rejected` with its code and status. Both keep Stripe's
@@ -186,6 +211,9 @@ defmodule MishkaPay.Providers.Stripe do
       :entitlement,
       :balance,
       :customer_balance,
+      :connect,
+      :transfer,
+      :payout,
       :raw_request,
       :webhook,
       :event_list
@@ -316,7 +344,21 @@ defmodule MishkaPay.Providers.Stripe do
     "customer.tax_id.updated" => [:customer],
     "customer.tax_id.deleted" => [:customer],
     "tax_rate.created" => [:tax_rate],
-    "tax_rate.updated" => [:tax_rate]
+    "tax_rate.updated" => [:tax_rate],
+    "account.updated" => [:account],
+    "account.application.deauthorized" => [:account],
+    "transfer.created" => [:transfer],
+    "transfer.updated" => [:transfer],
+    "transfer.reversed" => [:transfer],
+    "payout.created" => [:payout],
+    "payout.updated" => [:payout],
+    "payout.paid" => [:payout],
+    "payout.failed" => [:payout],
+    "payout.canceled" => [:payout],
+    "payout.reconciliation_completed" => [:payout],
+    "application_fee.created" => [:application_fee],
+    "application_fee.refunded" => [:application_fee],
+    "application_fee.refund.updated" => [:application_fee]
   }
 
   @doc """
@@ -324,7 +366,9 @@ defmodule MishkaPay.Providers.Stripe do
   (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
   `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`; or the
   provider object it is about (`:credit_note`, `:tax_rate`; `:subscription_schedule`, which names its
-  subscription too; `:fraud_warning` and `:fraud_review`, which name their payment too). Each is mapped to its
+  subscription too; `:fraud_warning` and `:fraud_review`, which name their payment too;
+  `:account`, a connected account, which the event names as its `:account`; `:transfer`,
+  `:payout` and `:application_fee`, money between accounts). Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -369,6 +413,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- expiry(checkout.expires_at),
          :ok <- held(checkout, keys),
          :ok <- shipping_rates(checkout.shipping_rates),
+         :ok <- for_seller(checkout),
          {:ok, session} <-
            request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
              key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
@@ -388,6 +433,27 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp held(_checkout, _keys), do: :ok
+
+  # A sale for a seller names Connect accounts, and takes its fee in the items' own currency, in
+  # amounts Stripe can count.
+  defp for_seller(%Checkout{} = checkout) do
+    with :ok <- maybe_id(checkout.destination, "acct_", :destination),
+         :ok <- maybe_id(checkout.on_behalf_of, "acct_", :on_behalf_of) do
+      fee_fits(checkout.application_fee, checkout.items)
+    end
+  end
+
+  defp fee_fits(nil, _items), do: :ok
+
+  defp fee_fits(%Money{currency: currency} = fee, items) do
+    case Enum.all?(
+           items,
+           &(not match?(%{amount: %Money{}}, &1) or &1.amount.currency == currency)
+         ) do
+      true -> money_off(fee)
+      false -> invalid(:application_fee, Messages.text(:fee_currency))
+    end
+  end
 
   @impl MishkaPay.Provider
   def fetch_checkout(checkout_id, keys) do
@@ -2158,6 +2224,218 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  @impl MishkaPay.Provider
+  def create_connected_account(%MishkaPay.ConnectedAccount{} = account, keys) do
+    with :ok <- metadata(account.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/accounts", Mapper.connected_account_params(account), keys,
+             key:
+               ProviderKit.idempotency_key("connected-account", account.tenant, account.reference)
+           ) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_connected_account(account_id, keys) do
+    with :ok <- stripe_id(account_id, "acct_", :account_id),
+         {:ok, answer} <- request(:get, "/v1/accounts/#{account_id}", [], keys) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  # Only what is given changes; the type and country are set once, when the account is made.
+  @impl MishkaPay.Provider
+  def update_connected_account(%MishkaPay.ConnectedAccount{id: id} = account, keys) do
+    with :ok <- stripe_id(id, "acct_", :id),
+         :ok <- metadata(account.metadata),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/accounts/#{id}",
+             Mapper.connected_account_update_params(account),
+             keys
+           ) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_connected_accounts(opts, keys),
+    do: page("/v1/accounts", [], opts, keys, &Mapper.connected_account/1)
+
+  @reject_reasons ~w(credit fraud_no_intent_to_fulfill fraud_other fraud_payment_method_casher fraud_payment_method_tester other terms_of_service)
+
+  @impl MishkaPay.Provider
+  def reject_connected_account(account_id, opts, keys) do
+    reason = opts |> Keyword.get(:reason, "other") |> to_string()
+
+    with :ok <- stripe_id(account_id, "acct_", :account_id),
+         :ok <- reject_reason(reason),
+         {:ok, answer} <-
+           request(:post, "/v1/accounts/#{account_id}/reject", %{"reason" => reason}, keys) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  defp reject_reason(reason) when reason in @reject_reasons, do: :ok
+
+  defp reject_reason(_reason),
+    do:
+      invalid(
+        :reason,
+        Messages.text(:choices, field: :reason, choices: Enum.join(@reject_reasons, ", "))
+      )
+
+  # An account link is never sent twice by mistake: each one is new, and runs out in minutes.
+  @impl MishkaPay.Provider
+  def account_link(%MishkaPay.AccountLink{type: :login, account_id: account_id}, keys),
+    do: login_link(account_id, keys)
+
+  def account_link(%MishkaPay.AccountLink{} = link, keys) do
+    with :ok <- stripe_id(link.account_id, "acct_", :account_id),
+         {:ok, answer} <-
+           request(:post, "/v1/account_links", Mapper.account_link_params(link), keys) do
+      Mapper.account_link(answer, link)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def login_link(account_id, keys) do
+    with :ok <- stripe_id(account_id, "acct_", :account_id),
+         {:ok, answer} <- request(:post, "/v1/accounts/#{account_id}/login_links", %{}, keys) do
+      Mapper.account_link(answer, %MishkaPay.AccountLink{
+        provider: "stripe",
+        account_id: account_id,
+        type: :login
+      })
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_application_fee(fee_id, keys) do
+    with :ok <- stripe_id(fee_id, "fee_", :fee_id),
+         {:ok, answer} <- request(:get, "/v1/application_fees/#{fee_id}", [], keys) do
+      Mapper.application_fee(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_application_fees(opts, keys) do
+    with :ok <- maybe_id(opts[:charge_id], "", :charge_id) do
+      page(
+        "/v1/application_fees",
+        [charge: opts[:charge_id]],
+        opts,
+        keys,
+        &Mapper.application_fee/1
+      )
+    end
+  end
+
+  # The fee refund answers its fee expanded, so the fee after is read in the same request.
+  @impl MishkaPay.Provider
+  def refund_application_fee(fee_id, opts, keys) do
+    with :ok <- stripe_id(fee_id, "fee_", :fee_id),
+         :ok <- money_off(opts[:amount]),
+         {:ok, %{"fee" => %{} = fee}} <-
+           request(
+             :post,
+             "/v1/application_fees/#{fee_id}/refunds",
+             Mapper.part_params(opts[:amount], "fee"),
+             keys,
+             key: part_key("application-fee-refund", fee_id, opts)
+           ) do
+      Mapper.application_fee(fee)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_transfer(%MishkaPay.Transfer{} = transfer, keys) do
+    with :ok <- stripe_id(transfer.destination, "acct_", :destination),
+         :ok <- maybe_id(transfer.source_charge_id, "ch_", :source_charge_id),
+         :ok <- metadata(transfer.metadata),
+         :ok <- money_off(transfer.amount),
+         {:ok, answer} <-
+           request(:post, "/v1/transfers", Mapper.transfer_params(transfer), keys,
+             key: ProviderKit.idempotency_key("transfer", transfer.tenant, transfer.reference)
+           ) do
+      Mapper.transfer(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_transfer(transfer_id, keys) do
+    with :ok <- stripe_id(transfer_id, "tr_", :transfer_id),
+         {:ok, answer} <- request(:get, "/v1/transfers/#{transfer_id}", [], keys) do
+      Mapper.transfer(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_transfers(opts, keys) do
+    with :ok <- maybe_id(opts[:destination], "acct_", :destination),
+         :ok <- maybe_id(opts[:transfer_group], "", :transfer_group) do
+      page(
+        "/v1/transfers",
+        [destination: opts[:destination], transfer_group: opts[:transfer_group]],
+        opts,
+        keys,
+        &Mapper.transfer/1
+      )
+    end
+  end
+
+  # The reversal answers its transfer expanded, so the transfer after is read in the same request.
+  @impl MishkaPay.Provider
+  def reverse_transfer(transfer_id, opts, keys) do
+    with :ok <- stripe_id(transfer_id, "tr_", :transfer_id),
+         :ok <- money_off(opts[:amount]),
+         {:ok, %{"transfer" => %{} = transfer}} <-
+           request(
+             :post,
+             "/v1/transfers/#{transfer_id}/reversals",
+             Mapper.part_params(opts[:amount], "transfer"),
+             keys,
+             key: part_key("transfer-reversal", transfer_id, opts)
+           ) do
+      Mapper.transfer(transfer)
+    end
+  end
+
+  # A part given back with a reference is one call at Stripe; without one, a fresh key that its
+  # retries reuse.
+  defp part_key(kind, id, opts),
+    do:
+      ProviderKit.idempotency_key(kind, opts[:tenant], opts[:reference] && {id, opts[:reference]})
+
+  @impl MishkaPay.Provider
+  def fetch_payout(payout_id, keys) do
+    with :ok <- stripe_id(payout_id, "po_", :payout_id),
+         {:ok, answer} <- request(:get, "/v1/payouts/#{payout_id}", [], keys) do
+      Mapper.payout(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_payouts(opts, keys),
+    do:
+      page(
+        "/v1/payouts",
+        [status: opts[:status]],
+        opts,
+        keys,
+        &Mapper.payout/1
+      )
+
+  @impl MishkaPay.Provider
+  def cancel_payout(payout_id, keys) do
+    with :ok <- stripe_id(payout_id, "po_", :payout_id),
+         {:ok, answer} <- request(:post, "/v1/payouts/#{payout_id}/cancel", %{}, keys) do
+      Mapper.payout(answer)
+    end
+  end
+
   defp link_prices(items) do
     case Enum.find(items, &(not stripe_price?(&1.id))) do
       nil -> :ok
@@ -2236,7 +2514,8 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- fresh(timestamp),
          :ok <- signed(payload, timestamp, signatures, secrets),
          {:ok, %{} = event} <- decode(payload),
-         :ok <- same_mode(event, keys) do
+         :ok <- same_mode(event, keys),
+         :ok <- same_account(event, keys) do
       Mapper.event(event)
     end
   end
@@ -2334,34 +2613,54 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp same_mode(_event, _keys), do: bad(:malformed)
 
+  # A tenant that acts for a connected account takes only that account's events: one about the
+  # platform's own account (no `account`) or another connected account is not this tenant's. The
+  # platform's own keys (no `:account_id`) take its connected accounts' events too, each naming
+  # its `:account`, for the host to tell which of its sites it is about.
+  defp same_account(event, keys) do
+    case {Map.get(keys, :account_id), event["account"]} do
+      {nil, _any} -> :ok
+      {account, account} -> :ok
+      _another -> bad(:account)
+    end
+  end
+
   defp bad(reason),
     do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
   # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
   # `upload: true` sends `params` as multipart parts to Stripe's files host; `request_options:` (a
-  # `MishkaPay.RequestOptions`) another API version and the objects to expand.
+  # `MishkaPay.RequestOptions`) another API version and the objects to expand. The tenant's
+  # connected account (`:account_id` in its keys) goes in `Stripe-Account` on every request, so
+  # each call is made as that account; nothing else sets the header.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
     options = opts[:request_options] || %RequestOptions{}
+    account_id = Map.get(keys, :account_id)
 
-    base = %{
-      provider: "stripe",
-      method: method,
-      base_url: base_url(opts[:upload] == true),
-      path: path,
-      auth: {:bearer, keys.secret_key},
-      headers: %{"stripe-version" => options.api_version || @version},
-      idempotency_header: "idempotency-key",
-      idempotency_key: opts[:key],
-      retry_header: "stripe-should-retry",
-      limit_header: "stripe-rate-limited-reason"
-    }
-
-    base
-    |> put_body(method, expanded(params, options.expand), opts[:upload] == true)
-    |> Client.request()
-    |> answer()
+    with :ok <- maybe_id(account_id, "acct_", :account_id) do
+      %{
+        provider: "stripe",
+        method: method,
+        base_url: base_url(opts[:upload] == true),
+        path: path,
+        auth: {:bearer, keys.secret_key},
+        headers: headers(options, account_id),
+        idempotency_header: "idempotency-key",
+        idempotency_key: opts[:key],
+        retry_header: "stripe-should-retry",
+        limit_header: "stripe-rate-limited-reason"
+      }
+      |> put_body(method, expanded(params, options.expand), opts[:upload] == true)
+      |> Client.request()
+      |> answer()
+    end
   end
+
+  defp headers(options, nil), do: %{"stripe-version" => options.api_version || @version}
+
+  defp headers(options, account_id),
+    do: options |> headers(nil) |> Map.put("stripe-account", account_id)
 
   # Stripe takes `expand[]` in a read's query and in a write's form alike.
   defp expanded(params, nil), do: params
@@ -2491,6 +2790,7 @@ defmodule MishkaPay.Providers.Stripe do
     {"must pass a recurring price", "recurring_only"},
     {"separate authorization and capture", "capture_invoice"},
     {"Stripe Tax has not been activated", "tax_not_set_up"},
+    {"signed up for Connect", "connect_not_set_up"},
     {"feature in the portal configuration is disabled", "portal_feature_off"},
     {"customer does not match the subscription's customer", "subscription_of_another"}
   ]

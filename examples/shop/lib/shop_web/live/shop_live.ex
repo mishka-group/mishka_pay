@@ -26,6 +26,9 @@ defmodule ShopWeb.ShopLive do
       (embedded too), a card form of the shop's own (Stripe Elements: a payment intent, or a
       setup intent that saves a card), saved cards and portal links, one-off bills, customer search and bill
       previews, each in its own component;
+    * Stripe Connect: the shop as a platform that makes its sellers' connected accounts, opens
+      their onboarding pages, sends them money and takes it back, and lists its payouts and its
+      cut of their sales;
     * reading a checkout or a payment back by its id, and a raw call to any Stripe API path;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
@@ -528,6 +531,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.EntitlementsComponent} id="entitlements" tenant={@tenant} />
 
       <.live_component module={ShopWeb.BalanceComponent} id="balance" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.ConnectComponent} id="connect" tenant={@tenant} />
 
       <.live_component module={ShopWeb.OperationsComponent} id="operations" tenant={@tenant} />
 

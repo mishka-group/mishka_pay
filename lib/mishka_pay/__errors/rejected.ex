@@ -25,7 +25,10 @@ defmodule MishkaPay.Errors.Rejected do
       whose tax service is off; `"tax_location_invalid"` a buyer's address too thin to count the
       tax; `"managed_payments_shipping"` shipping asked of a checkout the provider sells as
       merchant of record; `"portal_feature_off"` a portal task the portal's settings turn off;
-      `"subscription_of_another"` a subscription that belongs to another customer.
+      `"subscription_of_another"` a subscription that belongs to another customer;
+      `"account_invalid"` a connected account (the keys' `:account_id`) the key has no access to,
+      or that does not exist; `"connect_not_set_up"` a connected account asked of a platform that
+      has not signed up for Connect.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
     * `:request_id`: the provider's id of the request that failed (Stripe's `Request-Id` header,
@@ -73,6 +76,12 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{code: "merchant_of_record_off", param: param}),
     do: Messages.text(:merchant_of_record_off, param: param || "this choice")
+
+  def message(%{provider: provider, code: "account_invalid"}),
+    do: Messages.text(:account_invalid, provider: MishkaPay.Provider.label_of(provider))
+
+  def message(%{provider: provider, code: "connect_not_set_up"}),
+    do: Messages.text(:connect_not_set_up, provider: MishkaPay.Provider.label_of(provider))
 
   def message(%{code: "tax_id_invalid"}), do: Messages.text(:tax_id_invalid)
   def message(%{code: "tax_not_set_up"}), do: Messages.text(:tax_not_set_up)
