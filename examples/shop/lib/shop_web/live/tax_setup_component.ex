@@ -25,6 +25,8 @@ defmodule ShopWeb.TaxSetupComponent do
     "tax_type" => "vat"
   }
 
+  @settings_fields ~w(country postal_code state city line1 tax_code tax_behavior)
+
   @registration_form %{
     "country" => "DE",
     "type" => "standard",
@@ -48,6 +50,7 @@ defmodule ShopWeb.TaxSetupComponent do
        rates: [],
        registrations: [],
        settings: nil,
+       settings_form: nil,
        rate_form: @rate_form,
        registration_form: @registration_form,
        notice: nil,
@@ -63,6 +66,14 @@ defmodule ShopWeb.TaxSetupComponent do
     do: {:noreply, socket |> assign(open?: true) |> read()}
 
   def handle_event("read", _params, socket), do: {:noreply, read(socket)}
+
+  # Each form keeps what is typed or picked: the registration form re-renders the part on every
+  # change, and that must not reset the other two.
+  def handle_event("draft_rate", params, socket),
+    do: {:noreply, assign(socket, rate_form: Map.take(params, Map.keys(@rate_form)))}
+
+  def handle_event("draft_settings", params, socket),
+    do: {:noreply, assign(socket, settings_form: Map.take(params, @settings_fields))}
 
   def handle_event("create_rate", params, socket) do
     form = Map.take(params, Map.keys(@rate_form))
@@ -149,6 +160,8 @@ defmodule ShopWeb.TaxSetupComponent do
   end
 
   def handle_event("update_settings", params, socket) do
+    socket = assign(socket, settings_form: Map.take(params, @settings_fields))
+
     office =
       params
       |> Map.take(~w(country postal_code state city line1))
@@ -164,7 +177,10 @@ defmodule ShopWeb.TaxSetupComponent do
 
     case MishkaPay.update_tax_settings(attrs) do
       {:ok, settings} ->
-        {:noreply, socket |> assign(settings: settings) |> done("Tax settings saved.")}
+        {:noreply,
+         socket
+         |> assign(settings: settings, settings_form: nil)
+         |> done("Tax settings saved.")}
 
       {:error, error} ->
         {:noreply, failed(socket, error)}
@@ -178,7 +194,8 @@ defmodule ShopWeb.TaxSetupComponent do
        reading?: false,
        rates: rates,
        registrations: registrations,
-       settings: settings
+       settings: settings,
+       settings_form: nil
      )}
   end
 
@@ -251,6 +268,15 @@ defmodule ShopWeb.TaxSetupComponent do
   defp office(nil, _field), do: nil
   defp office(%MishkaPay.Address{} = address, field), do: Map.get(address, field)
 
+  # A settings field as typed since the last read, or as Stripe holds it.
+  defp setting(%{} = form, _settings, field), do: form[to_string(field)]
+  defp setting(nil, settings, :tax_code), do: settings.tax_code
+
+  defp setting(nil, settings, :tax_behavior),
+    do: settings.tax_behavior && to_string(settings.tax_behavior)
+
+  defp setting(nil, settings, field), do: office(settings.head_office, field)
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -301,6 +327,7 @@ defmodule ShopWeb.TaxSetupComponent do
           </.hint>
           <form
             id="tax-rate-form"
+            phx-change="draft_rate"
             phx-submit="create_rate"
             phx-target={@myself}
             class="flex flex-wrap items-end gap-2 rounded-box bg-base-200 p-3"
@@ -539,6 +566,7 @@ defmodule ShopWeb.TaxSetupComponent do
           </p>
           <form
             id="tax-settings-form"
+            phx-change="draft_settings"
             phx-submit="update_settings"
             phx-target={@myself}
             class="flex flex-wrap items-end gap-2 rounded-box bg-base-200 p-3"
@@ -559,7 +587,7 @@ defmodule ShopWeb.TaxSetupComponent do
               <span class="fieldset-legend">{label}</span>
               <input
                 name={field}
-                value={office(@settings.head_office, field)}
+                value={setting(@settings_form, @settings, field)}
                 class={["input input-sm", width]}
                 data-testid={"tax-settings-#{field}"}
               />
@@ -568,7 +596,7 @@ defmodule ShopWeb.TaxSetupComponent do
               <span class="fieldset-legend">Default tax code</span>
               <input
                 name="tax_code"
-                value={@settings.tax_code}
+                value={setting(@settings_form, @settings, :tax_code)}
                 placeholder="txcd_10000000"
                 class="input input-sm w-36"
                 data-testid="tax-settings-tax-code"
@@ -577,7 +605,12 @@ defmodule ShopWeb.TaxSetupComponent do
             <label class="fieldset">
               <span class="fieldset-legend">A price without its own</span>
               <select name="tax_behavior" class="select select-sm" data-testid="tax-settings-behavior">
-                <option value="" selected={is_nil(@settings.tax_behavior)}>not set</option>
+                <option
+                  value=""
+                  selected={setting(@settings_form, @settings, :tax_behavior) in [nil, ""]}
+                >
+                  not set
+                </option>
                 <option
                   :for={
                     {value, label} <- [
@@ -587,7 +620,7 @@ defmodule ShopWeb.TaxSetupComponent do
                     ]
                   }
                   value={value}
-                  selected={@settings.tax_behavior == value}
+                  selected={setting(@settings_form, @settings, :tax_behavior) == to_string(value)}
                 >
                   {label}
                 </option>

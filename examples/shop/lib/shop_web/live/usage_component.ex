@@ -14,10 +14,19 @@ defmodule ShopWeb.UsageComponent do
 
   @windows %{"hour" => 3600, "day" => 86_400, "month" => 30 * 86_400}
 
+  # What the forms' selects keep between re-renders (their other fields are function
+  # components LiveView leaves alone while their attributes do not change).
+  @meter_form %{"name" => "", "event_name" => "", "aggregation" => "sum"}
+  @summary_form %{"window" => "hour"}
+  @price_form %{"currency" => "USD", "interval" => "month"}
+
   @impl true
   def mount(socket) do
     {:ok,
      assign(socket,
+       meter_form: @meter_form,
+       summary_form: @summary_form,
+       price_form: @price_form,
        meters: nil,
        reported: nil,
        cancelled: nil,
@@ -33,7 +42,11 @@ defmodule ShopWeb.UsageComponent do
   def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
   @impl true
+  def handle_event("draft_" <> form, params, socket), do: {:noreply, keep(socket, form, params)}
+
   def handle_event("create_meter", params, socket) do
+    socket = keep(socket, "meter", params)
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -122,6 +135,7 @@ defmodule ShopWeb.UsageComponent do
   end
 
   def handle_event("summary", params, socket) do
+    socket = keep(socket, "summary", params)
     to = DateTime.utc_now()
     from = DateTime.add(to, -Map.get(@windows, params["window"], 3600), :second)
     %{tenant: tenant} = socket.assigns
@@ -143,6 +157,8 @@ defmodule ShopWeb.UsageComponent do
   end
 
   def handle_event("metered_price", params, socket) do
+    socket = keep(socket, "price", params)
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -160,6 +176,15 @@ defmodule ShopWeb.UsageComponent do
         {:noreply, socket |> assign(price: nil) |> failed(error)}
     end
   end
+
+  defp keep(socket, "meter", params), do: assign(socket, meter_form: kept(@meter_form, params))
+
+  defp keep(socket, "summary", params),
+    do: assign(socket, summary_form: kept(@summary_form, params))
+
+  defp keep(socket, "price", params), do: assign(socket, price_form: kept(@price_form, params))
+
+  defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
 
   # Stripe's list can lag a moment behind: the row takes the meter Stripe answered.
   defp put_meter(socket, meter) do
@@ -207,6 +232,7 @@ defmodule ShopWeb.UsageComponent do
 
       <form
         id="meter-form"
+        phx-change="draft_meter"
         phx-submit="create_meter"
         phx-target={@myself}
         class="card bg-base-200"
@@ -219,6 +245,7 @@ defmodule ShopWeb.UsageComponent do
               <span class="fieldset-legend">Name</span>
               <input
                 name="name"
+                value={@meter_form["name"]}
                 placeholder="API calls"
                 class="input input-sm"
                 data-testid="meter-name"
@@ -228,6 +255,7 @@ defmodule ShopWeb.UsageComponent do
               <span class="fieldset-legend">Event name</span>
               <input
                 name="event_name"
+                value={@meter_form["event_name"]}
                 placeholder="api_call"
                 class="input input-sm"
                 data-testid="meter-event"
@@ -236,9 +264,19 @@ defmodule ShopWeb.UsageComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Adds up as</span>
               <select name="aggregation" class="select select-sm" data-testid="meter-aggregation">
-                <option value="sum">Sum of values</option>
-                <option value="count">Count of reports</option>
-                <option value="last">Last value</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"sum", "Sum of values"},
+                      {"count", "Count of reports"},
+                      {"last", "Last value"}
+                    ]
+                  }
+                  value={value}
+                  selected={@meter_form["aggregation"] == value}
+                >
+                  {label}
+                </option>
               </select>
             </label>
           </div>
@@ -377,6 +415,7 @@ defmodule ShopWeb.UsageComponent do
 
         <form
           id="usage-summary-form"
+          phx-change="draft_summary"
           phx-submit="summary"
           phx-target={@myself}
           class="card bg-base-200"
@@ -394,9 +433,19 @@ defmodule ShopWeb.UsageComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Since</span>
               <select name="window" class="select select-sm" data-testid="summary-window">
-                <option value="hour">One hour ago</option>
-                <option value="day">One day ago</option>
-                <option value="month">30 days ago</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"hour", "One hour ago"},
+                      {"day", "One day ago"},
+                      {"month", "30 days ago"}
+                    ]
+                  }
+                  value={value}
+                  selected={@summary_form["window"] == value}
+                >
+                  {label}
+                </option>
               </select>
             </label>
             <div>
@@ -419,6 +468,7 @@ defmodule ShopWeb.UsageComponent do
 
         <form
           id="metered-price-form"
+          phx-change="draft_price"
           phx-submit="metered_price"
           phx-target={@myself}
           class="card bg-base-200"
@@ -438,15 +488,25 @@ defmodule ShopWeb.UsageComponent do
               <label class="fieldset">
                 <span class="fieldset-legend">Currency</span>
                 <select name="currency" class="select select-sm" data-testid="metered-currency">
-                  <option value="USD">USD</option>
-                  <option value="EUR">EUR</option>
+                  <option
+                    :for={currency <- ~w(USD EUR)}
+                    value={currency}
+                    selected={@price_form["currency"] == currency}
+                  >
+                    {currency}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">Billed every</span>
                 <select name="interval" class="select select-sm" data-testid="metered-interval">
-                  <option value="month">month</option>
-                  <option value="year">year</option>
+                  <option
+                    :for={interval <- ~w(month year)}
+                    value={interval}
+                    selected={@price_form["interval"] == interval}
+                  >
+                    {interval}
+                  </option>
                 </select>
               </label>
             </div>

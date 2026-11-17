@@ -155,6 +155,57 @@ defmodule ShopWeb.UsageTest do
     assert has_element?(view, "[data-testid=metered-price]", "price_m1")
   end
 
+  test "each form's select keeps what was picked while the others change the page",
+       %{conn: conn} do
+    test = self()
+
+    StripeStub.stub(fn
+      "POST", "/v1/billing/meters", params ->
+        send(test, {:meter, params})
+        meter("active")
+
+      "GET", "/v1/billing/meters/mtr_1/event_summaries", params ->
+        send(test, {:summary, String.to_integer(params["start_time"])})
+        StripeStub.list([])
+
+      "POST", "/v1/prices", params ->
+        send(test, {:price, params})
+        nil
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    meter_form = "[data-testid=meter-form]"
+    summary = "[data-testid=usage-summary-form]"
+    price = "[data-testid=metered-price-form]"
+
+    view |> form(meter_form, %{aggregation: "count"}) |> render_change()
+    view |> form(meter_form, %{name: "API calls", event_name: "api_call"}) |> render_change()
+    view |> form(summary, %{window: "month"}) |> render_change()
+    view |> form(price, %{currency: "EUR"}) |> render_change()
+    view |> form(price, %{interval: "year"}) |> render_change()
+    view |> element("[data-testid=meters-list]") |> render_click()
+    assert has_element?(view, "[data-testid=metered-interval] option[value=year][selected]")
+
+    view |> form(meter_form) |> render_submit()
+
+    assert_received {:meter,
+                     %{
+                       "event_name" => "api_call",
+                       "default_aggregation" => %{"formula" => "count"}
+                     }}
+
+    view |> form(summary, %{meter_id: "mtr_1", customer_id: "cus_1"}) |> render_submit()
+    assert_received {:summary, from}
+    assert from <= System.os_time(:second) - 29 * 86_400
+
+    view |> form(price, %{product_id: "prod_1", meter_id: "mtr_1"}) |> render_submit()
+
+    assert_received {:price, %{"currency" => "eur", "recurring" => %{"interval" => "year"}}}
+  end
+
   test "says what is wrong with a usage report", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
 

@@ -53,6 +53,7 @@ defmodule ShopWeb.ShopLive do
 
   # The most of one product a demo checkout sells, so a typo never opens Stripe for thousands.
   @max_quantity 10
+  @refund_form %{"amount" => "", "reason" => ""}
 
   @settings_topic "pay:settings"
 
@@ -84,7 +85,7 @@ defmodule ShopWeb.ShopLive do
      |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
-     |> assign(lookup: nil, typed: %{}, lookup_failure: nil)
+     |> assign(lookup: nil, typed: %{}, lookup_failure: nil, refund_form: @refund_form)
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -187,9 +188,15 @@ defmodule ShopWeb.ShopLive do
 
   def handle_event("clear_buyer", _params, socket), do: {:noreply, push_patch(socket, to: ~p"/")}
 
-  def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
+  def handle_event("select", %{"id" => id}, socket),
+    do: {:noreply, socket |> assign(refund_form: @refund_form) |> select(id)}
 
-  def handle_event("close", _params, socket), do: {:noreply, assign(socket, selected: nil)}
+  def handle_event("close", _params, socket),
+    do: {:noreply, assign(socket, selected: nil, refund_form: @refund_form)}
+
+  # The refund typed is kept, so a webhook that updates the open payment does not reset it.
+  def handle_event("draft_refund", params, socket),
+    do: {:noreply, assign(socket, refund_form: refund_form(params))}
 
   def handle_event("filter", %{"status" => status}, socket) when status in ["all" | @statuses] do
     {:noreply,
@@ -197,6 +204,8 @@ defmodule ShopWeb.ShopLive do
   end
 
   def handle_event("refund", %{"payment" => id} = params, socket) do
+    socket = assign(socket, refund_form: refund_form(params))
+
     with {:ok, payment} <- Ash.get(Payment, id, authorize?: false),
          {:ok, refunded} <-
            payment
@@ -206,6 +215,7 @@ defmodule ShopWeb.ShopLive do
        socket
        |> put_payment(refunded)
        |> assign_last()
+       |> assign(refund_form: @refund_form)
        |> select(refunded.id, refunded.__metadata__.refund)
        |> flash(
          :info,
@@ -491,7 +501,13 @@ defmodule ShopWeb.ShopLive do
         <.payments_table payments={@streams.payments} names={@names} />
       </section>
 
-      <.payment_details :if={@selected} selected={@selected} live={@live} names={@names} />
+      <.payment_details
+        :if={@selected}
+        selected={@selected}
+        live={@live}
+        names={@names}
+        refund_form={@refund_form}
+      />
 
       <.live_component module={ShopWeb.SubscriptionsComponent} id="subscriptions" tenant={@tenant} />
 
@@ -817,6 +833,8 @@ defmodule ShopWeb.ShopLive do
     do: socket
 
   defp close_other(socket, _payment_id), do: assign(socket, selected: nil)
+
+  defp refund_form(params), do: Map.merge(@refund_form, Map.take(params, Map.keys(@refund_form)))
 
   # One payment in the details panel: its row and webhook events from the database now, and the
   # payment as Stripe has it, read in the background.

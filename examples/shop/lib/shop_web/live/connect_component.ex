@@ -20,10 +20,20 @@ defmodule ShopWeb.ConnectComponent do
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
+  @create_form %{"email" => "", "country" => "US"}
+  @transfer_form %{
+    "destination" => "",
+    "amount" => "5.00",
+    "currency" => "USD",
+    "description" => ""
+  }
+
   @impl true
   def mount(socket) do
     {:ok,
      assign(socket,
+       create_form: @create_form,
+       transfer_form: @transfer_form,
        open?: false,
        reading?: false,
        accounts: [],
@@ -45,7 +55,16 @@ defmodule ShopWeb.ConnectComponent do
 
   def handle_event("read", _params, socket), do: {:noreply, read(socket)}
 
+  # What is typed or picked is kept, so a re-render (a list read, a link made) keeps it.
+  def handle_event("draft_create", params, socket),
+    do: {:noreply, assign(socket, create_form: kept(@create_form, params))}
+
+  def handle_event("draft_transfer", params, socket),
+    do: {:noreply, assign(socket, transfer_form: kept(@transfer_form, params))}
+
   def handle_event("create", params, socket) do
+    socket = assign(socket, create_form: kept(@create_form, params))
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -90,6 +109,8 @@ defmodule ShopWeb.ConnectComponent do
   end
 
   def handle_event("transfer", params, socket) do
+    socket = assign(socket, transfer_form: kept(@transfer_form, params))
+
     case MishkaPay.create_transfer(%{
            provider: "stripe",
            tenant: socket.assigns.tenant,
@@ -136,6 +157,17 @@ defmodule ShopWeb.ConnectComponent do
 
   # The platform's sellers, the money it sent them, its payouts and its cut, read in the
   # background, one page each.
+
+  defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
+
+  # The seller picked, or the first one listed while none is picked.
+  defp destination(%{"destination" => id}, accounts) do
+    case Enum.find(accounts, &(&1.id == id)) || List.first(accounts) do
+      nil -> nil
+      account -> account.id
+    end
+  end
+
   defp read(socket) do
     tenant = socket.assigns.tenant
 
@@ -203,6 +235,7 @@ defmodule ShopWeb.ConnectComponent do
       <div :if={@open?} class="space-y-4">
         <form
           id="connect-create-form"
+          phx-change="draft_create"
           phx-submit="create"
           phx-target={@myself}
           class="card bg-base-200"
@@ -216,6 +249,7 @@ defmodule ShopWeb.ConnectComponent do
                 <input
                   name="email"
                   type="email"
+                  value={@create_form["email"]}
                   placeholder="seller@example.com"
                   class="input input-sm"
                   data-testid="connect-email"
@@ -224,9 +258,19 @@ defmodule ShopWeb.ConnectComponent do
               <label class="fieldset">
                 <span class="fieldset-legend">Country</span>
                 <select name="country" class="select select-sm" data-testid="connect-country">
-                  <option value="US">United States</option>
-                  <option value="GB">United Kingdom</option>
-                  <option value="DE">Germany</option>
+                  <option
+                    :for={
+                      {code, name} <- [
+                        {"US", "United States"},
+                        {"GB", "United Kingdom"},
+                        {"DE", "Germany"}
+                      ]
+                    }
+                    value={code}
+                    selected={@create_form["country"] == code}
+                  >
+                    {name}
+                  </option>
                 </select>
               </label>
               <div class="flex items-end">
@@ -305,6 +349,7 @@ defmodule ShopWeb.ConnectComponent do
         <form
           :if={!@reading? and @accounts != []}
           id="connect-transfer-form"
+          phx-change="draft_transfer"
           phx-submit="transfer"
           phx-target={@myself}
           class="card bg-base-200"
@@ -320,14 +365,20 @@ defmodule ShopWeb.ConnectComponent do
                   class="select select-sm"
                   data-testid="connect-transfer-destination"
                 >
-                  <option :for={account <- @accounts} value={account.id}>{account.id}</option>
+                  <option
+                    :for={account <- @accounts}
+                    value={account.id}
+                    selected={account.id == destination(@transfer_form, @accounts)}
+                  >
+                    {account.id}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">Amount</span>
                 <input
                   name="amount"
-                  value="5.00"
+                  value={@transfer_form["amount"]}
                   type="number"
                   step="0.01"
                   min="0.01"
@@ -342,14 +393,20 @@ defmodule ShopWeb.ConnectComponent do
                   class="select select-sm"
                   data-testid="connect-transfer-currency"
                 >
-                  <option value="USD">USD</option>
-                  <option value="EUR">EUR</option>
+                  <option
+                    :for={currency <- ~w(USD EUR)}
+                    value={currency}
+                    selected={@transfer_form["currency"] == currency}
+                  >
+                    {currency}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">What for</span>
                 <input
                   name="description"
+                  value={@transfer_form["description"]}
                   placeholder="Order 42, seller's share"
                   class="input input-sm"
                   data-testid="connect-transfer-description"

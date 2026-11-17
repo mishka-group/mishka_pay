@@ -50,6 +50,48 @@ defmodule ShopWeb.TaxTest do
     assert has_element?(view, "[data-testid=tax-ids-empty]")
   end
 
+  test "both forms keep what was picked while the other one shows its answer", %{conn: conn} do
+    test = self()
+
+    StripeStub.stub(fn
+      "POST", "/v1/customers/cus_1/tax_ids", params ->
+        send(test, {:tax_id, params})
+        tax_id()
+
+      "GET", "/v1/customers/cus_1/tax_ids", _params ->
+        StripeStub.list([tax_id()])
+
+      "POST", "/v1/tax/calculations", params ->
+        send(test, {:calculated, params})
+        nil
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    ids = "[data-testid=tax-ids-form]"
+    calc = "[data-testid=tax-calc-form]"
+
+    view |> form(calc, %{currency: "GBP"}) |> render_change()
+    view |> form(calc, %{country: "GB"}) |> render_change()
+    view |> form(ids, %{type: "gb_vat"}) |> render_change()
+    view |> form(ids, %{customer_id: "cus_1", value: "GB123456789"}) |> render_change()
+    view |> form(ids) |> render_submit(%{intent: "list"})
+    assert has_element?(view, "[data-testid=tax-calc-country] option[value=GB][selected]")
+
+    view |> form(calc) |> render_submit()
+
+    assert_received {:calculated,
+                     %{
+                       "currency" => "gbp",
+                       "customer_details" => %{"address" => %{"country" => "GB"}}
+                     }}
+
+    view |> form(ids) |> render_submit(%{intent: "add"})
+    assert_received {:tax_id, %{"type" => "gb_vat", "value" => "GB123456789"}}
+  end
+
   test "counts the tax on a sale and records it", %{conn: conn} do
     StripeStub.stub(fn
       "POST", "/v1/tax/calculations", %{"currency" => "eur", "line_items" => %{"0" => line}} ->

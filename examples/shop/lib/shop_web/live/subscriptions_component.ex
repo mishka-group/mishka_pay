@@ -15,16 +15,35 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   alias Shop.Pay.Subscription
 
+  @change_form %{
+    "price_id" => "",
+    "quantity" => "",
+    "proration" => "",
+    "billing_cycle_anchor" => "",
+    "payment_behavior" => ""
+  }
+  @pause_form %{"behavior" => "void", "resumes_at" => ""}
+
   @impl true
-  def mount(socket),
-    do: {:ok, assign(socket, selected: nil, loaded?: false, preview: nil, change: nil)}
+  def mount(socket) do
+    {:ok,
+     assign(socket,
+       selected: nil,
+       loaded?: false,
+       preview: nil,
+       change: nil,
+       change_form: @change_form,
+       pause_form: @pause_form,
+       read_id: ""
+     )}
+  end
 
   @impl true
   def update(%{changed: record}, socket) do
     {:ok, socket |> stream_insert(:subscriptions, record, at: 0) |> reselect(record)}
   end
 
-  def update(%{open: id}, socket), do: {:ok, select(socket, id)}
+  def update(%{open: id}, socket), do: {:ok, socket |> fresh_forms() |> select(id)}
 
   def update(assigns, socket) do
     socket = assign(socket, tenant: assigns.tenant, plans: plans())
@@ -37,14 +56,24 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   @impl true
   def handle_event("select", %{"id" => id}, socket),
-    do: {:noreply, socket |> assign(preview: nil, change: nil) |> select(id)}
+    do: {:noreply, socket |> assign(preview: nil, change: nil) |> fresh_forms() |> select(id)}
 
   def handle_event("close", _params, socket),
-    do: {:noreply, assign(socket, selected: nil, preview: nil, change: nil)}
+    do: {:noreply, socket |> assign(selected: nil, preview: nil, change: nil) |> fresh_forms()}
+
+  def handle_event("draft_change", params, socket),
+    do: {:noreply, assign(socket, change_form: kept_form(@change_form, params))}
+
+  def handle_event("type_read", %{"subscription_id" => value}, socket),
+    do: {:noreply, assign(socket, read_id: value)}
+
+  def handle_event("draft_pause", params, socket),
+    do: {:noreply, assign(socket, pause_form: kept_form(@pause_form, params))}
 
   # The change the form describes, previewed first: the preview keeps its proration date, so
   # applying it bills exactly what it showed.
   def handle_event("preview_change", params, socket) do
+    socket = assign(socket, change_form: kept_form(@change_form, params))
     row = socket.assigns.selected
     change = change_attrs(params, row)
 
@@ -91,6 +120,8 @@ defmodule ShopWeb.SubscriptionsComponent do
     do: {:noreply, assign(socket, preview: nil, change: nil)}
 
   def handle_event("pause", %{"subscription" => id} = params, socket) do
+    socket = assign(socket, pause_form: kept_form(@pause_form, params))
+
     args =
       %{behavior: params["behavior"], resumes_at: date(params["resumes_at"])}
       |> Map.reject(fn {_key, value} -> value in [nil, ""] end)
@@ -118,11 +149,14 @@ defmodule ShopWeb.SubscriptionsComponent do
   end
 
   def handle_event("read", %{"subscription_id" => value}, socket) do
+    socket = assign(socket, read_id: value)
+
     with {:ok, id} <- subscription_id(value),
          {:ok, row} <- sync(id, socket.assigns.tenant, provider_of(id)) do
       {:noreply,
        socket
        |> stream_insert(:subscriptions, row, at: 0)
+       |> fresh_forms()
        |> select(row.id)
        |> say(:info, "Subscription read from #{label(row)} and saved.")}
     else
@@ -137,9 +171,17 @@ defmodule ShopWeb.SubscriptionsComponent do
     <section data-testid="subscriptions" class="space-y-4">
       <div class="flex flex-wrap items-end justify-between gap-3">
         <.section_title icon="hero-arrow-path-rounded-square" title="Subscriptions" />
-        <form phx-submit="read" phx-target={@myself} class="join" data-testid="read-subscription-form">
+        <form
+          id="read-subscription-form"
+          phx-change="type_read"
+          phx-submit="read"
+          phx-target={@myself}
+          class="join"
+          data-testid="read-subscription-form"
+        >
           <input
             name="subscription_id"
+            value={@read_id}
             placeholder="sub_... from the sandbox"
             class="input input-sm join-item"
             data-testid="read-subscription-input"
@@ -215,6 +257,8 @@ defmodule ShopWeb.SubscriptionsComponent do
         live={@live}
         plans={@plans}
         preview={@preview}
+        change_form={@change_form}
+        pause_form={@pause_form}
         myself={@myself}
       />
     </section>
@@ -226,6 +270,8 @@ defmodule ShopWeb.SubscriptionsComponent do
   attr :live, :any, required: true
   attr :plans, :list, required: true
   attr :preview, :any, required: true
+  attr :change_form, :map, required: true
+  attr :pause_form, :map, required: true
   attr :myself, :any, required: true
 
   defp details(assigns) do
@@ -446,6 +492,8 @@ defmodule ShopWeb.SubscriptionsComponent do
           selected={@selected}
           plans={@plans}
           preview={@preview}
+          change_form={@change_form}
+          pause_form={@pause_form}
           myself={@myself}
         />
       </div>
@@ -456,12 +504,16 @@ defmodule ShopWeb.SubscriptionsComponent do
   attr :selected, :map, required: true
   attr :plans, :list, required: true
   attr :preview, :any, required: true
+  attr :change_form, :map, required: true
+  attr :pause_form, :map, required: true
   attr :myself, :any, required: true
 
   defp change_panel(assigns) do
     ~H"""
     <div class="grid gap-4 md:grid-cols-2">
       <form
+        id="change-form"
+        phx-change="draft_change"
         phx-submit="preview_change"
         phx-target={@myself}
         class="rounded-box bg-base-100 p-4"
@@ -474,7 +526,11 @@ defmodule ShopWeb.SubscriptionsComponent do
             <span class="fieldset-legend">Plan</span>
             <select name="price_id" class="select select-sm" data-testid="change-plan">
               <option value="">Keep the plan</option>
-              <option :for={plan <- @plans} value={plan.stripe_price_id}>
+              <option
+                :for={plan <- @plans}
+                value={plan.stripe_price_id}
+                selected={@change_form["price_id"] == plan.stripe_price_id}
+              >
                 {plan.name} (${plan.price})
               </option>
             </select>
@@ -485,6 +541,7 @@ defmodule ShopWeb.SubscriptionsComponent do
               name="quantity"
               type="number"
               min="1"
+              value={@change_form["quantity"]}
               placeholder={"now #{@selected.quantity || 1}"}
               class="input input-sm"
               data-testid="change-quantity"
@@ -493,17 +550,31 @@ defmodule ShopWeb.SubscriptionsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Bill the difference</span>
             <select name="proration" class="select select-sm" data-testid="change-proration">
-              <option value="">Stripe's default (on the next invoice)</option>
-              <option value="always_invoice">Now, on its own invoice</option>
-              <option value="create_prorations">On the next invoice</option>
-              <option value="none">Not at all</option>
+              <option
+                :for={
+                  {value, label} <- [
+                    {"", "Stripe's default (on the next invoice)"},
+                    {"always_invoice", "Now, on its own invoice"},
+                    {"create_prorations", "On the next invoice"},
+                    {"none", "Not at all"}
+                  ]
+                }
+                value={value}
+                selected={@change_form["proration"] == value}
+              >
+                {label}
+              </option>
             </select>
           </label>
           <label class="fieldset">
             <span class="fieldset-legend">Billing period</span>
             <select name="billing_cycle_anchor" class="select select-sm" data-testid="change-anchor">
-              <option value="">Keep the dates</option>
-              <option value="now">Start a new period now</option>
+              <option value="" selected={@change_form["billing_cycle_anchor"] == ""}>
+                Keep the dates
+              </option>
+              <option value="now" selected={@change_form["billing_cycle_anchor"] == "now"}>
+                Start a new period now
+              </option>
             </select>
           </label>
           <label class="fieldset sm:col-span-2">
@@ -513,10 +584,20 @@ defmodule ShopWeb.SubscriptionsComponent do
               class="select select-sm"
               data-testid="change-payment-behavior"
             >
-              <option value="">Stripe's default</option>
-              <option value="error_if_incomplete">Refuse the change</option>
-              <option value="allow_incomplete">Change it, and leave the invoice open</option>
-              <option value="pending_if_incomplete">Change it only once paid</option>
+              <option
+                :for={
+                  {value, label} <- [
+                    {"", "Stripe's default"},
+                    {"error_if_incomplete", "Refuse the change"},
+                    {"allow_incomplete", "Change it, and leave the invoice open"},
+                    {"pending_if_incomplete", "Change it only once paid"}
+                  ]
+                }
+                value={value}
+                selected={@change_form["payment_behavior"] == value}
+              >
+                {label}
+              </option>
             </select>
           </label>
         </div>
@@ -574,6 +655,8 @@ defmodule ShopWeb.SubscriptionsComponent do
         </div>
 
         <form
+          id="pause-form"
+          phx-change="draft_pause"
           phx-submit="pause"
           phx-target={@myself}
           data-testid="pause-form"
@@ -586,9 +669,19 @@ defmodule ShopWeb.SubscriptionsComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Invoices meanwhile</span>
               <select name="behavior" class="select select-sm" data-testid="pause-behavior">
-                <option value="void">Void them</option>
-                <option value="keep_as_draft">Keep as drafts</option>
-                <option value="mark_uncollectible">Mark uncollectible</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"void", "Void them"},
+                      {"keep_as_draft", "Keep as drafts"},
+                      {"mark_uncollectible", "Mark uncollectible"}
+                    ]
+                  }
+                  value={value}
+                  selected={@pause_form["behavior"] == value}
+                >
+                  {label}
+                </option>
               </select>
             </label>
             <label class="fieldset">
@@ -596,6 +689,7 @@ defmodule ShopWeb.SubscriptionsComponent do
               <input
                 name="resumes_at"
                 type="date"
+                value={@pause_form["resumes_at"]}
                 class="input input-sm"
                 data-testid="pause-resumes-at"
               />
@@ -784,6 +878,11 @@ defmodule ShopWeb.SubscriptionsComponent do
 
   defp reselect(%{assigns: %{selected: %{id: id}}} = socket, %{id: id}), do: select(socket, id)
   defp reselect(socket, _other), do: socket
+
+  # The change and pause forms as picked, so a re-render keeps the choices; a new subscription
+  # starts them afresh.
+  defp kept_form(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
+  defp fresh_forms(socket), do: assign(socket, change_form: @change_form, pause_form: @pause_form)
 
   # The shop's plans published to Stripe's catalog: a change swaps to one of their prices.
   defp plans, do: Enum.filter(Shop.Catalog.all(), &(&1.interval && &1.stripe_price_id))

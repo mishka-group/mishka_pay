@@ -764,6 +764,7 @@ defmodule ShopWeb.PayComponents do
   attr :selected, :map, required: true
   attr :live, :any, required: true
   attr :names, :map, required: true
+  attr :refund_form, :map, default: %{"amount" => "", "reason" => ""}
 
   def payment_details(assigns) do
     assigns = assign(assigns, :at, MishkaPay.Provider.label_of(assigns.selected.payment.provider))
@@ -944,6 +945,8 @@ defmodule ShopWeb.PayComponents do
           </div>
           <form
             :if={@selected.payment.status in [:paid, :partially_refunded]}
+            id="refund-form"
+            phx-change="draft_refund"
             phx-submit="refund"
             novalidate
             class="rounded-box bg-base-100 p-4 space-y-2"
@@ -958,15 +961,26 @@ defmodule ShopWeb.PayComponents do
                 type="number"
                 step="0.01"
                 min="0.01"
+                value={@refund_form["amount"]}
                 placeholder="amount, empty = all"
                 class="input input-sm w-44"
                 data-testid="refund-amount"
               />
               <select name="reason" class="select select-sm w-60" data-testid="refund-reason">
-                <option value="">No reason</option>
-                <option value="requested_by_customer">Requested by customer</option>
-                <option value="duplicate">Duplicate</option>
-                <option value="fraudulent">Fraudulent (Stripe then blocks this card)</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"", "No reason"},
+                      {"requested_by_customer", "Requested by customer"},
+                      {"duplicate", "Duplicate"},
+                      {"fraudulent", "Fraudulent (Stripe then blocks this card)"}
+                    ]
+                  }
+                  value={value}
+                  selected={@refund_form["reason"] == value}
+                >
+                  {label}
+                </option>
               </select>
               <button
                 class="btn btn-sm btn-warning"

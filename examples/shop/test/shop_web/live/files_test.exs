@@ -18,7 +18,8 @@ defmodule ShopWeb.FilesTest do
     })
   end
 
-  test "uploads a PNG, shows its link, and attaches it to an open dispute", %{conn: conn} do
+  test "uploads a PNG, shows its link, and attaches it to the dispute picked, which stays picked",
+       %{conn: conn} do
     test = self()
 
     StripeStub.stub(fn
@@ -75,12 +76,14 @@ defmodule ShopWeb.FilesTest do
 
     row = Ash.read_one!(Shop.Pay.Dispute, authorize?: false)
 
-    view
-    |> form("[data-testid=file-attach-form]", %{dispute: row.id})
-    |> render_submit()
+    view |> form("[data-testid=file-attach-form]", %{dispute: row.id}) |> render_change()
+    view |> form("[data-testid=file-attach-form]") |> render_submit()
 
     assert_received :attached
     assert has_element?(view, "[data-testid=files-notice]", "evidence of du_1")
+
+    view |> form("[data-testid=file-attach-form]") |> render_submit()
+    assert_received :attached
   end
 
   test "refuses a file Stripe does not take for evidence", %{conn: conn} do

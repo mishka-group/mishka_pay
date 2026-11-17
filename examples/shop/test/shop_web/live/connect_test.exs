@@ -141,6 +141,34 @@ defmodule ShopWeb.ConnectTest do
     refute has_element?(view, "[data-transfer-id=tr_new] [data-testid=connect-transfer-reverse]")
   end
 
+  test "what is picked in the two forms stays picked while the lists and a link change",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    view |> element("[data-testid=connect-show]") |> render_click()
+    render_async(view)
+    make = "[data-testid=connect-create-form]"
+    send_money = "[data-testid=connect-transfer-form]"
+
+    view |> form(make, %{country: "DE"}) |> render_change()
+    view |> form(make, %{email: "ava@example.com"}) |> render_change()
+    view |> form(send_money, %{destination: "acct_1"}) |> render_change()
+    view |> form(send_money, %{currency: "EUR"}) |> render_change()
+    view |> form(send_money, %{amount: "7.00"}) |> render_change()
+
+    view
+    |> element("[data-account-id=acct_1] [data-testid=connect-account-onboard]")
+    |> render_click()
+
+    assert has_element?(view, "[data-testid=connect-country] option[value=DE][selected]")
+
+    view |> form(make) |> render_submit()
+    assert_received {:made, %{"country" => "DE", "email" => "ava@example.com"}}
+
+    view |> form(send_money) |> render_submit()
+
+    assert_received {:sent, %{"amount" => "700", "currency" => "eur", "destination" => "acct_1"}}
+  end
+
   test "a transfer Stripe refuses says so and adds no row", %{conn: conn} do
     StripeStub.stub(fn
       "GET", "/v1/accounts", _params ->

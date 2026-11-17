@@ -17,6 +17,8 @@ defmodule ShopWeb.PortalConfigsComponent do
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
+  @open_form %{"customer" => "", "customer_id" => "", "configuration" => ""}
+
   @impl true
   def mount(socket) do
     {:ok,
@@ -27,7 +29,8 @@ defmodule ShopWeb.PortalConfigsComponent do
        customers: [],
        next: nil,
        page: 0,
-       form: %{"name" => "Teams", "subscription_cancel" => "at_period_end"}
+       form: %{"name" => "Teams", "subscription_cancel" => "at_period_end"},
+       open_form: @open_form
      )}
   end
 
@@ -42,6 +45,12 @@ defmodule ShopWeb.PortalConfigsComponent do
 
   def handle_event("first", _params, socket),
     do: {:noreply, socket |> assign(page: 0) |> read(nil)}
+
+  # Both forms keep what is typed or picked, so a page read or a setup turned off keeps it.
+  def handle_event("draft_config", params, socket), do: {:noreply, assign(socket, form: params)}
+
+  def handle_event("draft_open", params, socket),
+    do: {:noreply, assign(socket, open_form: open_form(params))}
 
   def handle_event("create", params, socket) do
     socket = assign(socket, form: params)
@@ -65,10 +74,16 @@ defmodule ShopWeb.PortalConfigsComponent do
     end
   end
 
-  def handle_event("open", %{"customer" => "", "customer_id" => ""}, socket),
-    do: {:noreply, say(socket, :error, "Pick a customer, or type its id (cus_...).")}
+  def handle_event("open", %{"customer" => "", "customer_id" => ""} = params, socket) do
+    {:noreply,
+     socket
+     |> assign(open_form: open_form(params))
+     |> say(:error, "Pick a customer, or type its id (cus_...).")}
+  end
 
   def handle_event("open", params, socket) do
+    socket = assign(socket, open_form: open_form(params))
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -118,6 +133,7 @@ defmodule ShopWeb.PortalConfigsComponent do
       <div :if={@open?} class="grid gap-4 md:grid-cols-2">
         <form
           id="portal-config-form"
+          phx-change="draft_config"
           phx-submit="create"
           phx-target={@myself}
           class="rounded-box bg-base-200 p-4 space-y-2"
@@ -236,6 +252,7 @@ defmodule ShopWeb.PortalConfigsComponent do
 
         <form
           id="portal-open-form"
+          phx-change="draft_open"
           phx-submit="open"
           phx-target={@myself}
           class="rounded-box bg-base-200 p-4 space-y-2"
@@ -245,8 +262,12 @@ defmodule ShopWeb.PortalConfigsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Customer</span>
             <select name="customer" class="select select-sm" data-testid="portal-open-customer">
-              <option value="">Pick one</option>
-              <option :for={customer <- @customers} value={customer.provider_id}>
+              <option value="" selected={@open_form["customer"] == ""}>Pick one</option>
+              <option
+                :for={customer <- @customers}
+                value={customer.provider_id}
+                selected={@open_form["customer"] == customer.provider_id}
+              >
                 {customer.name || customer.email || customer.provider_id}
               </option>
             </select>
@@ -255,6 +276,7 @@ defmodule ShopWeb.PortalConfigsComponent do
             <span class="fieldset-legend">or its id</span>
             <input
               name="customer_id"
+              value={@open_form["customer_id"]}
               placeholder="cus_..."
               class="input input-sm"
               data-testid="portal-open-customer-id"
@@ -263,8 +285,12 @@ defmodule ShopWeb.PortalConfigsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Setup</span>
             <select name="configuration" class="select select-sm" data-testid="portal-open-config">
-              <option value="">Stripe's default</option>
-              <option :for={config <- Enum.filter(@configs, & &1.active)} value={config.id}>
+              <option value="" selected={@open_form["configuration"] == ""}>Stripe's default</option>
+              <option
+                :for={config <- Enum.filter(@configs, & &1.active)}
+                value={config.id}
+                selected={@open_form["configuration"] == config.id}
+              >
                 {config.name || config.id}
               </option>
             </select>
@@ -349,6 +375,9 @@ defmodule ShopWeb.PortalConfigsComponent do
   end
 
   # One page from Stripe in the background, so the page stays live while Stripe answers.
+
+  defp open_form(params), do: Map.merge(@open_form, Map.take(params, Map.keys(@open_form)))
+
   defp read(socket, cursor) do
     opts = Enum.reject([limit: 10, after: cursor], fn {_name, value} -> is_nil(value) end)
     tenant = socket.assigns.tenant

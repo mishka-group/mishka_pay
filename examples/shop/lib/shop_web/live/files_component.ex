@@ -21,7 +21,8 @@ defmodule ShopWeb.FilesComponent do
   def mount(socket) do
     {:ok,
      socket
-     |> assign(file: nil, link: nil, link_error: nil, disputes: [], notice: nil, error: nil)
+     |> assign(file: nil, link: nil, link_error: nil, disputes: [], dispute: "")
+     |> assign(notice: nil, error: nil)
      |> allow_upload(:evidence,
        accept: ~w(.png .jpg .jpeg .pdf),
        max_entries: 1,
@@ -62,10 +63,18 @@ defmodule ShopWeb.FilesComponent do
     end
   end
 
+  # The dispute picked is kept, so a message or another file chosen does not reset it.
+  def handle_event("pick_dispute", %{"dispute" => id}, socket),
+    do: {:noreply, assign(socket, dispute: id)}
+
   def handle_event("attach", %{"dispute" => ""}, socket),
-    do: {:noreply, assign(socket, error: "Choose a dispute to attach the file to.", notice: nil)}
+    do:
+      {:noreply,
+       assign(socket, dispute: "", error: "Choose a dispute to attach the file to.", notice: nil)}
 
   def handle_event("attach", %{"dispute" => id}, %{assigns: %{file: %{id: file_id}}} = socket) do
+    socket = assign(socket, dispute: id)
+
     args = %{evidence: %{"uncategorized_file" => file_id}, submit: false}
 
     id
@@ -210,6 +219,7 @@ defmodule ShopWeb.FilesComponent do
 
           <form
             id="files-attach"
+            phx-change="pick_dispute"
             phx-submit="attach"
             phx-target={@myself}
             class="join"
@@ -220,8 +230,8 @@ defmodule ShopWeb.FilesComponent do
               class="select select-sm join-item"
               data-testid="file-attach-dispute"
             >
-              <option value="">Choose an open dispute</option>
-              <option :for={dispute <- @disputes} value={dispute.id}>
+              <option value="" selected={@dispute == ""}>Choose an open dispute</option>
+              <option :for={dispute <- @disputes} value={dispute.id} selected={@dispute == dispute.id}>
                 {dispute.provider_id} · {dispute.reason}
               </option>
             </select>

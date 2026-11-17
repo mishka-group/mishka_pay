@@ -14,8 +14,12 @@ defmodule ShopWeb.SavedCardsComponent do
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
+  @portal_form %{"flow" => "payment_method_update", "subscription_id" => ""}
+
   @impl true
-  def mount(socket), do: {:ok, assign(socket, customer_id: nil, cards: nil, default: nil)}
+  def mount(socket),
+    do:
+      {:ok, assign(socket, customer_id: nil, cards: nil, default: nil, portal_form: @portal_form)}
 
   @impl true
   def update(assigns, socket) do
@@ -71,7 +75,13 @@ defmodule ShopWeb.SavedCardsComponent do
     end
   end
 
+  # The task and subscription picked are kept, so listing a customer's cards does not reset them.
+  def handle_event("draft_portal", params, socket),
+    do: {:noreply, assign(socket, portal_form: portal_form(params))}
+
   def handle_event("portal", %{"flow" => flow} = params, socket) do
+    socket = assign(socket, portal_form: portal_form(params))
+
     attrs =
       %{
         provider: "stripe",
@@ -137,6 +147,7 @@ defmodule ShopWeb.SavedCardsComponent do
 
         <form
           id="portal-flow-form"
+          phx-change="draft_portal"
           phx-submit="portal"
           phx-target={@myself}
           class="rounded-box bg-base-200 p-4 space-y-3"
@@ -148,16 +159,30 @@ defmodule ShopWeb.SavedCardsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Task</span>
             <select name="flow" class="select select-sm" data-testid="portal-flow">
-              <option value="payment_method_update">Update the card</option>
-              <option value="subscription_cancel">Cancel a subscription</option>
-              <option value="subscription_update">Change a subscription's plan</option>
+              <option
+                :for={
+                  {value, label} <- [
+                    {"payment_method_update", "Update the card"},
+                    {"subscription_cancel", "Cancel a subscription"},
+                    {"subscription_update", "Change a subscription's plan"}
+                  ]
+                }
+                value={value}
+                selected={@portal_form["flow"] == value}
+              >
+                {label}
+              </option>
             </select>
           </label>
           <label class="fieldset">
             <span class="fieldset-legend">Subscription (for cancel or change)</span>
             <select name="subscription_id" class="select select-sm" data-testid="portal-subscription">
-              <option value="">None</option>
-              <option :for={sub <- @subscriptions} value={sub.provider_id}>
+              <option value="" selected={@portal_form["subscription_id"] == ""}>None</option>
+              <option
+                :for={sub <- @subscriptions}
+                value={sub.provider_id}
+                selected={@portal_form["subscription_id"] == sub.provider_id}
+              >
                 {sub.plan || "Subscription"} · {sub.customer_email || sub.customer_id} · {sub.provider_id}
               </option>
             </select>
@@ -254,6 +279,9 @@ defmodule ShopWeb.SavedCardsComponent do
     </div>
     """
   end
+
+  defp portal_form(params),
+    do: Map.merge(@portal_form, Map.take(params, Map.keys(@portal_form)))
 
   defp list(socket, customer_id) do
     tenant = socket.assigns.tenant

@@ -278,6 +278,35 @@ defmodule ShopWeb.TaxSetupTest do
                      }}
   end
 
+  test "the rate and settings forms keep what was picked while the registration form changes",
+       %{conn: conn} do
+    view = shown(conn)
+    rate = "[data-testid=tax-rate-form]"
+    settings = "[data-testid=tax-settings-form]"
+
+    view |> form(rate, %{inclusive: "false"}) |> render_change()
+    view |> form(rate, %{percentage: "7.25"}) |> render_change()
+    view |> form(settings, %{tax_behavior: "inclusive"}) |> render_change()
+    view |> form(settings, %{city: "Berlin"}) |> render_change()
+    view |> form("[data-testid=tax-registration-form]", %{country: "GB"}) |> render_change()
+
+    assert has_element?(
+             view,
+             "[data-testid=tax-settings-behavior] option[value=inclusive][selected]"
+           )
+
+    view |> form(rate) |> render_submit()
+    assert_received {:rate_made, %{"percentage" => "7.25", "inclusive" => "false"}}
+
+    view |> form(settings) |> render_submit()
+
+    assert_received {:settings_saved,
+                     %{
+                       "defaults" => %{"tax_behavior" => "inclusive"},
+                       "head_office" => %{"address" => %{"city" => "Berlin"}}
+                     }}
+  end
+
   test "the settings are saved: the head office and the default behavior", %{conn: conn} do
     view = shown(conn)
 

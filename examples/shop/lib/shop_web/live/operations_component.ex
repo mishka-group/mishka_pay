@@ -27,6 +27,7 @@ defmodule ShopWeb.OperationsComponent do
        events: nil,
        replayed: nil,
        replaying: false,
+       window: "1h",
        versions: nil,
        notice: nil,
        error: nil
@@ -73,9 +74,14 @@ defmodule ShopWeb.OperationsComponent do
     end
   end
 
+  # The window picked is kept, so reading the events or a check does not reset it.
+  def handle_event("pick_window", params, socket),
+    do: {:noreply, assign(socket, window: window(params["window"]))}
+
   # Replaying an hour of events can take a while: it runs in its own task, so the page stays live.
   def handle_event("replay", params, socket) do
-    seconds = Map.get(@windows, params["window"], 3600)
+    socket = assign(socket, window: window(params["window"]))
+    seconds = Map.fetch!(@windows, socket.assigns.window)
     since = DateTime.add(DateTime.utc_now(), -seconds, :second)
     tenant = socket.assigns.tenant
 
@@ -272,6 +278,7 @@ defmodule ShopWeb.OperationsComponent do
             </div>
             <form
               id="operations-replay"
+              phx-change="pick_window"
               phx-submit="replay"
               phx-target={@myself}
               class="join"
@@ -282,9 +289,19 @@ defmodule ShopWeb.OperationsComponent do
                 class="select select-sm join-item"
                 data-testid="operations-replay-window"
               >
-                <option value="15m">15 minutes ago</option>
-                <option value="1h" selected>One hour ago</option>
-                <option value="1d">One day ago</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"15m", "15 minutes ago"},
+                      {"1h", "One hour ago"},
+                      {"1d", "One day ago"}
+                    ]
+                  }
+                  value={value}
+                  selected={@window == value}
+                >
+                  {label}
+                </option>
               </select>
               <button
                 class="btn btn-sm join-item"
@@ -369,6 +386,10 @@ defmodule ShopWeb.OperationsComponent do
   end
 
   defp blank(_none), do: nil
+
+  # A window the form does not offer falls back to an hour.
+  defp window(window) when is_map_key(@windows, window), do: window
+  defp window(_other), do: "1h"
 
   defp done(socket, message), do: assign(socket, notice: message, error: nil)
 

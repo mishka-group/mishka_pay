@@ -66,7 +66,16 @@ defmodule ShopWeb.AdminRowsComponent do
 
   @impl true
   def mount(socket),
-    do: {:ok, assign(socket, kind: :product, rows: [], loaded?: false, notice: nil, error: nil)}
+    do:
+      {:ok,
+       assign(socket,
+         kind: :product,
+         rows: [],
+         add_form: %{},
+         loaded?: false,
+         notice: nil,
+         error: nil
+       )}
 
   @impl true
   def update(%{changed: {kind, _record}}, socket) do
@@ -88,10 +97,14 @@ defmodule ShopWeb.AdminRowsComponent do
   @impl true
   def handle_event("kind", %{"kind" => kind}, socket) do
     kind = Enum.find(kinds(), :product, &(Atom.to_string(&1) == kind))
-    {:noreply, socket |> assign(kind: kind, notice: nil, error: nil) |> load()}
+    {:noreply, socket |> assign(kind: kind, add_form: %{}, notice: nil, error: nil) |> load()}
   end
 
+  # The add form's choices are kept, so a row changed by a click or a webhook keeps them.
+  def handle_event("draft_add", params, socket), do: {:noreply, assign(socket, add_form: params)}
+
   def handle_event("add", params, socket) do
+    socket = assign(socket, add_form: params)
     %{kind: kind, tenant: tenant} = socket.assigns
     args = Map.merge(%{provider: "stripe", tenant: tenant}, add_args(kind, params))
 
@@ -157,7 +170,7 @@ defmodule ShopWeb.AdminRowsComponent do
         {@error}
       </div>
 
-      <.add_form kind={@kind} myself={@myself} rows={@rows} tenant={@tenant} />
+      <.add_form kind={@kind} myself={@myself} form={@add_form} tenant={@tenant} />
 
       <div class="overflow-x-auto rounded-box border border-base-300">
         <table class="table">
@@ -229,13 +242,14 @@ defmodule ShopWeb.AdminRowsComponent do
 
   attr :kind, :atom, required: true
   attr :myself, :any, required: true
-  attr :rows, :list, required: true
+  attr :form, :map, required: true
   attr :tenant, :string, required: true
 
   defp add_form(assigns) do
     ~H"""
     <form
       id={"admin-add-#{@kind}"}
+      phx-change="draft_add"
       phx-submit="add"
       phx-target={@myself}
       class="card bg-base-200"
@@ -245,7 +259,7 @@ defmodule ShopWeb.AdminRowsComponent do
       <div class="card-body gap-3">
         <h3 class="font-medium">Add one</h3>
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <.add_fields kind={@kind} tenant={@tenant} />
+          <.add_fields kind={@kind} tenant={@tenant} form={@form} />
         </div>
         <div>
           <button
@@ -263,6 +277,7 @@ defmodule ShopWeb.AdminRowsComponent do
 
   attr :kind, :atom, required: true
   attr :tenant, :string, required: true
+  attr :form, :map, required: true
 
   defp add_fields(%{kind: :product} = assigns) do
     ~H"""
@@ -290,9 +305,13 @@ defmodule ShopWeb.AdminRowsComponent do
     <label class="fieldset">
       <span class="fieldset-legend">Charged</span>
       <select name="interval" class="select select-sm" data-testid="admin-add-interval">
-        <option value="">Once</option>
-        <option value="month">Every month</option>
-        <option value="year">Every year</option>
+        <option
+          :for={{value, label} <- [{"", "Once"}, {"month", "Every month"}, {"year", "Every year"}]}
+          value={value}
+          selected={(@form["interval"] || "") == value}
+        >
+          {label}
+        </option>
       </select>
     </label>
     """
@@ -306,9 +325,19 @@ defmodule ShopWeb.AdminRowsComponent do
     <label class="fieldset">
       <span class="fieldset-legend">For</span>
       <select name="duration" class="select select-sm" data-testid="admin-add-duration">
-        <option value="once">One payment</option>
-        <option value="repeating">Some months</option>
-        <option value="forever">Forever</option>
+        <option
+          :for={
+            {value, label} <- [
+              {"once", "One payment"},
+              {"repeating", "Some months"},
+              {"forever", "Forever"}
+            ]
+          }
+          value={value}
+          selected={(@form["duration"] || "once") == value}
+        >
+          {label}
+        </option>
       </select>
     </label>
     <.field name="duration_in_months" label="Months (with some months)" type="number" />
@@ -358,8 +387,18 @@ defmodule ShopWeb.AdminRowsComponent do
     <label class="fieldset">
       <span class="fieldset-legend">Paid by</span>
       <select name="collection" class="select select-sm" data-testid="admin-add-collection">
-        <option value="send_invoice">Bill sent by email</option>
-        <option value="charge_automatically">Saved card, on finalize</option>
+        <option
+          :for={
+            {value, label} <- [
+              {"send_invoice", "Bill sent by email"},
+              {"charge_automatically", "Saved card, on finalize"}
+            ]
+          }
+          value={value}
+          selected={(@form["collection"] || "send_invoice") == value}
+        >
+          {label}
+        </option>
       </select>
     </label>
     """

@@ -97,6 +97,28 @@ defmodule ShopWeb.LookupsComponentTest do
     assert view |> element("[data-testid=sub-bill-due]") |> render() =~ "$18.00"
   end
 
+  test "the subscription picked stays picked through a change and a second button",
+       %{conn: conn} do
+    StripeRoutes.stub(%{{"POST", "/v1/invoices/create_preview"} => preview(900)})
+    row = seed_subscription()
+    {:ok, view, _html} = live(conn, ~p"/")
+    form = "[data-testid=sub-bill-form]"
+
+    view |> form(form, subscription: row.id) |> render_change()
+    view |> form(form, quantity: "") |> render_change()
+    assert has_element?(view, "[data-testid=sub-bill-subscription] option[selected]", "sub_ada")
+
+    view |> form(form) |> render_submit(%{"do" => "next"})
+
+    assert_received {:stripe, "POST", "/v1/invoices/create_preview",
+                     %{"subscription" => "sub_ada"}}
+
+    view |> form(form) |> render_submit(%{"do" => "next"})
+
+    assert_received {:stripe, "POST", "/v1/invoices/create_preview",
+                     %{"subscription" => "sub_ada"}}
+  end
+
   test "no subscription picked is refused in plain words", %{conn: conn} do
     StripeRoutes.stub(%{})
     {:ok, view, _html} = live(conn, ~p"/")

@@ -104,6 +104,53 @@ defmodule ShopWeb.PortalConfigsComponentTest do
     assert_redirect(view, "https://billing.stripe.com/p/session/test_1")
   end
 
+  test "both forms keep what was picked while the setups are read page by page", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/billing_portal/configurations"} => fn
+        %{"starting_after" => "bpc_default"} -> page([config("bpc_old", "Old", false)], false)
+        _first -> page([config("bpc_default", "Default", true)], true)
+      end,
+      {"POST", "/v1/billing_portal/configurations"} => config("bpc_teams", "Teams", false),
+      {"POST", "/v1/billing_portal/sessions"} => %{
+        "object" => "billing_portal.session",
+        "id" => "bps_1",
+        "url" => "https://billing.stripe.com/p/session/test_1"
+      }
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=portal-configs-show]") |> render_click()
+    render_async(view)
+    make = "[data-testid=portal-config-form]"
+    open = "[data-testid=portal-open-form]"
+
+    view |> form(make, %{"subscription_cancel" => "immediately"}) |> render_change()
+    view |> form(make, %{"headline" => "Teams billing"}) |> render_change()
+    view |> form(open, %{"configuration" => "bpc_default"}) |> render_change()
+    view |> form(open, %{"customer_id" => "cus_ada"}) |> render_change()
+
+    view |> element("[data-testid=portal-config-next]") |> render_click()
+    render_async(view)
+    view |> element("[data-testid=portal-config-first]") |> render_click()
+    render_async(view)
+
+    assert has_element?(
+             view,
+             "[data-testid=portal-open-config] option[value=bpc_default][selected]"
+           )
+
+    view |> form(make) |> render_submit()
+    assert_received {:stripe, "POST", "/v1/billing_portal/configurations", made}
+
+    assert %{"subscription_cancel" => %{"enabled" => "true", "mode" => "immediately"}} =
+             made["features"]
+
+    view |> form(open) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/billing_portal/sessions",
+                     %{"customer" => "cus_ada", "configuration" => "bpc_default"}}
+  end
+
   test "a portal without a customer, a setup without a name, or one Stripe refuses, says why", %{
     conn: conn
   } do

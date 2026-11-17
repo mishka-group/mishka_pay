@@ -139,6 +139,37 @@ defmodule ShopWeb.CardFormTest do
     assert has_element?(view, "[data-testid=card-payment-status]", "canceled")
   end
 
+  test "what is picked in a form stays picked while another part changes, and is what is sent",
+       %{conn: conn} do
+    StripeRoutes.stub(routes())
+    view = opened(conn)
+    pay = "[data-testid=card-payment-form]"
+    save = "[data-testid=card-setup-form]"
+
+    view |> form(pay, %{capture: "manual"}) |> render_change()
+    view |> form(pay, %{amount: "15.00"}) |> render_change()
+    view |> form(save, %{usage: "on_session"}) |> render_change()
+    view |> form(save, %{customer_id: "cus_9"}) |> render_change()
+    view |> form(save) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/setup_intents",
+                     %{"customer" => "cus_9", "usage" => "on_session"}}
+
+    server = "[data-testid=card-setup-server-form]"
+    view |> form(server, %{payment_method: "pm_card_visa"}) |> render_change()
+    assert has_element?(view, "[data-testid=card-payment-capture] option[value=manual][selected]")
+
+    view |> form(pay) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/payment_intents",
+                     %{"capture_method" => "manual", "amount" => "1500"}}
+
+    view |> form(server) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/setup_intents/seti_card_1/confirm",
+                     %{"payment_method" => "pm_card_visa"}}
+  end
+
   test "a card is saved with a setup intent, confirmed on the server", %{conn: conn} do
     StripeRoutes.stub(routes())
     view = opened(conn)

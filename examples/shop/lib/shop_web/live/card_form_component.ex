@@ -45,6 +45,7 @@ defmodule ShopWeb.CardFormComponent do
        setup: nil,
        payment_form: @payment_form,
        setup_form: @setup_form,
+       test_method: %{"payment" => "pm_card_mastercard", "setup" => "pm_card_mastercard"},
        notice: nil,
        error: nil
      )}
@@ -55,6 +56,16 @@ defmodule ShopWeb.CardFormComponent do
 
   @impl true
   def handle_event("show", _params, socket), do: {:noreply, assign(socket, open?: true)}
+
+  # What is typed or picked is kept, so another part re-rendering does not reset these forms.
+  def handle_event("draft_payment", params, socket),
+    do: {:noreply, assign(socket, payment_form: Map.take(params, Map.keys(@payment_form)))}
+
+  def handle_event("draft_setup", params, socket),
+    do: {:noreply, assign(socket, setup_form: Map.take(params, Map.keys(@setup_form)))}
+
+  def handle_event("pick_test_method", %{"kind" => kind, "payment_method" => method}, socket),
+    do: {:noreply, update(socket, :test_method, &Map.put(&1, kind, method))}
 
   def handle_event("create_payment", params, socket) do
     form = Map.take(params, Map.keys(@payment_form))
@@ -117,6 +128,7 @@ defmodule ShopWeb.CardFormComponent do
     do: {:noreply, show(socket, kind, fetch(socket, kind), "read again")}
 
   def handle_event("confirm_server", %{"kind" => kind, "payment_method" => method}, socket) do
+    socket = update(socket, :test_method, &Map.put(&1, kind, method))
     opts = [payment_method_id: method, return_url: ShopWeb.Endpoint.url() <> "/"]
     {:noreply, show(socket, kind, confirm(socket, kind, opts), "confirmed on the server")}
   end
@@ -203,6 +215,7 @@ defmodule ShopWeb.CardFormComponent do
           </.hint>
           <form
             id="card-payment-form"
+            phx-change="draft_payment"
             phx-submit="create_payment"
             phx-target={@myself}
             class="flex flex-wrap items-end gap-2 rounded-box bg-base-200 p-3"
@@ -271,6 +284,7 @@ defmodule ShopWeb.CardFormComponent do
             intent={@payment}
             publishable_key={@publishable_key}
             test_methods={@test_methods}
+            test_method={@test_method["payment"]}
             myself={@myself}
           />
         </div>
@@ -282,6 +296,7 @@ defmodule ShopWeb.CardFormComponent do
           </.hint>
           <form
             id="card-setup-form"
+            phx-change="draft_setup"
             phx-submit="create_setup"
             phx-target={@myself}
             class="flex flex-wrap items-end gap-2 rounded-box bg-base-200 p-3"
@@ -317,6 +332,7 @@ defmodule ShopWeb.CardFormComponent do
             intent={@setup}
             publishable_key={@publishable_key}
             test_methods={@test_methods}
+            test_method={@test_method["setup"]}
             myself={@myself}
           />
         </div>
@@ -329,6 +345,7 @@ defmodule ShopWeb.CardFormComponent do
   attr :intent, :map, required: true
   attr :publishable_key, :string, required: true
   attr :test_methods, :list, required: true
+  attr :test_method, :string, required: true
   attr :myself, :any, required: true
 
   defp intent(assigns) do
@@ -378,6 +395,7 @@ defmodule ShopWeb.CardFormComponent do
       <form
         :if={@intent.status in [:requires_payment_method, :requires_confirmation]}
         id={"card-#{@kind}-server-form"}
+        phx-change="pick_test_method"
         phx-submit="confirm_server"
         phx-target={@myself}
         class="join"
@@ -389,7 +407,9 @@ defmodule ShopWeb.CardFormComponent do
           class="select select-sm join-item"
           data-testid={"card-#{@kind}-test-method"}
         >
-          <option :for={{id, label} <- @test_methods} value={id}>{label}</option>
+          <option :for={{id, label} <- @test_methods} value={id} selected={id == @test_method}>
+            {label}
+          </option>
         </select>
         <button class="btn btn-sm join-item" data-testid={"card-#{@kind}-confirm-server"}>
           Confirm on the server

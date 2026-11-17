@@ -144,6 +144,46 @@ defmodule ShopWeb.CheckoutOptionsComponentTest do
     refute has_element?(view, "[data-testid=embedded-checkout]")
   end
 
+  test "what was picked stays picked through later changes and the checkout opening, and is sent again",
+       %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"POST", "/v1/checkout/sessions"} =>
+        Map.merge(@session, %{
+          "url" => nil,
+          "ui_mode" => "embedded_page",
+          "client_secret" => "cs_test_more_secret_1"
+        })
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    form = "[data-testid=checkout-more-form]"
+
+    for change <- [
+          %{"product" => "hoodie"},
+          %{"ui_mode" => "embedded"},
+          %{"submit_type" => "donate"},
+          %{"q1_type" => "dropdown"},
+          %{"q1_label" => "Size", "q1_options" => "S, M"},
+          %{"phone" => "true"}
+        ],
+        do: view |> form(form, change) |> render_change()
+
+    assert has_element?(view, "[data-testid=more-submit-type] option[value=donate][selected]")
+
+    for _time <- 1..2 do
+      view |> form(form) |> render_submit()
+      assert has_element?(view, "[data-testid=embedded-checkout]")
+
+      assert_received {:stripe, "POST", "/v1/checkout/sessions", params}
+      assert params["ui_mode"] == "embedded_page"
+      assert params["submit_type"] == "donate"
+      assert params["phone_number_collection"] == %{"enabled" => "true"}
+
+      assert %{"0" => %{"type" => "dropdown", "label" => %{"custom" => "Size"}}} =
+               params["custom_fields"]
+    end
+  end
+
   test "an embedded checkout without a publishable key says how to add one", %{conn: conn} do
     StripeRoutes.stub(%{{"POST", "/v1/checkout/sessions"} => @session}, %{publishable_key: nil})
     {:ok, view, _html} = live(conn, ~p"/")
