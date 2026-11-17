@@ -590,6 +590,67 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.delete_customer("stripe", id)
   end
 
+  test "a customer's subscriptions are listed by price and status, and searched, then ended",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "subs-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Listed plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    {200, %{"id" => id, "items" => %{"data" => [%{"price" => %{"id" => price}}]}}} =
+      stripe(key, :post, "/v1/subscriptions", %{
+        "customer" => customer,
+        "trial_period_days" => 7,
+        "metadata" => %{"mishka_pay_reference" => "subs-#{run}"},
+        "items" => [
+          %{
+            "price_data" => %{
+              "currency" => "usd",
+              "product" => product,
+              "unit_amount" => 500,
+              "recurring" => %{"interval" => "month"}
+            }
+          }
+        ]
+      })
+
+    assert {:ok, %MishkaPay.Page{items: [%Subscription{id: ^id, status: :trialing} = listed]}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, price_id: price)
+
+    assert {listed.reference, listed.customer_email} == {"subs-#{run}", "subs-#{run}@example.com"}
+    assert [%{product_id: ^product, interval: :month}] = listed.items
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, status: :active)
+
+    assert {:ok, %MishkaPay.Page{}} =
+             MishkaPay.search_subscriptions("stripe", nil,
+               status: :trialing,
+               reference: "subs-#{run}"
+             )
+
+    {:ok, %Subscription{status: :canceled}} =
+      MishkaPay.cancel_subscription("stripe", id, nil, at: :now)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.Page{items: [%Subscription{id: ^id, status: :canceled}]}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, status: :all)
+  end
+
+  defp delete_customer(id, keys) do
+    with :ok <- Stripe.delete_customer(id, keys), do: {:ok, :deleted}
+  end
+
   test "a refusal keeps Stripe's request id and error page, and its words show neither" do
     assert {:error,
             %Errors.Rejected{

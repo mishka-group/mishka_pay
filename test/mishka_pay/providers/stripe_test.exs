@@ -730,6 +730,68 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.fetch_subscription("stripe", "pi_123", "site-a")
     end
 
+    test "subscriptions are listed by customer, price and status, and searched, as Stripe's spec accepts" do
+      test_pid = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test_pid, {:query, conn.request_path, URI.decode_query(conn.query_string)})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok, %MishkaPay.Page{items: [%Subscription{id: "sub_" <> _} | _]}} =
+               MishkaPay.list_subscriptions("stripe", "site-a",
+                 customer_id: "cus_123",
+                 price_id: "price_123",
+                 status: :all,
+                 limit: 3,
+                 after: "sub_0"
+               )
+
+      assert_received {:query, "/v1/subscriptions", query}
+
+      assert %{
+               "customer" => "cus_123",
+               "price" => "price_123",
+               "status" => "all",
+               "limit" => "3",
+               "starting_after" => "sub_0"
+             } = query
+
+      assert {:ok, %MishkaPay.Page{items: [%Subscription{} | _]}} =
+               MishkaPay.search_subscriptions("stripe", "site-a",
+                 status: :past_due,
+                 reference: "order's-1",
+                 metadata: %{"plan" => "pro"}
+               )
+
+      assert_received {:query, "/v1/subscriptions/search", %{"query" => search}}
+
+      assert search ==
+               ~S(status:'past_due' AND metadata['mishka_pay_reference']:'order\'s-1' AND metadata['plan']:'pro')
+    end
+
+    test "a subscription list or search that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      for {opts, field} <- [
+            {[customer_id: "sub_1"], :customer_id},
+            {[price_id: "prod_1"], :price_id},
+            {[status: :ended], :status},
+            {[status: "active"], :status}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} =
+                 MishkaPay.list_subscriptions("stripe", "site-a", opts)
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :status, message: message}]}} =
+               MishkaPay.search_subscriptions("stripe", "site-a", status: :all)
+
+      assert message =~ "past_due"
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :query}]}} =
+               MishkaPay.search_subscriptions("stripe", "site-a", limit: 5)
+    end
+
     test "disputes are read, listed, answered with evidence and accepted as Stripe's spec accepts" do
       assert {:ok, %MishkaPay.Dispute{id: "dp_" <> _}} =
                MishkaPay.fetch_dispute("stripe", "dp_123", "site-a")

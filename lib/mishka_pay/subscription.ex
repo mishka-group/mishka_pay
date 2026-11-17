@@ -30,12 +30,13 @@ defmodule MishkaPay.Subscription do
 
   use GuardedStruct
 
-  @statuses "Atom[incomplete::incomplete_expired::trialing::active::past_due::unpaid::paused::canceled]"
+  @statuses ~w(incomplete incomplete_expired trialing active past_due unpaid paused canceled)a
+  @status_enum "Atom[#{Enum.join(@statuses, "::")}]"
 
   guardedstruct authorized_fields: true do
     field :provider, String.t(), enforce: true, derives: "validate(not_nil_value, string)"
     field :id, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
-    field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@statuses})"
+    field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@status_enum})"
     field :items, list(), structs: MishkaPay.Price, default: []
     field :customer_id, String.t(), derives: "validate(string)"
     field :customer_email, String.t(), derives: "validate(string)"
@@ -58,6 +59,13 @@ defmodule MishkaPay.Subscription do
     dynamic_field :metadata
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
+
+  @doc """
+  Every status a subscription can be in, as `:status` names them: what
+  `MishkaPay.list_subscriptions/3` and `MishkaPay.search_subscriptions/3` filter by.
+  """
+  @spec statuses() :: [atom()]
+  def statuses, do: @statuses
 
   # A provider names the behavior as a string.
   @doc false

@@ -10,8 +10,8 @@ defmodule MishkaPay do
   portal; save a customer's card with a checkout in `mode: :setup` and keep their saved payment
   methods; keep coupons and promotion codes; keep a catalog of products and prices; make payment
   links that sell them; end an open
-  checkout; list payments, invoices, customers, coupons, codes, products and prices page by page
-  (`MishkaPay.Page`).
+  checkout; list payments, subscriptions, invoices, customers, coupons, codes, products and prices
+  page by page (`MishkaPay.Page`).
 
       {:ok, checkout} =
         MishkaPay.checkout(%{
@@ -52,7 +52,8 @@ defmodule MishkaPay do
       `:refund_list`;
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
-      `:subscription_unpause`, `:invoices`, `:invoice`, `:invoice_upcoming`;
+      `:subscription_unpause`, `:subscription_list`, `:subscription_search`, `:invoices`,
+      `:invoice`, `:invoice_upcoming`;
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
@@ -1318,6 +1319,50 @@ defmodule MishkaPay do
       tenant,
       & &1.resume_collection(subscription_id, &2)
     )
+  end
+
+  @doc """
+  One page of subscriptions at `provider`, newest first (`MishkaPay.Page` of
+  `MishkaPay.Subscription`): `customer_id:` one customer's, `price_id:` those that charge a price,
+  `status:` those in one status (`MishkaPay.Subscription.statuses/0`) or `:all`, plus `limit:`
+  and `after:`. Without `status:` a provider may leave ended ones out (Stripe does). The provider
+  needs `:subscription_list`.
+  """
+  @spec list_subscriptions(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_subscriptions(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    listed(:subscription_list, :list_subscriptions, provider, tenant, opts, [:all])
+  end
+
+  @doc """
+  One page of `provider`'s subscriptions that match every filter given (`MishkaPay.Page`):
+  `status:` (`MishkaPay.Subscription.statuses/0`), `reference:` (the caller's own id from the
+  checkout), `metadata:` (a map whose pairs must all match), plus `limit:` and `after:`. A
+  subscription just made may take a minute to be found. The provider needs `:subscription_list`.
+  """
+  @spec search_subscriptions(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def search_subscriptions(provider, tenant \\ nil, opts) when is_binary(provider) do
+    listed(:subscription_search, :search_subscriptions, provider, tenant, opts, [])
+  end
+
+  # A subscription list or search, after its `status:` is checked against the statuses a
+  # subscription has (and the extra ones this call takes).
+  defp listed(operation, callback, provider, tenant, opts, extra) do
+    capable(:subscription_list, operation, provider, tenant, fn module, keys ->
+      statuses = MishkaPay.Subscription.statuses() ++ extra
+
+      case is_nil(opts[:status]) or opts[:status] in statuses do
+        true ->
+          apply(module, callback, [limited(opts), keys])
+
+        false ->
+          MishkaPay.ProviderKit.invalid(
+            :status,
+            Messages.text(:subscription_status, statuses: Enum.join(statuses, ", "))
+          )
+      end
+    end)
   end
 
   defp changed(operation, attrs, callback) do

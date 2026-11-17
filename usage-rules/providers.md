@@ -29,6 +29,9 @@ end
     `list_invoices/2`, `fetch_invoice/2`;
   - `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
     `pause_collection/3`, `resume_collection/2`;
+  - `:subscription_list`: `list_subscriptions/2` (`:customer_id`, `:price_id`, `:status`),
+    `search_subscriptions/2` (`:status`, `:reference`, `:metadata`); leave it out when the
+    provider has subscriptions but no list of them (PayPal);
   - `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
     `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
   - `:event_list`: `list_events/2`; optional `check_keys/1` (one read that changes nothing);

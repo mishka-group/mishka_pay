@@ -110,6 +110,8 @@ defmodule MishkaPay.Messages do
           | :due_sent_only
           | :stripe_event_types
           | :search_needs
+          | :subscription_search_needs
+          | :subscription_status
           | :fields_three
           | :merchant_of_record_off
           | :portal_feature_off
@@ -635,6 +637,12 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:search_needs),
     do: dgettext_noop("mishka_pay", "Search needs an email, a name or a reference")
+
+  defp msgid(:subscription_search_needs),
+    do: dgettext_noop("mishka_pay", "Search needs a status, a reference or metadata")
+
+  defp msgid(:subscription_status),
+    do: dgettext_noop("mishka_pay", "The status field must be one of: %{statuses}")
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")

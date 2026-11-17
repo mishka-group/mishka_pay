@@ -56,6 +56,7 @@ defmodule MishkaPay.Provider do
       `mode: :subscription`);
     * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
       `pause_collection/3`, `resume_collection/2`;
+    * `:subscription_list`: `list_subscriptions/2`, `search_subscriptions/2`;
     * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
@@ -105,6 +106,7 @@ defmodule MishkaPay.Provider do
     :refund_read,
     :subscription,
     :subscription_change,
+    :subscription_list,
     :invoice,
     :customer,
     :tax_id,
@@ -141,6 +143,9 @@ defmodule MishkaPay.Provider do
     * `:subscription`: charges again on a schedule.
     * `:subscription_change`: changes a running subscription's plan or quantity with proration,
       previews what that bills, and pauses or resumes its collection.
+    * `:subscription_list`: lists subscriptions page by page (by customer, status or price), and
+      searches them by status, reference or metadata. A provider can run subscriptions without
+      it: PayPal has no list of them.
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:customer`: keeps buyers (create, read, update, list, delete).
     * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
@@ -174,6 +179,7 @@ defmodule MishkaPay.Provider do
           | :refund_read
           | :subscription
           | :subscription_change
+          | :subscription_list
           | :invoice
           | :customer
           | :tax_id
@@ -364,6 +370,22 @@ defmodule MishkaPay.Provider do
   @doc "With `:subscription_change`. Collects a paused subscription's payments again."
   @callback resume_collection(subscription_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_list`. One page of subscriptions, newest first; only those of
+  `:customer_id`, charging `:price_id`, or in `:status` (a `MishkaPay.Subscription` status, or
+  `:all`) when given.
+  """
+  @callback list_subscriptions(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_list`. One page of subscriptions that match every filter given:
+  `:status`, `:reference` (the caller's own id from the checkout), `:metadata` (pairs that must
+  all match).
+  """
+  @callback search_subscriptions(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:payment_list`. One page of payments, newest first; only `:customer_id`'s when given."
   @callback list_payments(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -679,6 +701,8 @@ defmodule MishkaPay.Provider do
                       preview_subscription_change: 2,
                       pause_collection: 3,
                       resume_collection: 2,
+                      list_subscriptions: 2,
+                      search_subscriptions: 2,
                       create_customer: 2,
                       fetch_customer: 2,
                       update_customer: 2,
@@ -759,6 +783,7 @@ defmodule MishkaPay.Provider do
       pause_collection: 3,
       resume_collection: 2
     ],
+    subscription_list: [list_subscriptions: 2, search_subscriptions: 2],
     invoice: [
       create_invoice: 2,
       finalize_invoice: 2,

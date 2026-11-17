@@ -1,7 +1,7 @@
 # Rules for Stripe in Mishka Pay
 
 `MishkaPay.Providers.Stripe` (id `"stripe"`) has every capability: `:checkout`, `:refund`,
-`:subscription`, `:webhook`. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
+`:subscription`, `:subscription_list`, `:webhook` and the rest. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
 `mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
 
 ## Checkout
@@ -105,6 +105,15 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - A file id works in one request only: upload again for another dispute.
 - `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
   `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
+
+## Listing subscriptions
+
+- `list_subscriptions/3` is `GET /v1/subscriptions` (`customer`, `price`, `status`); without
+  `status:` Stripe leaves canceled ones out. Each comes with its customer, but Stripe expands four
+  levels at most, so a listed item has its `:product_id` and the price's nickname, not the
+  product's name: `fetch_subscription/3` reads one with its names.
+- `search_subscriptions/3` is Stripe's search (`GET /v1/subscriptions/search`, `status` and
+  `metadata` fields); its index lags up to a minute, and `:next` is Stripe's `next_page`.
 
 ## Subscription changes
 

@@ -3,8 +3,10 @@ defmodule ShopWeb.SubscriptionsComponent do
   The subscriptions part of the demo shop: every subscription the shop keeps, live, and one at a
   time in detail: the stored row beside the subscription read live from Stripe
   (`MishkaPay.fetch_subscription/3`), its invoices (`MishkaPay.list_invoices/3`), and the `:cancel`
-  (at the period's end or now), `:resume` and `:sync` actions. The page sends it each changed
-  subscription (`changed`) and a subscription to open (`open`).
+  (at the period's end or now), `:resume` and `:sync` actions. Below the table,
+  `ShopWeb.SubscriptionFinderComponent` lists and searches Stripe's own subscriptions; "Open" on
+  one keeps it here. The page sends it each changed subscription (`changed`) and a subscription to
+  open (`open`).
   """
 
   use ShopWeb, :live_component
@@ -198,6 +200,13 @@ defmodule ShopWeb.SubscriptionsComponent do
           </tbody>
         </table>
       </div>
+
+      <.live_component
+        module={ShopWeb.SubscriptionFinderComponent}
+        id="subscription-finder"
+        tenant={@tenant}
+        open_target={@myself}
+      />
 
       <.details
         :if={@selected}

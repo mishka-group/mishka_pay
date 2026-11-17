@@ -37,6 +37,25 @@ MishkaPay.checkout(%{
 
 `cancel_at_period_end: true` means it still runs until `current_period_end`, then ends.
 
+## Finding them
+
+```elixir
+MishkaPay.list_subscriptions("stripe", site.id, customer_id: customer.id, status: :all)
+MishkaPay.list_subscriptions("stripe", site.id, price_id: pro.id, status: :past_due, limit: 50)
+MishkaPay.search_subscriptions("stripe", site.id, reference: account.id)
+MishkaPay.search_subscriptions("stripe", site.id, status: :active, metadata: %{"plan" => "pro"})
+```
+
+- Both answer a `MishkaPay.Page` (`limit:`, `after:`) and need the provider's
+  `:subscription_list` capability: Stripe has it; PayPal has no list of subscriptions and refuses
+  with `Errors.Unsupported` before any request.
+- `status:` is one of `MishkaPay.Subscription.statuses/0`; a list also takes `:all`. Without it a
+  list may leave ended subscriptions out (Stripe leaves `:canceled` out). Anything else is
+  `Errors.Invalid` on `:status`.
+- A search needs `status:`, `reference:` (the checkout's `reference`) or `metadata:`, all of which
+  must match. A subscription just made may take a minute to be found: read one you know by id with
+  `fetch_subscription/3`.
+
 ## Changing it
 
 - `MishkaPay.cancel_subscription(provider, id, tenant)` cancels at the period's end (the buyer

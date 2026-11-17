@@ -31,7 +31,9 @@ defmodule MishkaPay.Providers.Stripe do
       `list_invoices/2` read a Subscription with its customer and products, cancel it at once
       (`DELETE`) or at the period's end (`cancel_at_period_end`), take that back, and list its
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
-      on the subscription.
+      on the subscription. `list_subscriptions/2` lists them by customer, price or status (Stripe
+      leaves canceled ones out unless asked for them or for `:all`), and `search_subscriptions/2`
+      finds them with Stripe's search by status, reference or metadata.
     * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` and
       `delete_customer/2` keep Customers (`cus_...`), with the reference in their metadata; a
       delete is for good and cancels the customer's subscriptions at once; `create_tax_id/2`,
@@ -116,6 +118,7 @@ defmodule MishkaPay.Providers.Stripe do
       :refund_read,
       :subscription,
       :subscription_change,
+      :subscription_list,
       :invoice,
       :customer,
       :tax_id,
@@ -484,6 +487,23 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # A listed subscription brings its customer. Stripe expands four levels at most, so its prices'
+  # products are not: an item has its `:product_id`, and the price's nickname as its name.
+  @impl MishkaPay.Provider
+  def list_subscriptions(opts, keys) do
+    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id),
+         :ok <- maybe_id(opts[:price_id], "price_", :price_id) do
+      filters = [
+        customer: opts[:customer_id],
+        price: opts[:price_id],
+        status: opts[:status],
+        "expand[]": "data.customer"
+      ]
+
+      page("/v1/subscriptions", filters, opts, keys, &Mapper.subscription/1)
+    end
+  end
+
   @impl MishkaPay.Provider
   def list_payments(opts, keys) do
     with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
@@ -836,33 +856,61 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   # Stripe's search language: each filter quoted, a quote inside escaped; the reference is kept
-  # in the customer's metadata. Search pages on its own `next_page` cursor.
+  # in the customer's metadata.
   @impl MishkaPay.Provider
   def search_customers(opts, keys) do
-    clauses =
-      for {field, key} <- [email: "email", name: "name", reference: "metadata['#{@reference}']"],
-          value = opts[field],
-          is_binary(value),
-          do: "#{key}:'#{String.replace(value, ~S('), ~S(\'))}'"
+    [
+      {"email", opts[:email]},
+      {"name", opts[:name]},
+      {"metadata['#{@reference}']", opts[:reference]}
+    ]
+    |> search("/v1/customers/search", :search_needs, opts, keys, &Mapper.customer/1)
+  end
 
-    case clauses do
+  # The reference and the caller's metadata are both in the subscription's metadata.
+  @impl MishkaPay.Provider
+  def search_subscriptions(opts, keys) do
+    metadata =
+      for {key, value} <- Map.new(opts[:metadata] || []),
+          do: {"metadata['#{quoted(key)}']", value}
+
+    [
+      {"status", opts[:status] && Atom.to_string(opts[:status])},
+      {"metadata['#{@reference}']", opts[:reference]} | metadata
+    ]
+    |> search(
+      "/v1/subscriptions/search",
+      :subscription_search_needs,
+      opts,
+      keys,
+      &Mapper.subscription/1,
+      "expand[]": "data.customer"
+    )
+  end
+
+  # One page of a Stripe search: every filter given, joined with AND. Search pages on its own
+  # `next_page` cursor.
+  defp search(filters, path, needs, opts, keys, map, expand \\ []) do
+    case for {field, value} <- filters, is_binary(value), do: "#{field}:'#{quoted(value)}'" do
       [] ->
-        invalid(:query, Messages.text(:search_needs))
+        invalid(:query, Messages.text(needs))
 
       clauses ->
         params =
           [query: Enum.join(clauses, " AND "), limit: opts[:limit], page: opts[:after]]
+          |> Kernel.++(expand)
           |> Enum.reject(fn {_name, value} -> is_nil(value) end)
           |> Enum.map(fn {name, value} -> {Atom.to_string(name), to_string(value)} end)
 
-        with {:ok, %{"data" => data} = answer} <-
-               request(:get, "/v1/customers/search", params, keys),
-             {:ok, items} <- data |> Enum.map(&Mapper.customer/1) |> all_ok() do
+        with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
+             {:ok, items} <- data |> Enum.map(map) |> all_ok() do
           next = answer["has_more"] == true && answer["next_page"]
           {:ok, struct(Page, items: items, has_more: is_binary(next), next: next || nil)}
         end
     end
   end
+
+  defp quoted(text), do: String.replace(to_string(text), ~S('), ~S(\'))
 
   @impl MishkaPay.Provider
   def upcoming_invoice(subscription_id, keys) do

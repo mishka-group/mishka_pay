@@ -99,6 +99,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.refund(attrs)` | `%MishkaPay.Refund{}` |
 | `MishkaPay.fetch_refund(provider, refund_id, tenant)`, `list_refunds(provider, tenant, payment_id: id)` | `%MishkaPay.Refund{}` read again; a `MishkaPay.Page` of them |
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
+| `MishkaPay.list_subscriptions(provider, tenant, customer_id: id, status: :all)` (or `price_id:`), `search_subscriptions(provider, tenant, reference: r, metadata: %{...})` | a `MishkaPay.Page` of `%MishkaPay.Subscription{}`; the provider needs `:subscription_list` |
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
 | `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |

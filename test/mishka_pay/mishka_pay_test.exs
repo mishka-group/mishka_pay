@@ -627,6 +627,25 @@ defmodule MishkaPayTest do
       assert {:error, %Errors.Unsupported{operation: :subscription}} =
                MishkaPay.fetch_subscription("checkout_only", "sub_1")
     end
+
+    test "a provider with subscriptions but no list of them refuses a list and a search" do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:mishka_pay, :subscription_list, :stop],
+          [:mishka_pay, :subscription_search, :stop]
+        ])
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :subscription_list}} =
+               MishkaPay.list_subscriptions("acme", "site-a", customer_id: "acme_cus_1")
+
+      assert {:error, %Errors.Unsupported{operation: :subscription_list}} =
+               MishkaPay.search_subscriptions("acme", "site-a", status: :active)
+
+      for operation <- [:subscription_list, :subscription_search] do
+        assert_received {[:mishka_pay, ^operation, :stop], ^ref, _,
+                         %{provider: "acme", tenant: "site-a", outcome: :provider}}
+      end
+    end
   end
 
   test "an embedded form or a hold on the card needs its capability, asked before the provider" do

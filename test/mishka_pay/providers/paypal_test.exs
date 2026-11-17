@@ -157,6 +157,16 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no list of subscriptions: a list or a search is refused before any request" do
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :subscription_list}} =
+               MishkaPay.list_subscriptions("paypal", "site-a", status: :active)
+
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :subscription_list}} =
+               MishkaPay.search_subscriptions("paypal", "site-a", reference: "order-1")
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "a decline and a refusal keep PayPal's debug id and error page, never in their words" do
       PayPalStub.order("ORDER3", "APPROVED", declined: true)
 
