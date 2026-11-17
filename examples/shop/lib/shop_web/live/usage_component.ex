@@ -14,11 +14,13 @@ defmodule ShopWeb.UsageComponent do
 
   @windows %{"hour" => 3600, "day" => 86_400, "month" => 30 * 86_400}
 
-  # What the forms' selects keep between re-renders (their other fields are function
-  # components LiveView leaves alone while their attributes do not change).
+  # What the forms keep between re-renders: the selects of the meter, summary and price forms
+  # (their other fields are function components LiveView leaves alone while their attributes do
+  # not change), and all the report form's fields, so a refused report keeps what was typed.
   @meter_form %{"name" => "", "event_name" => "", "aggregation" => "sum"}
   @summary_form %{"window" => "hour"}
   @price_form %{"currency" => "USD", "interval" => "month"}
+  @report_form %{"event_name" => "", "customer_id" => "", "value" => "1", "reference" => ""}
 
   @impl true
   def mount(socket) do
@@ -27,12 +29,13 @@ defmodule ShopWeb.UsageComponent do
        meter_form: @meter_form,
        summary_form: @summary_form,
        price_form: @price_form,
+       report_form: %{@report_form | "reference" => reference()},
+       report_error: nil,
        meters: nil,
        reported: nil,
        cancelled: nil,
        summary: nil,
        price: nil,
-       reference: reference(),
        notice: nil,
        error: nil
      )}
@@ -42,6 +45,9 @@ defmodule ShopWeb.UsageComponent do
   def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
   @impl true
+  def handle_event("draft_report", params, socket),
+    do: {:noreply, socket |> keep("report", params) |> assign(report_error: nil)}
+
   def handle_event("draft_" <> form, params, socket), do: {:noreply, keep(socket, form, params)}
 
   def handle_event("create_meter", params, socket) do
@@ -113,6 +119,8 @@ defmodule ShopWeb.UsageComponent do
   end
 
   def handle_event("report", params, socket) do
+    socket = keep(socket, "report", params)
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -126,11 +134,12 @@ defmodule ShopWeb.UsageComponent do
       {:ok, usage} ->
         {:noreply,
          socket
-         |> assign(reported: usage, cancelled: nil, reference: reference())
+         |> assign(reported: usage, cancelled: nil, report_error: nil)
+         |> update(:report_form, &%{&1 | "reference" => reference()})
          |> done("Usage reported. Stripe counts it within a few minutes.")}
 
       {:error, error} ->
-        {:noreply, failed(socket, error)}
+        {:noreply, assign(socket, report_error: MishkaPay.Ash.message(error))}
     end
   end
 
@@ -183,6 +192,9 @@ defmodule ShopWeb.UsageComponent do
     do: assign(socket, summary_form: kept(@summary_form, params))
 
   defp keep(socket, "price", params), do: assign(socket, price_form: kept(@price_form, params))
+
+  defp keep(socket, "report", params),
+    do: assign(socket, report_form: kept(@report_form, params))
 
   defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
 
@@ -358,6 +370,7 @@ defmodule ShopWeb.UsageComponent do
       <div class="grid gap-4 lg:grid-cols-3">
         <form
           id="usage-report-form"
+          phx-change="draft_report"
           phx-submit="report"
           phx-target={@myself}
           class="card bg-base-200"
@@ -365,20 +378,34 @@ defmodule ShopWeb.UsageComponent do
         >
           <div class="card-body gap-2">
             <h3 class="font-medium">Report usage</h3>
-            <.meter_events meters={@meters} />
+            <.meter_events meters={@meters} value={@report_form["event_name"]} />
             <.input_field
               name="customer_id"
               label="Customer id"
+              value={@report_form["customer_id"]}
               placeholder="cus_..."
               testid="usage-customer"
             />
-            <.input_field name="value" label="How much" value="1" testid="usage-value" />
+            <.input_field
+              name="value"
+              label="How much"
+              value={@report_form["value"]}
+              testid="usage-value"
+            />
             <.input_field
               name="reference"
               label="Reference (counts once)"
-              value={@reference}
+              value={@report_form["reference"]}
               testid="usage-reference"
             />
+            <p
+              :if={@report_error}
+              role="alert"
+              class="alert alert-error py-2 text-sm"
+              data-testid="usage-report-error"
+            >
+              {@report_error}
+            </p>
             <div>
               <button
                 class="btn btn-sm btn-primary"
@@ -530,6 +557,7 @@ defmodule ShopWeb.UsageComponent do
   end
 
   attr :meters, :list, default: nil
+  attr :value, :string, default: nil
 
   defp meter_events(assigns) do
     ~H"""
@@ -538,6 +566,7 @@ defmodule ShopWeb.UsageComponent do
       <input
         name="event_name"
         list="usage-event-names"
+        value={@value}
         placeholder="api_call"
         class="input input-sm"
         data-testid="usage-event"

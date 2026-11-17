@@ -218,7 +218,38 @@ defmodule ShopWeb.UsageTest do
     })
     |> render_submit()
 
-    assert has_element?(view, "[data-testid=usage-error]")
+    assert has_element?(view, "[data-testid=usage-report-error]")
+    assert has_element?(view, "[data-testid=usage-value][value='1.5.2']")
     refute_received {:reported, _payload}
+  end
+
+  test "a reference already used says why and keeps what was typed", %{conn: conn} do
+    StripeStub.stub(fn
+      "POST", "/v1/billing/meter_events", _params ->
+        StripeStub.error(
+          "An event already exists with identifier use-taken.",
+          "meter_event_identifier_already_exists"
+        )
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    report = "[data-testid=usage-report-form]"
+
+    typed = %{event_name: "api_call", customer_id: "cus_1", value: "4", reference: "use-taken"}
+    view |> form(report, typed) |> render_change()
+    view |> form(report, typed) |> render_submit()
+
+    assert has_element?(view, "[data-testid=usage-report-error]", "already_exists")
+    refute has_element?(view, "[data-testid=usage-reported]")
+    assert has_element?(view, "[data-testid=usage-event][value=api_call]")
+    assert has_element?(view, "[data-testid=usage-customer][value=cus_1]")
+    assert has_element?(view, "[data-testid=usage-value][value='4']")
+    assert has_element?(view, "[data-testid=usage-reference][value=use-taken]")
+
+    view |> form(report, %{typed | reference: "use-new"}) |> render_change()
+    refute has_element?(view, "[data-testid=usage-report-error]")
   end
 end
