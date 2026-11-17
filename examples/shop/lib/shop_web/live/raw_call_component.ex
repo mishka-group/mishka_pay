@@ -6,7 +6,8 @@ defmodule ShopWeb.RawCallComponent do
   (`//evil.test`, `https://evil.test/x`, `../`) is refused before anything is sent.
 
   Nothing is read until "Send" is pressed; the answer is read in the background
-  (`start_async`), with a loading mark while Stripe answers.
+  (`start_async`), with a loading mark while Stripe answers. A refusal shows inside the part's
+  own card and goes when the form is changed or sent again.
   """
 
   use ShopWeb, :live_component
@@ -28,6 +29,9 @@ defmodule ShopWeb.RawCallComponent do
   def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
   @impl true
+  def handle_event("edit", params, socket),
+    do: {:noreply, assign(socket, form: params, error: nil)}
+
   def handle_event("send", params, socket) do
     attrs = %{
       provider: "stripe",
@@ -86,6 +90,7 @@ defmodule ShopWeb.RawCallComponent do
 
       <form
         id="raw-call-form"
+        phx-change="edit"
         phx-submit="send"
         phx-target={@myself}
         class="card bg-base-200"
@@ -138,12 +143,12 @@ defmodule ShopWeb.RawCallComponent do
               data-testid="raw-call-reading"
             ></span>
           </div>
+          <div :if={@error} role="alert" class="alert alert-error py-2" data-testid="raw-call-error">
+            {@error}
+          </div>
         </div>
       </form>
 
-      <div :if={@error} role="alert" class="alert alert-error py-2" data-testid="raw-call-error">
-        {@error}
-      </div>
       <pre
         :if={@answer}
         class="rounded-box bg-base-200 p-3 text-xs overflow-auto max-h-96"
