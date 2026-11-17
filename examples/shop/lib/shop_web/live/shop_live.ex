@@ -227,6 +227,23 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
+  # A payment intent no one paid is canceled on Stripe, then read back and saved, so the row and the
+  # panel show it ended.
+  def handle_event("cancel_payment", %{"payment" => id}, socket) do
+    with {:ok, row} <- Ash.get(Payment, id, authorize?: false),
+         {:ok, _intent} <-
+           MishkaPay.cancel_payment_intent(row.provider, row.provider_id, row.tenant),
+         {:ok, payment} <- sync(row.provider_id) do
+      {:noreply,
+       socket
+       |> put_payment(payment)
+       |> select(payment.id)
+       |> flash(:info, "Payment canceled: it can no longer be paid.")}
+    else
+      {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
   # What is typed in the buy form and the payment box is kept, so both come back as they were
   # after a reconnect (LiveView sends them again as these changes).
   def handle_event("typed", params, socket) do

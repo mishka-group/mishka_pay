@@ -40,14 +40,75 @@ defmodule ShopWeb.PaymentDetailsTest do
                      %{"reason" => "duplicate", "amount" => "500"}}
   end
 
-  defp intent do
+  test "a payment still waiting is canceled on Stripe and read back as canceled", %{conn: conn} do
+    {:ok, status} = Agent.start_link(fn -> "requires_payment_method" end)
+    read = fn _params -> intent("pi_open", Agent.get(status, & &1)) end
+
+    StripeRoutes.stub(%{
+      {"GET", "/v1/payment_intents/pi_paid"} => intent(),
+      {"GET", "/v1/payment_intents/pi_open"} => read,
+      {"POST", "/v1/payment_intents/pi_open/cancel"} => fn params ->
+        Agent.update(status, fn _waiting -> "canceled" end)
+        read.(params)
+      end
+    })
+
+    seed("pi_open", :pending)
+    seed("pi_paid", :paid)
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=payment-row][data-payment-id=pi_paid]") |> render_click()
+    refute has_element?(view, "[data-testid=payment-cancel]")
+
+    view |> element("[data-testid=payment-row][data-payment-id=pi_open]") |> render_click()
+    assert view |> element("[data-testid=payment-cancel]") |> render() =~ "data-confirm"
+
+    view |> element("[data-testid=payment-cancel]") |> render_click()
+    render_async(view)
+
+    assert_received {:stripe, "POST", "/v1/payment_intents/pi_open/cancel", _params}
+    assert has_element?(view, "[data-testid=stored-status]", "canceled")
+    assert has_element?(view, "[data-testid=live-status]", "canceled")
+    refute has_element?(view, "[data-testid=payment-cancel]")
+  end
+
+  test "a cancel Stripe refuses says why and leaves the payment as it was", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/payment_intents/pi_open"} => intent("pi_open", "processing"),
+      {"POST", "/v1/payment_intents/pi_open/cancel"} =>
+        StripeRoutes.error(400, "This PaymentIntent is processing and cannot be canceled.")
+    })
+
+    seed("pi_open", :pending)
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=payment-row][data-payment-id=pi_open]") |> render_click()
+    view |> element("[data-testid=payment-cancel]") |> render_click()
+
+    assert has_element?(view, "#flash-error")
+    assert has_element?(view, "[data-testid=stored-status]", "pending")
+    assert has_element?(view, "[data-testid=payment-cancel]")
+  end
+
+  defp seed(provider_id, status) do
+    Ash.Seed.seed!(Shop.Pay.Payment, %{
+      provider: "stripe",
+      provider_id: provider_id,
+      tenant: "demo",
+      status: status,
+      amount: Decimal.new("19.99"),
+      currency: "USD",
+      synced_at: DateTime.utc_now()
+    })
+  end
+
+  defp intent(id \\ "pi_paid", status \\ "succeeded") do
     %{
       "object" => "payment_intent",
-      "id" => "pi_paid",
+      "id" => id,
       "amount" => 1999,
-      "amount_received" => 1999,
+      "amount_received" => if(status == "succeeded", do: 1999, else: 0),
       "currency" => "usd",
-      "status" => "succeeded",
+      "status" => status,
       "created" => 1_790_000_000,
       "metadata" => %{}
     }

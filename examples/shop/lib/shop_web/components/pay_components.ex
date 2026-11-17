@@ -760,7 +760,10 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
-  @doc "One payment: the row the shop keeps, the payment as its provider has it, its events and actions."
+  @doc """
+  One payment: the row the shop keeps, the payment as its provider has it, its events and actions.
+  A Stripe payment not paid yet has "Cancel" (`cancel_payment`), so one left waiting can be ended.
+  """
   attr :selected, :map, required: true
   attr :live, :any, required: true
   attr :names, :map, required: true
@@ -843,14 +846,28 @@ defmodule ShopWeb.PayComponents do
               <dt class="opacity-70">Last synced</dt>
               <dd class="text-xs" data-testid="stored-synced">{time(@selected.payment.synced_at)}</dd>
             </dl>
-            <button
-              class="btn btn-sm mt-3"
-              phx-click="sync"
-              phx-value-payment_id={@selected.payment.provider_id}
-              data-testid="details-sync"
-            >
-              <.icon name="hero-arrow-path" class="size-4" /> Sync from {@at}
-            </button>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <button
+                class="btn btn-sm"
+                phx-click="sync"
+                phx-value-payment_id={@selected.payment.provider_id}
+                data-testid="details-sync"
+              >
+                <.icon name="hero-arrow-path" class="size-4" /> Sync from {@at}
+              </button>
+              <button
+                :if={cancelable?(@selected.payment)}
+                class="btn btn-sm btn-error btn-outline"
+                phx-click="cancel_payment"
+                phx-value-payment={@selected.payment.id}
+                phx-disable-with="Asking Stripe..."
+                data-confirm="Cancel this payment on Stripe? It can no longer be paid."
+                data-testid="payment-cancel"
+              >
+                <.icon name="hero-no-symbol" class="size-4" /> Cancel
+              </button>
+            </div>
+            <.hint :if={cancelable?(@selected.payment)}>MishkaPay.cancel_payment_intent/3</.hint>
           </div>
 
           <div class="rounded-box bg-base-100 p-4" data-testid="details-live">
@@ -1030,6 +1047,13 @@ defmodule ShopWeb.PayComponents do
     {@message} <code :if={@code} class="text-xs opacity-60">{@code}</code>
     """
   end
+
+  # A Stripe payment intent no one has paid yet (waiting for a card, for the buyer, or after a
+  # declined card) can still be canceled; a held one is let go under "Refunds and held payments".
+  defp cancelable?(%{provider: "stripe", status: status}),
+    do: status in [:pending, :requires_action, :failed]
+
+  defp cancelable?(_payment), do: false
 
   defp no_refund(:refunded), do: "Nothing to refund: the payment is refunded in full."
   defp no_refund(:pending), do: "Nothing to refund yet: the payment is not paid."
