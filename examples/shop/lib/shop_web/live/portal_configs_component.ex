@@ -45,17 +45,7 @@ defmodule ShopWeb.PortalConfigsComponent do
 
   def handle_event("create", params, socket) do
     socket = assign(socket, form: params)
-
-    case MishkaPay.create_portal_configuration(config_attrs(params, socket.assigns.tenant)) do
-      {:ok, config} ->
-        {:noreply,
-         socket
-         |> update(:configs, &[config | &1])
-         |> say(:info, "Portal setup #{config.id} made on Stripe.")}
-
-      {:error, error} ->
-        {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
-    end
+    create(socket, params, blank_nil(params["name"]))
   end
 
   def handle_event("toggle", %{"id" => id, "active" => active}, socket) do
@@ -366,6 +356,23 @@ defmodule ShopWeb.PortalConfigsComponent do
     socket
     |> assign(reading?: true)
     |> start_async(:page, fn -> MishkaPay.list_portal_configurations("stripe", tenant, opts) end)
+  end
+
+  # The shop names every setup it makes, so its list can tell them apart.
+  defp create(socket, _params, nil),
+    do: {:noreply, say(socket, :error, "Give the setup a name.")}
+
+  defp create(socket, params, _name) do
+    case MishkaPay.create_portal_configuration(config_attrs(params, socket.assigns.tenant)) do
+      {:ok, config} ->
+        {:noreply,
+         socket
+         |> update(:configs, &[config | &1])
+         |> say(:info, "Portal setup #{config.id} made on Stripe.")}
+
+      {:error, error} ->
+        {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
+    end
   end
 
   defp read_failed(socket), do: assign(socket, configs: [], next: nil, reading?: false)

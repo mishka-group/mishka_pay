@@ -104,7 +104,9 @@ defmodule ShopWeb.PortalConfigsComponentTest do
     assert_redirect(view, "https://billing.stripe.com/p/session/test_1")
   end
 
-  test "a portal without a customer, or a setup Stripe refuses, says why", %{conn: conn} do
+  test "a portal without a customer, a setup without a name, or one Stripe refuses, says why", %{
+    conn: conn
+  } do
     StripeRoutes.stub(%{
       {"POST", "/v1/billing_portal/configurations"} =>
         StripeRoutes.error(400, "Invalid URL: not a url", "business_profile[privacy_policy_url]")
@@ -118,6 +120,10 @@ defmodule ShopWeb.PortalConfigsComponentTest do
     view |> form("[data-testid=portal-open-form]", %{}) |> render_submit()
     refute_received {:stripe, "POST", "/v1/billing_portal/sessions", _params}
     assert view |> element("#flash-error") |> render() =~ "Pick a customer"
+
+    view |> form("[data-testid=portal-config-form]", %{"name" => "  "}) |> render_submit()
+    refute_received {:stripe, "POST", "/v1/billing_portal/configurations", _params}
+    assert view |> element("#flash-error") |> render() =~ "Give the setup a name"
 
     view |> form("[data-testid=portal-config-form]", %{"name" => "Broken"}) |> render_submit()
     assert_received {:stripe, "POST", "/v1/billing_portal/configurations", _params}
