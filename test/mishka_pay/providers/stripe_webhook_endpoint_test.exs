@@ -60,7 +60,7 @@ defmodule MishkaPay.Providers.StripeWebhookEndpointTest do
 
   test "an endpoint missing events gets them added, keeping its own" do
     stripe([
-      %{"id" => "we_1", "url" => @url, "enabled_events" => ["invoice.paid", "account.updated"]}
+      %{"id" => "we_1", "url" => @url, "enabled_events" => ["invoice.paid", "issuing_card.created"]}
     ])
 
     assert {:ok, %{missing: missing}} = WebhookEndpoint.check("site-a", @url)
@@ -70,7 +70,7 @@ defmodule MishkaPay.Providers.StripeWebhookEndpointTest do
     assert {:ok, %WebhookEndpoint{secret: nil, enabled_events: events}} =
              WebhookEndpoint.ensure("site-a", @url)
 
-    assert "account.updated" in events
+    assert "issuing_card.created" in events
     assert Enum.all?(handled(), &(&1 in events))
     assert_received {:write, "/v1/webhook_endpoints/we_1", _form}
   end
