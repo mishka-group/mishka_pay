@@ -101,6 +101,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
 | `MishkaPay.list_subscriptions(provider, tenant, customer_id: id, status: :all)` (or `price_id:`), `search_subscriptions(provider, tenant, reference: r, metadata: %{...})` | a `MishkaPay.Page` of `%MishkaPay.Subscription{}`; the provider needs `:subscription_list` |
 | `MishkaPay.cancel_subscription(provider, id, tenant, at: :period_end \| :now)` | the subscription after |
+| `MishkaPay.create_subscription_schedule(attrs)` (`MishkaPay.SubscriptionSchedule`: `:subscription_id`, or `:customer_id` and `:phases` of `MishkaPay.SubscriptionPhase`; `:end_behavior`, `:reference`), `fetch_subscription_schedule/3`, `list_subscription_schedules(p, tenant, customer_id: id)`, `update_subscription_schedule/1`, `release_subscription_schedule/3`, `cancel_subscription_schedule/4` | `%MishkaPay.SubscriptionSchedule{}`: a subscription's changes planned ahead in phases; the provider needs `:subscription_schedule` |
 | `MishkaPay.resume_subscription(provider, id, tenant)` | takes back a cancel set for the period's end |
 | `MishkaPay.change_subscription(attrs)`, `preview_subscription_change/1` | a new plan or quantity, with proration; the preview is the `%MishkaPay.Invoice{}` it would bill |
 | `MishkaPay.pause_collection(provider, id, tenant, behavior: ...)`, `resume_collection/3` | stops or starts charging without cancelling |

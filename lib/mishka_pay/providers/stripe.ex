@@ -34,6 +34,14 @@ defmodule MishkaPay.Providers.Stripe do
       on the subscription. `list_subscriptions/2` lists them by customer, price or status (Stripe
       leaves canceled ones out unless asked for them or for `:all`), and `search_subscriptions/2`
       finds them with Stripe's search by status, reference or metadata.
+    * `create_subscription_schedule/2`, `fetch_subscription_schedule/2`,
+      `list_subscription_schedules/2`, `update_subscription_schedule/2`,
+      `release_subscription_schedule/2` and `cancel_subscription_schedule/3` use Subscription
+      Schedules (`sub_sched_...`): made `from_subscription`, or for a customer with phases; a
+      phase's `:iterations` and `:interval` are its `duration` (this API version has no
+      `iterations`), and the reference makes the idempotency key and is kept in its metadata
+      (set in a second request on one made from a subscription, which Stripe makes without
+      metadata).
     * `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2` and
       `delete_customer/2` keep Customers (`cus_...`), with the reference in their metadata; a
       delete is for good and cancels the customer's subscriptions at once; `create_tax_id/2`,
@@ -132,6 +140,7 @@ defmodule MishkaPay.Providers.Stripe do
       :subscription,
       :subscription_change,
       :subscription_list,
+      :subscription_schedule,
       :invoice,
       :invoice_item,
       :credit_note,
@@ -166,7 +175,8 @@ defmodule MishkaPay.Providers.Stripe do
     Product,
     PromotionCode,
     ProviderKit,
-    Refund
+    Refund,
+    SubscriptionSchedule
   }
 
   alias MishkaPay.Providers.Stripe.Mapper
@@ -232,6 +242,13 @@ defmodule MishkaPay.Providers.Stripe do
     "invoice.updated" => [:invoice],
     "invoice.sent" => [:invoice],
     "invoice.deleted" => [:invoice],
+    "subscription_schedule.created" => [:subscription_schedule, :subscription],
+    "subscription_schedule.updated" => [:subscription_schedule, :subscription],
+    "subscription_schedule.released" => [:subscription_schedule, :subscription],
+    "subscription_schedule.canceled" => [:subscription_schedule, :subscription],
+    "subscription_schedule.completed" => [:subscription_schedule, :subscription],
+    "subscription_schedule.aborted" => [:subscription_schedule, :subscription],
+    "subscription_schedule.expiring" => [:subscription_schedule, :subscription],
     "credit_note.created" => [:credit_note],
     "credit_note.updated" => [:credit_note],
     "credit_note.voided" => [:credit_note],
@@ -267,7 +284,8 @@ defmodule MishkaPay.Providers.Stripe do
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
   (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
   `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`; or the
-  provider object it is about (`:credit_note`). Each is mapped to its
+  provider object it is about (`:credit_note`, `:subscription_schedule`, which names its
+  subscription too). Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
   """
@@ -524,6 +542,93 @@ defmodule MishkaPay.Providers.Stripe do
 
       page("/v1/subscriptions", filters, opts, keys, &Mapper.subscription/1)
     end
+  end
+
+  # A schedule's reference makes the idempotency key, so a retry never makes two. Stripe takes no
+  # metadata with `from_subscription`: a schedule made so gets its reference and metadata in a
+  # second request.
+  @impl MishkaPay.Provider
+  def create_subscription_schedule(%SubscriptionSchedule{} = schedule, keys) do
+    with :ok <- maybe_id(schedule.subscription_id, "sub_", :subscription_id),
+         :ok <- maybe_id(schedule.customer_id, "cus_", :customer_id),
+         :ok <- schedule_fits(schedule),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/subscription_schedules",
+             Mapper.subscription_schedule_params(schedule),
+             keys,
+             key:
+               ProviderKit.idempotency_key(
+                 "subscription-schedule",
+                 schedule.tenant,
+                 schedule.reference
+               )
+           ) do
+      labelled(answer, schedule, keys)
+    end
+  end
+
+  defp labelled(answer, %SubscriptionSchedule{subscription_id: from} = schedule, keys)
+       when is_binary(from) do
+    labels = %SubscriptionSchedule{
+      provider: "stripe",
+      metadata: schedule.metadata,
+      reference: schedule.reference
+    }
+
+    case Mapper.subscription_schedule_update_params(labels) do
+      none when map_size(none) == 0 -> Mapper.subscription_schedule(answer)
+      params -> schedule_call(:post, answer["id"], "", params, keys)
+    end
+  end
+
+  defp labelled(answer, _schedule, _keys), do: Mapper.subscription_schedule(answer)
+
+  @impl MishkaPay.Provider
+  def fetch_subscription_schedule(schedule_id, keys),
+    do: schedule_call(:get, schedule_id, "", [], keys)
+
+  @impl MishkaPay.Provider
+  def list_subscription_schedules(opts, keys) do
+    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id) do
+      filters = [customer: opts[:customer_id], scheduled: opts[:scheduled]]
+      page("/v1/subscription_schedules", filters, opts, keys, &Mapper.subscription_schedule/1)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_subscription_schedule(%SubscriptionSchedule{id: id} = schedule, keys) do
+    with :ok <- schedule_fits(schedule) do
+      schedule_call(:post, id, "", Mapper.subscription_schedule_update_params(schedule), keys)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def release_subscription_schedule(schedule_id, keys),
+    do: schedule_call(:post, schedule_id, "/release", %{}, keys)
+
+  @impl MishkaPay.Provider
+  def cancel_subscription_schedule(schedule_id, opts, keys) do
+    params = %{"invoice_now" => opts[:invoice_now], "prorate" => opts[:prorate]}
+    schedule_call(:post, schedule_id, "/cancel", params, keys)
+  end
+
+  defp schedule_call(method, schedule_id, step, params, keys) do
+    with :ok <- stripe_id(schedule_id, "sub_sched_", :schedule_id),
+         {:ok, answer} <-
+           request(method, "/v1/subscription_schedules/#{schedule_id}#{step}", params, keys) do
+      Mapper.subscription_schedule(answer)
+    end
+  end
+
+  # Phases charge Stripe prices, and the metadata is what Stripe keeps.
+  defp schedule_fits(schedule) do
+    with :ok <-
+           all_fine(schedule.phases || [], fn phase ->
+             all_fine(phase.items || [], &stripe_id(&1.id, "price_", :phases))
+           end),
+         do: metadata(schedule.metadata)
   end
 
   @impl MishkaPay.Provider

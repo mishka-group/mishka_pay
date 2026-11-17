@@ -32,6 +32,10 @@ end
   - `:subscription_list`: `list_subscriptions/2` (`:customer_id`, `:price_id`, `:status`),
     `search_subscriptions/2` (`:status`, `:reference`, `:metadata`); leave it out when the
     provider has subscriptions but no list of them (PayPal);
+  - `:subscription_schedule`: `create_subscription_schedule/2`, `fetch_subscription_schedule/2`,
+    `list_subscription_schedules/2` (`:customer_id`, `:scheduled`), `update_subscription_schedule/2`,
+    `release_subscription_schedule/2`, `cancel_subscription_schedule/3` (`:invoice_now`,
+    `:prorate`);
   - `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
     `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
   - `:invoice_item`: `create_invoice_item/2`, `update_invoice_item/2`, `delete_invoice_item/2`,

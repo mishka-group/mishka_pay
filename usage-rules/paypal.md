@@ -24,7 +24,7 @@ subscriptions have run against PayPal's sandbox; webhooks from the sandbox are s
   `upcoming_invoice/3`. Cancel with `at: :now`; PayPal has no cancel at the period's end, so
   that and `resume_subscription/3` are refused.
 - Not supported: a subscription with more than one price, listing or searching subscriptions
-  (`:subscription_list`), invoice items (`:invoice_item`), credit notes (`:credit_note`), a customer's bills, one bill by id,
+  (`:subscription_list`), invoice items (`:invoice_item`), credit notes (`:credit_note`), subscription schedules (`:subscription_schedule`), a customer's bills, one bill by id,
   changing or pausing a subscription, provider price ids, merchant of record, metadata, currencies PayPal
   does not take, decimals in HUF, JPY, TWD, coupons and promotion codes, ending a checkout, and the
   checkout options (`discounts`, `allow_promotion_codes`, `automatic_tax`, `customer_creation`,

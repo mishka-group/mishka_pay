@@ -57,6 +57,10 @@ defmodule MishkaPay.Provider do
     * `:subscription_change`: `change_subscription/2`, `preview_subscription_change/2`,
       `pause_collection/3`, `resume_collection/2`;
     * `:subscription_list`: `list_subscriptions/2`, `search_subscriptions/2`;
+    * `:subscription_schedule`: `create_subscription_schedule/2`,
+      `fetch_subscription_schedule/2`, `list_subscription_schedules/2`,
+      `update_subscription_schedule/2`, `release_subscription_schedule/2`,
+      `cancel_subscription_schedule/3`;
     * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
     * `:invoice_item`: `create_invoice_item/2`, `update_invoice_item/2`, `delete_invoice_item/2`,
@@ -113,6 +117,7 @@ defmodule MishkaPay.Provider do
     :subscription,
     :subscription_change,
     :subscription_list,
+    :subscription_schedule,
     :invoice,
     :invoice_item,
     :credit_note,
@@ -154,6 +159,9 @@ defmodule MishkaPay.Provider do
     * `:subscription_list`: lists subscriptions page by page (by customer, status or price), and
       searches them by status, reference or metadata. A provider can run subscriptions without
       it: PayPal has no list of them.
+    * `:subscription_schedule`: plans a subscription's changes ahead in phases (a new price on a
+      date, a trial, an end after some periods), made from a running subscription or new, and
+      changes, releases or cancels the plan.
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
     * `:invoice_item`: keeps charges on their own (add, change, remove, list) that wait for a
       customer's next bill, or go on a draft one. Apart from `:invoice`: a provider may bill
@@ -195,6 +203,7 @@ defmodule MishkaPay.Provider do
           | :subscription
           | :subscription_change
           | :subscription_list
+          | :subscription_schedule
           | :invoice
           | :invoice_item
           | :credit_note
@@ -329,6 +338,49 @@ defmodule MishkaPay.Provider do
   """
   @callback list_invoice_items(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_schedule`. Makes a schedule from `:subscription_id`, or for `:customer_id`
+  with its `:phases`, and answers it with its `:id` and phase dates.
+  """
+  @callback create_subscription_schedule(
+              MishkaPay.SubscriptionSchedule.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription_schedule`. Reads one schedule again, with its phases."
+  @callback fetch_subscription_schedule(schedule_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_schedule`. One page of schedules, newest first; only `:customer_id`'s, or
+  those not started yet (`scheduled: true`), when given.
+  """
+  @callback list_subscription_schedules(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_schedule`. Changes what the schedule carries (`:phases`, `:end_behavior`,
+  `:metadata`) on the schedule whose `:id` it carries.
+  """
+  @callback update_subscription_schedule(
+              MishkaPay.SubscriptionSchedule.t(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:subscription_schedule`. Ends the schedule; its subscription goes on alone."
+  @callback release_subscription_schedule(schedule_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:subscription_schedule`. Ends the schedule and its subscription now; `:invoice_now` bills
+  what is left, `:prorate` credits time not used.
+  """
+  @callback cancel_subscription_schedule(
+              schedule_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:credit_note`. Makes a credit note on `:invoice_id` for `:amount` or `:lines`, and
@@ -808,6 +860,12 @@ defmodule MishkaPay.Provider do
                       resume_collection: 2,
                       list_subscriptions: 2,
                       search_subscriptions: 2,
+                      create_subscription_schedule: 2,
+                      fetch_subscription_schedule: 2,
+                      list_subscription_schedules: 2,
+                      update_subscription_schedule: 2,
+                      release_subscription_schedule: 2,
+                      cancel_subscription_schedule: 3,
                       create_customer: 2,
                       fetch_customer: 2,
                       update_customer: 2,
@@ -893,6 +951,14 @@ defmodule MishkaPay.Provider do
       resume_collection: 2
     ],
     subscription_list: [list_subscriptions: 2, search_subscriptions: 2],
+    subscription_schedule: [
+      create_subscription_schedule: 2,
+      fetch_subscription_schedule: 2,
+      list_subscription_schedules: 2,
+      update_subscription_schedule: 2,
+      release_subscription_schedule: 2,
+      cancel_subscription_schedule: 3
+    ],
     invoice: [
       create_invoice: 2,
       finalize_invoice: 2,

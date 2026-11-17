@@ -1119,6 +1119,117 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:error, %Errors.Rejected{}} = MishkaPay.fetch_invoice("stripe", fourth)
   end
 
+  test "a schedule is made once per reference, changed, released, then made from its subscription and canceled with it",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "plan-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Scheduled plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    price = fn amount ->
+      {:ok, %MishkaPay.Price{id: id}} =
+        MishkaPay.create_price(%{
+          provider: "stripe",
+          product_id: product,
+          amount: %{amount: amount, currency: "USD"},
+          interval: :month
+        })
+
+      id
+    end
+
+    {intro, full} = {price.("5.00"), price.("19.00")}
+
+    schedule = %{
+      provider: "stripe",
+      customer_id: customer,
+      end_behavior: :cancel,
+      reference: "plan-#{run}",
+      phases: [
+        %{items: [%{id: intro}], trial: true, iterations: 1, interval: :month},
+        %{items: [%{id: full, quantity: 2}], iterations: 2, interval: :month}
+      ]
+    }
+
+    assert {:ok,
+            %MishkaPay.SubscriptionSchedule{
+              id: "sub_sched_" <> _ = id,
+              status: :active,
+              subscription_id: "sub_" <> _ = subscription,
+              current_phase: 0,
+              end_behavior: :cancel,
+              reference: reference,
+              phases: [first, second]
+            }} = MishkaPay.create_subscription_schedule(schedule)
+
+    assert reference == "plan-#{run}"
+    assert {first.end_at, first.trial_end_at} == {second.start_at, second.start_at}
+    assert [%{id: ^full, quantity: 2}] = second.items
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+             MishkaPay.create_subscription_schedule(schedule)
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+             MishkaPay.fetch_subscription_schedule("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.SubscriptionSchedule{id: ^id}]}} =
+             MishkaPay.list_subscription_schedules("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{end_behavior: :release, phases: [kept, next]}} =
+             MishkaPay.update_subscription_schedule(%{
+               provider: "stripe",
+               id: id,
+               end_behavior: :release,
+               phases: [
+                 %{
+                   items: [%{id: intro}],
+                   start_at: first.start_at,
+                   end_at: first.end_at,
+                   trial_end_at: first.trial_end_at
+                 },
+                 %{items: [%{id: intro, quantity: 3}], iterations: 1, interval: :month}
+               ]
+             })
+
+    assert kept.start_at == first.start_at
+    assert [%{id: ^intro, quantity: 3}] = next.items
+
+    assert {:ok,
+            %MishkaPay.SubscriptionSchedule{
+              status: :released,
+              released_subscription_id: ^subscription,
+              released_at: %DateTime{}
+            }} = MishkaPay.release_subscription_schedule("stripe", id)
+
+    assert {:ok,
+            %MishkaPay.SubscriptionSchedule{
+              id: from_id,
+              status: :active,
+              subscription_id: ^subscription,
+              reference: "plan-from-" <> _,
+              phases: [%{items: [%{id: ^intro}]} | _]
+            }} =
+             MishkaPay.create_subscription_schedule(%{
+               provider: "stripe",
+               subscription_id: subscription,
+               reference: "plan-from-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^from_id, status: :canceled}} =
+             MishkaPay.cancel_subscription_schedule("stripe", from_id)
+
+    assert {:ok, %Subscription{status: :canceled}} =
+             MishkaPay.fetch_subscription("stripe", subscription)
+  end
+
   test "a credit note is previewed, made once per reference by line, listed and voided on an open bill, then made on a paid one",
        %{key: key} do
     run = run_id()

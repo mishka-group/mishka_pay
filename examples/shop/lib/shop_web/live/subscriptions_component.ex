@@ -211,6 +211,7 @@ defmodule ShopWeb.SubscriptionsComponent do
       <.details
         :if={@selected}
         selected={@selected}
+        tenant={@tenant}
         live={@live}
         plans={@plans}
         preview={@preview}
@@ -221,6 +222,7 @@ defmodule ShopWeb.SubscriptionsComponent do
   end
 
   attr :selected, :map, required: true
+  attr :tenant, :any, required: true
   attr :live, :any, required: true
   attr :plans, :list, required: true
   attr :preview, :any, required: true
@@ -369,6 +371,14 @@ defmodule ShopWeb.SubscriptionsComponent do
                   </li>
                 </ul>
               </div>
+              <.live_component
+                :if={active?(live.subscription) and schedules?(live.subscription)}
+                module={ShopWeb.SubscriptionScheduleComponent}
+                id="subscription-schedule"
+                subscription={live.subscription}
+                plans={@plans}
+                tenant={@tenant}
+              />
             </.async_result>
           </div>
         </div>
@@ -730,6 +740,9 @@ defmodule ShopWeb.SubscriptionsComponent do
   # A plan or quantity change is offered only by a provider that can make one (Stripe; not PayPal).
   defp changes?(%{provider: provider}),
     do: match?({:ok, _provider}, MishkaPay.Provider.capable(provider, :subscription_change))
+
+  defp schedules?(%{provider: provider}),
+    do: match?({:ok, _provider}, MishkaPay.Provider.capable(provider, :subscription_schedule))
 
   # A typed id names its provider: PayPal's subscriptions are `I-...`, Stripe's `sub_...`.
   defp provider_of("I-" <> _paypal), do: "paypal"

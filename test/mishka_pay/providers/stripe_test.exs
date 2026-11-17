@@ -1171,6 +1171,245 @@ defmodule MishkaPay.Providers.StripeTest do
       assert map_size(change) == 1
     end
 
+    test "subscription schedules are made, read, listed, changed, released and canceled as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.SubscriptionSchedule{id: "sub_sched_" <> _ = id, phases: [_ | _]}} =
+               MishkaPay.create_subscription_schedule(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 end_behavior: :cancel,
+                 reference: "member-1",
+                 phases: [
+                   %{
+                     items: [%{id: "price_intro", quantity: 2}],
+                     iterations: 3,
+                     interval: :month,
+                     trial: true
+                   },
+                   %{
+                     items: [%{id: "price_full"}],
+                     end_at: ~U[2027-06-01 00:00:00Z],
+                     proration: :none
+                   }
+                 ]
+               })
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+               MishkaPay.create_subscription_schedule(%{
+                 provider: "stripe",
+                 subscription_id: "sub_123"
+               })
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+               MishkaPay.fetch_subscription_schedule("stripe", id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.SubscriptionSchedule{} | _]}} =
+               MishkaPay.list_subscription_schedules("stripe", "site-a",
+                 customer_id: "cus_123",
+                 scheduled: true,
+                 limit: 3
+               )
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+               MishkaPay.update_subscription_schedule(%{
+                 provider: "stripe",
+                 id: id,
+                 end_behavior: :release,
+                 proration: :always_invoice,
+                 phases: [
+                   %{
+                     items: [%{id: "price_intro"}],
+                     start_at: ~U[2026-11-01 00:00:00Z],
+                     end_at: ~U[2027-01-01 00:00:00Z]
+                   },
+                   %{items: [%{id: "price_full"}], iterations: 2, interval: :year}
+                 ]
+               })
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+               MishkaPay.release_subscription_schedule("stripe", id, "site-a")
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+               MishkaPay.cancel_subscription_schedule("stripe", id, "site-a",
+                 invoice_now: true,
+                 prorate: false
+               )
+    end
+
+    test "a schedule goes to Stripe with each phase's duration, keyed by its reference" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        key = Plug.Conn.get_req_header(conn, "idempotency-key")
+        send(test, {:stripe, conn.method, conn.request_path, Plug.Conn.Query.decode(body), key})
+
+        Req.Test.json(conn, %{
+          "object" => "subscription_schedule",
+          "id" => "sub_sched_1",
+          "status" => "not_started",
+          "phases" => []
+        })
+      end)
+
+      schedule = %{
+        provider: "stripe",
+        tenant: "site-a",
+        customer_id: "cus_1",
+        start_at: ~U[2026-12-01 00:00:00Z],
+        end_behavior: "cancel",
+        reference: "member-7",
+        phases: [
+          %{items: [%{id: "price_intro"}], iterations: 3, interval: "month", trial: true},
+          %{items: [%{id: "price_full", quantity: 2}], end_at: ~U[2027-12-01 00:00:00Z]}
+        ]
+      }
+
+      {:ok, _schedule} = MishkaPay.create_subscription_schedule(schedule)
+      {:ok, _again} = MishkaPay.create_subscription_schedule(schedule)
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules", params, [key]}
+
+      assert params == %{
+               "customer" => "cus_1",
+               "start_date" => "1796083200",
+               "end_behavior" => "cancel",
+               "phases" => %{
+                 "0" => %{
+                   "items" => %{"0" => %{"price" => "price_intro", "quantity" => "1"}},
+                   "duration" => %{"interval" => "month", "interval_count" => "3"},
+                   "trial" => "true"
+                 },
+                 "1" => %{
+                   "items" => %{"0" => %{"price" => "price_full", "quantity" => "2"}},
+                   "end_date" => "1827619200"
+                 }
+               },
+               "metadata" => %{"mishka_pay_reference" => "member-7"}
+             }
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules", _params, [^key]}
+
+      {:ok, _from} =
+        MishkaPay.create_subscription_schedule(%{provider: "stripe", subscription_id: "sub_1"})
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules",
+                       %{"from_subscription" => "sub_1"} = from, _key}
+
+      assert map_size(from) == 1
+      refute_received {:stripe, "POST", "/v1/subscription_schedules/sub_sched_1", _params, _key}
+
+      # Stripe takes no metadata with from_subscription: the reference goes on in a change.
+      {:ok, _labelled} =
+        MishkaPay.create_subscription_schedule(%{
+          provider: "stripe",
+          subscription_id: "sub_1",
+          reference: "from-1"
+        })
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules",
+                       %{"from_subscription" => "sub_1"} = again, [_key]}
+
+      assert map_size(again) == 1
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules/sub_sched_1",
+                       %{"metadata" => %{"mishka_pay_reference" => "from-1"}} = labels, _key}
+
+      assert map_size(labels) == 1
+
+      {:ok, _changed} =
+        MishkaPay.update_subscription_schedule(%{
+          provider: "stripe",
+          id: "sub_sched_1",
+          end_behavior: :release
+        })
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules/sub_sched_1",
+                       %{"end_behavior" => "release"} = change, _key}
+
+      assert map_size(change) == 1
+
+      {:ok, _canceled} =
+        MishkaPay.cancel_subscription_schedule("stripe", "sub_sched_1", nil, prorate: true)
+
+      assert_received {:stripe, "POST", "/v1/subscription_schedules/sub_sched_1/cancel",
+                       %{"prorate" => "true"} = cancel, _key}
+
+      assert map_size(cancel) == 1
+    end
+
+    test "a schedule that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      phase = %{items: [%{id: "price_1"}]}
+      base = %{provider: "stripe", customer_id: "cus_1", phases: [phase]}
+
+      for {attrs, field} <- [
+            {Map.delete(base, :phases), :phases},
+            {%{base | phases: []}, :phases},
+            {Map.delete(base, :customer_id), :customer_id},
+            {Map.put(base, :subscription_id, "sub_1"), :customer_id},
+            {%{provider: "stripe", subscription_id: "sub_1", end_behavior: :cancel},
+             :end_behavior},
+            {%{base | phases: [%{items: []}]}, :items},
+            {%{
+               base
+               | phases: [%{items: [%{name: "Pro", amount: %{amount: "9", currency: "USD"}}]}]
+             }, :items},
+            {%{base | phases: [Map.put(phase, :iterations, 3)]}, :iterations},
+            {%{
+               base
+               | phases: [
+                   Map.merge(phase, %{
+                     iterations: 3,
+                     interval: :month,
+                     end_at: ~U[2027-01-01 00:00:00Z]
+                   })
+                 ]
+             }, :iterations},
+            {%{base | phases: [Map.put(phase, :interval, :fortnight)]}, :interval},
+            {Map.put(base, :end_behavior, :renew), :end_behavior},
+            {%{base | customer_id: "sub_1"}, :customer_id},
+            {%{base | phases: [%{items: [%{id: "prod_1"}]}]}, :phases},
+            {%{provider: "stripe", subscription_id: "cus_1"}, :subscription_id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} =
+                 MishkaPay.create_subscription_schedule(attrs)
+
+        # A phase's own error comes inside the error on :phases.
+        fields =
+          Enum.flat_map(
+            errors,
+            &[&1.field | Enum.map(&1.child_errors || [], fn e -> e.field end)]
+          )
+
+        assert field in fields, inspect({attrs, errors})
+      end
+
+      for {attrs, field} <- [
+            {%{provider: "stripe", id: "sub_sched_1", customer_id: "cus_2"}, :customer_id},
+            {%{provider: "stripe", id: "sub_sched_1", subscription_id: "sub_2"},
+             :subscription_id},
+            {%{provider: "stripe", end_behavior: :cancel}, :id},
+            {%{provider: "stripe", id: "sub_1", end_behavior: :cancel}, :schedule_id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} =
+                 MishkaPay.update_subscription_schedule(attrs)
+      end
+
+      for call <- [
+            fn ->
+              MishkaPay.fetch_subscription_schedule("stripe", "sub_sched_1/../../v1/charges")
+            end,
+            fn -> MishkaPay.release_subscription_schedule("stripe", "sub_1") end,
+            fn -> MishkaPay.cancel_subscription_schedule("stripe", "cus_1") end
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :schedule_id}]}} = call.()
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.list_subscription_schedules("stripe", nil, customer_id: "sub_1")
+    end
+
     test "credit notes are made, previewed, read, voided and listed with their lines as Stripe's spec accepts" do
       note = %{
         provider: "stripe",
@@ -2981,6 +3220,72 @@ defmodule MishkaPay.Providers.StripeTest do
              })
   end
 
+  test "a schedule maps with its phases, the one running now, and the subscription it let go" do
+    schedule = %{
+      "object" => "subscription_schedule",
+      "id" => "sub_sched_1",
+      "customer" => %{"id" => "cus_1", "object" => "customer"},
+      "subscription" => nil,
+      "released_subscription" => "sub_1",
+      "status" => "released",
+      "end_behavior" => "release",
+      "current_phase" => %{"start_date" => 1_794_000_000, "end_date" => 1_796_600_000},
+      "created" => 1_793_000_000,
+      "released_at" => 1_795_000_000,
+      "metadata" => %{"mishka_pay_reference" => "member-1"},
+      "phases" => [
+        %{
+          "start_date" => 1_791_000_000,
+          "end_date" => 1_794_000_000,
+          "trial_end" => 1_794_000_000,
+          "proration_behavior" => "create_prorations",
+          "items" => [%{"price" => "price_intro", "quantity" => 1}]
+        },
+        %{
+          "start_date" => 1_794_000_000,
+          "end_date" => 1_796_600_000,
+          "proration_behavior" => "none",
+          "items" => [%{"price" => %{"id" => "price_full", "object" => "price"}, "quantity" => 3}]
+        }
+      ]
+    }
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{} = mapped} =
+             Stripe.Mapper.subscription_schedule(schedule)
+
+    assert {mapped.id, mapped.customer_id, mapped.subscription_id,
+            mapped.released_subscription_id} ==
+             {"sub_sched_1", "cus_1", nil, "sub_1"}
+
+    assert {mapped.status, mapped.end_behavior, mapped.current_phase, mapped.reference} ==
+             {:released, :release, 1, "member-1"}
+
+    assert [
+             %MishkaPay.SubscriptionPhase{
+               trial_end_at: %DateTime{},
+               items: [%{id: "price_intro"}]
+             },
+             %MishkaPay.SubscriptionPhase{
+               proration: :none,
+               items: [%{id: "price_full", quantity: 3}]
+             }
+           ] = mapped.phases
+
+    assert {:ok, %Subscription{schedule_id: "sub_sched_1"}} =
+             Stripe.Mapper.subscription(%{
+               "id" => "sub_1",
+               "status" => "active",
+               "schedule" => "sub_sched_1"
+             })
+
+    assert {:ok, %MishkaPay.Event{subscription_id: "sub_1", object_type: "subscription_schedule"}} =
+             Stripe.Mapper.event(%{
+               "id" => "evt_1",
+               "type" => "subscription_schedule.released",
+               "data" => %{"object" => schedule}
+             })
+  end
+
   test "a credit note maps with its lines, refunds, tax and reference" do
     note = %{
       "object" => "credit_note",
@@ -3614,6 +3919,12 @@ defmodule MishkaPay.Providers.StripeTest do
       "entitlements" => %{"object" => "list", "data" => []}
     },
     "customer.tax_id" => %{"object" => "tax_id", "id" => "txi_1", "customer" => "cus_1"},
+    "subscription_schedule" => %{
+      "object" => "subscription_schedule",
+      "id" => "sub_sched_1",
+      "subscription" => "sub_1",
+      "customer" => "cus_1"
+    },
     "credit_note" => %{
       "object" => "credit_note",
       "id" => "cn_1",

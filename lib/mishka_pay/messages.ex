@@ -115,6 +115,10 @@ defmodule MishkaPay.Messages do
           | :invoice_item_moves
           | :credit_note_one_of
           | :credit_line_needs
+          | :phase_prices
+          | :phase_length
+          | :schedule_from_subscription
+          | :schedule_moves
           | :choices
           | :fields_three
           | :merchant_of_record_off
@@ -657,6 +661,26 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "A credit note line names a line of the bill with a quantity or an amount, or a name with the credit for one"
       )
+
+  defp msgid(:phase_prices),
+    do: dgettext_noop("mishka_pay", "A phase charges one or more catalog prices, each by its id")
+
+  defp msgid(:phase_length),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A phase lasts a number of periods of one interval, or until an end date, one of them"
+      )
+
+  defp msgid(:schedule_from_subscription),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A schedule made from a subscription takes its plan from it: change its phases after it is made"
+      )
+
+  defp msgid(:schedule_moves),
+    do: dgettext_noop("mishka_pay", "A schedule stays on its customer and subscription")
 
   defp msgid(:invoice_item_moves),
     do:

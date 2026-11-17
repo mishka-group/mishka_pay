@@ -23,6 +23,7 @@ defmodule MishkaPay.Subscription do
       `MishkaPay.cancel_subscription/4`); `:cancel_at`, `:canceled_at`: when it ends, or ended.
     * `:trial_end`: when the trial ends, for one in trial.
     * `:latest_invoice_id`: its newest invoice (`MishkaPay.list_invoices/3` lists them all).
+    * `:schedule_id`: the `MishkaPay.SubscriptionSchedule` that runs it, when one does.
     * `:reference`, `:metadata`: the caller's own id from the checkout, and extra pairs;
       `:owner`: who it is for, as the checkout named them (`MishkaPay.Checkout`).
     * `:created_at`: when the provider made it.
@@ -48,6 +49,7 @@ defmodule MishkaPay.Subscription do
     field :canceled_at, DateTime.t(), derives: "validate(struct)"
     field :trial_end, DateTime.t(), derives: "validate(struct)"
     field :latest_invoice_id, String.t(), derives: "validate(string)"
+    field :schedule_id, String.t(), derives: "validate(string)"
 
     field :pause_behavior, :void | :keep_as_draft | :mark_uncollectible,
       derives: "validate(enum=Atom[void::keep_as_draft::mark_uncollectible])",

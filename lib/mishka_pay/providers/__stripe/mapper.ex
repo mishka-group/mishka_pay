@@ -29,6 +29,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Refund,
     ShippingRate,
     Subscription,
+    SubscriptionPhase,
+    SubscriptionSchedule,
     TaxCalculation,
     TaxId,
     TaxLine,
@@ -645,6 +647,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       canceled_at: time(sub["canceled_at"]),
       trial_end: time(sub["trial_end"]),
       latest_invoice_id: id_of(sub["latest_invoice"]),
+      schedule_id: id_of(sub["schedule"]),
       pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
       resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),
       reference: get_in(sub, ["metadata", @reference]),
@@ -1043,6 +1046,102 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp unit_money(_none, _currency), do: nil
 
   @doc """
+  Params of `POST /v1/subscription_schedules`: `from_subscription` alone (Stripe takes nothing
+  else with it, metadata neither), or the customer, its start (now unless given), the phases and
+  what happens after them, with the reference in its metadata.
+  """
+  @spec subscription_schedule_params(SubscriptionSchedule.t()) :: map()
+  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id})
+      when is_binary(id),
+      do: %{"from_subscription" => id}
+
+  def subscription_schedule_params(%SubscriptionSchedule{} = schedule) do
+    reject_nil(%{
+      "customer" => schedule.customer_id,
+      "start_date" => unix(schedule.start_at) || "now",
+      "end_behavior" => schedule.end_behavior && Atom.to_string(schedule.end_behavior),
+      "phases" => Enum.map(schedule.phases, &phase_params/1),
+      "metadata" => schedule_metadata(schedule)
+    })
+  end
+
+  @doc "Params of `POST /v1/subscription_schedules/:id`: only what the change sets."
+  @spec subscription_schedule_update_params(SubscriptionSchedule.t()) :: map()
+  def subscription_schedule_update_params(%SubscriptionSchedule{} = schedule) do
+    reject_nil(%{
+      "end_behavior" => schedule.end_behavior && Atom.to_string(schedule.end_behavior),
+      "phases" => schedule.phases && Enum.map(schedule.phases, &phase_params/1),
+      "proration_behavior" => schedule.proration && Atom.to_string(schedule.proration),
+      "metadata" => schedule_metadata(schedule)
+    })
+  end
+
+  defp schedule_metadata(schedule), do: with_reference(schedule.metadata, schedule.reference)
+
+  # This API version takes a phase's length as a `duration`; `iterations` is gone.
+  defp phase_params(%SubscriptionPhase{} = phase) do
+    reject_nil(%{
+      "items" =>
+        Enum.map(phase.items, &reject_nil(%{"price" => &1.id, "quantity" => &1.quantity})),
+      "start_date" => unix(phase.start_at),
+      "end_date" => unix(phase.end_at),
+      "duration" =>
+        phase.iterations &&
+          %{"interval" => Atom.to_string(phase.interval), "interval_count" => phase.iterations},
+      "trial" => (phase.trial == true && true) || nil,
+      "trial_end" => unix(phase.trial_end_at),
+      "proration_behavior" => phase.proration && Atom.to_string(phase.proration)
+    })
+  end
+
+  defp unix(nil), do: nil
+  defp unix(%DateTime{} = at), do: DateTime.to_unix(at)
+
+  @doc """
+  A Stripe subscription schedule as a `MishkaPay.SubscriptionSchedule`: its phases with their
+  dates, and which of them runs now.
+  """
+  @spec subscription_schedule(map()) ::
+          {:ok, SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+  def subscription_schedule(schedule) do
+    phases = schedule["phases"] |> List.wrap() |> Enum.map(&phase/1)
+    current = get_in(schedule, ["current_phase", "start_date"])
+
+    %{
+      provider: "stripe",
+      id: schedule["id"],
+      customer_id: id_of(schedule["customer"]),
+      subscription_id: id_of(schedule["subscription"]),
+      released_subscription_id: id_of(schedule["released_subscription"]),
+      status: known(schedule["status"], ~w(not_started active completed released canceled)),
+      end_behavior: known(schedule["end_behavior"], ~w(release cancel)),
+      phases: phases,
+      current_phase: current && Enum.find_index(phases, &(&1.start_at == time(current))),
+      reference: get_in(schedule, ["metadata", @reference]),
+      metadata: Map.delete(schedule["metadata"] || %{}, @reference),
+      created_at: time(schedule["created"]),
+      released_at: time(schedule["released_at"]),
+      canceled_at: time(schedule["canceled_at"]),
+      completed_at: time(schedule["completed_at"])
+    }
+    |> SubscriptionSchedule.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp phase(phase) do
+    %{
+      items:
+        phase["items"]
+        |> List.wrap()
+        |> Enum.map(&%{id: id_of(&1["price"]), quantity: &1["quantity"]}),
+      start_at: time(phase["start_date"]),
+      end_at: time(phase["end_date"]),
+      trial_end_at: time(phase["trial_end"]),
+      proration: known(phase["proration_behavior"], ~w(create_prorations always_invoice none))
+    }
+  end
+
+  @doc """
   Params of `POST /v1/credit_notes` (and of its preview): the bill, the amount or the lines, where
   the money goes, and the reference in its metadata.
   """
@@ -1087,7 +1186,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp minor_of(nil), do: nil
   defp minor_of(money), do: minor(money)
 
-  defp with_reference(nil, nil), do: nil
+  defp with_reference(metadata, nil) when metadata in [nil, %{}], do: nil
   defp with_reference(metadata, nil), do: metadata
   defp with_reference(metadata, reference), do: Map.put(metadata || %{}, @reference, reference)
 
@@ -1366,6 +1465,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   # The subscription itself, the one an invoice bills (on its own field, or under its parent since
   # Stripe moved it there), or the one a checkout started.
   defp subscription_of(%{"object" => "subscription", "id" => id}) when is_binary(id), do: id
+
+  # A schedule runs its subscription, or names the one it let go.
+  defp subscription_of(%{"object" => "subscription_schedule"} = schedule),
+    do: id_of(schedule["subscription"]) || id_of(schedule["released_subscription"])
 
   defp subscription_of(%{"parent" => %{"subscription_details" => %{"subscription" => sub}}}),
     do: id_of(sub)

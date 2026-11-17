@@ -167,6 +167,34 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no subscription schedules: every schedule call is refused before any request" do
+      for call <- [
+            fn ->
+              MishkaPay.create_subscription_schedule(%{
+                provider: "paypal",
+                subscription_id: "I-1"
+              })
+            end,
+            fn -> MishkaPay.fetch_subscription_schedule("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.list_subscription_schedules("paypal", "site-a") end,
+            fn ->
+              MishkaPay.update_subscription_schedule(%{
+                provider: "paypal",
+                id: "S1",
+                end_behavior: :cancel
+              })
+            end,
+            fn -> MishkaPay.release_subscription_schedule("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.cancel_subscription_schedule("paypal", "S1", "site-a") end
+          ] do
+        assert {:error,
+                %Errors.Unsupported{provider: "paypal", operation: :subscription_schedule}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal has no credit notes: every credit note call is refused before any request" do
       note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
 

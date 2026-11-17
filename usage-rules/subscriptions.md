@@ -99,6 +99,41 @@ change = %{provider: "stripe", tenant: site.id, subscription_id: sub.id,
   `:reference` makes it charge once. The provider needs `:invoice_item` (Stripe has it, PayPal
   not).
 
+## Planning changes ahead: schedules
+
+A change on a set date, an intro price, a membership that stops after twelve months: a
+subscription schedule, in phases. The provider needs `:subscription_schedule` (Stripe has it,
+PayPal not).
+
+```elixir
+# New: the subscription starts with the first phase.
+MishkaPay.create_subscription_schedule(%{provider: "stripe", tenant: site.id,
+  customer_id: customer.id, end_behavior: :cancel, reference: "member-" <> member.id,
+  phases: [%{items: [%{id: intro.id}], iterations: 3, interval: :month, trial: true},
+           %{items: [%{id: full.id, quantity: 2}], end_at: ~U[2027-12-01 00:00:00Z]}]})
+
+# From a running subscription, then its next phase.
+{:ok, schedule} = MishkaPay.create_subscription_schedule(%{provider: "stripe", subscription_id: sub.id})
+now = Enum.at(schedule.phases, schedule.current_phase)
+
+MishkaPay.update_subscription_schedule(%{provider: "stripe", id: schedule.id, end_behavior: :release,
+  phases: [%{items: now.items, start_at: now.start_at, end_at: change_at},
+           %{items: [%{id: team.id}], iterations: 1, interval: :month}]})
+```
+
+- A phase charges catalog prices by id, for `:iterations` periods of `:interval`, or until
+  `:end_at`, not both; the last one may leave both out (one period of its prices). `trial: true`
+  makes the phase a free trial; `:proration` says how its change of price is billed.
+- A change replaces the phases from the current one on: name the current one with the
+  `:start_at` it has. A schedule made from a subscription takes nothing else: no customer, phases,
+  start or end behavior (change them after).
+- `:end_behavior` is `:release` (the subscription goes on as the last phase left it) or `:cancel`.
+- `release_subscription_schedule/3` ends the plan and keeps the subscription;
+  `cancel_subscription_schedule/4` ends both now (`invoice_now:`, `prorate:`).
+- `:current_phase` is the index of the phase running now; `:subscription_id` the subscription
+  it runs, `:released_subscription_id` the one it let go. A subscription names its schedule as
+  `:schedule_id`.
+
 ## Keep access right
 
 Do not compute access from dates yourself. Listen to `mishka_pay:subscription:changed` (or the

@@ -53,7 +53,9 @@ defmodule MishkaPay do
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
       `:subscription_unpause`, `:subscription_list`, `:subscription_search`, `:invoices`,
-      `:invoice`, `:invoice_upcoming`;
+      `:invoice`, `:invoice_upcoming`, and their schedules: `:subscription_schedule_create`,
+      `:subscription_schedule`, `:subscription_schedule_list`, `:subscription_schedule_update`,
+      `:subscription_schedule_release`, `:subscription_schedule_cancel`;
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
       `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`, and charges kept for a bill:
       `:invoice_item_create`, `:invoice_item_update`, `:invoice_item_delete`,
@@ -1226,22 +1228,30 @@ defmodule MishkaPay do
   @spec update_invoice_item(map()) ::
           {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
   def update_invoice_item(%{} = attrs) do
-    case {field(attrs, :id), Enum.find([:customer_id, :invoice_id], &field(attrs, &1))} do
+    in_place(attrs, [:customer_id, :invoice_id], :invoice_item_moves, fn ->
+      made(
+        :invoice_item_update,
+        :invoice_item,
+        attrs,
+        MishkaPay.InvoiceItem,
+        [:provider],
+        :update_invoice_item
+      )
+    end)
+  end
+
+  # A change of the object `attrs.id` names, refused when it would move the object to another
+  # of `fixed` (its customer, its bill).
+  defp in_place(attrs, fixed, message, change) do
+    case {field(attrs, :id), Enum.find(fixed, &field(attrs, &1))} do
       {nil, _moved} ->
         MishkaPay.ProviderKit.invalid(:id, Messages.text(:customer_needs, field: :id))
 
       {_id, nil} ->
-        made(
-          :invoice_item_update,
-          :invoice_item,
-          attrs,
-          MishkaPay.InvoiceItem,
-          [:provider],
-          :update_invoice_item
-        )
+        change.()
 
       {_id, moved} ->
-        MishkaPay.ProviderKit.invalid(moved, Messages.text(:invoice_item_moves))
+        MishkaPay.ProviderKit.invalid(moved, Messages.text(message))
     end
   end
 
@@ -1609,6 +1619,117 @@ defmodule MishkaPay do
           {:ok, Page.t()} | {:error, Splode.Error.t()}
   def search_subscriptions(provider, tenant \\ nil, opts) when is_binary(provider) do
     listed(:subscription_search, :search_subscriptions, provider, tenant, opts, [])
+  end
+
+  @doc """
+  Makes a subscription schedule from `attrs` (see `MishkaPay.SubscriptionSchedule`): from a
+  running `:subscription_id`, or for a `:customer_id` with its `:phases`. Its `:reference` makes
+  it once. The provider needs `:subscription_schedule`.
+
+      MishkaPay.create_subscription_schedule(%{provider: "stripe", tenant: site_id,
+        customer_id: customer.id, end_behavior: :cancel, reference: "member-" <> member.id,
+        phases: [%{items: [%{id: intro.id}], iterations: 3, interval: :month},
+                 %{items: [%{id: full.id}], iterations: 9, interval: :month}]})
+  """
+  @spec create_subscription_schedule(map()) ::
+          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+  def create_subscription_schedule(attrs) when is_map(attrs) do
+    made(
+      :subscription_schedule_create,
+      :subscription_schedule,
+      attrs,
+      MishkaPay.SubscriptionSchedule,
+      [:provider | MishkaPay.SubscriptionSchedule.needs(attrs)],
+      :create_subscription_schedule
+    )
+  end
+
+  @doc "Reads subscription schedule `schedule_id` again from `provider`, with its phases."
+  @spec fetch_subscription_schedule(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+  def fetch_subscription_schedule(provider, schedule_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(schedule_id) do
+    capable(
+      :subscription_schedule,
+      :subscription_schedule,
+      provider,
+      tenant,
+      & &1.fetch_subscription_schedule(schedule_id, &2)
+    )
+  end
+
+  @doc """
+  One page of subscription schedules at `provider`, newest first (`MishkaPay.Page` of
+  `MishkaPay.SubscriptionSchedule`): `customer_id:` one customer's, `scheduled: true` only those
+  not started yet, plus `limit:` and `after:`.
+  """
+  @spec list_subscription_schedules(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_subscription_schedules(provider, tenant \\ nil, opts \\ [])
+      when is_binary(provider) do
+    capable(
+      :subscription_schedule,
+      :subscription_schedule_list,
+      provider,
+      tenant,
+      & &1.list_subscription_schedules(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Changes subscription schedule `attrs.id` at `attrs.provider`: only what is given. `:phases`
+  replaces the phases from the current one on (the current one with the start it has);
+  `:end_behavior` and `:proration` (how this change is billed) as on
+  `MishkaPay.SubscriptionSchedule`. Its customer and subscription stay.
+  """
+  @spec update_subscription_schedule(map()) ::
+          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+  def update_subscription_schedule(%{} = attrs) do
+    in_place(attrs, [:customer_id, :subscription_id], :schedule_moves, fn ->
+      made(
+        :subscription_schedule_update,
+        :subscription_schedule,
+        attrs,
+        MishkaPay.SubscriptionSchedule,
+        [:provider],
+        :update_subscription_schedule
+      )
+    end)
+  end
+
+  @doc """
+  Releases subscription schedule `schedule_id`: the schedule ends, and its subscription goes on
+  as it is now, without the phases still to come.
+  """
+  @spec release_subscription_schedule(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+  def release_subscription_schedule(provider, schedule_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(schedule_id) do
+    capable(
+      :subscription_schedule,
+      :subscription_schedule_release,
+      provider,
+      tenant,
+      & &1.release_subscription_schedule(schedule_id, &2)
+    )
+  end
+
+  @doc """
+  Cancels subscription schedule `schedule_id` and ends its subscription now. `invoice_now: true`
+  bills what is not billed yet, `prorate: true` credits the time not used; each left out is the
+  provider's default.
+  """
+  @spec cancel_subscription_schedule(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+  def cancel_subscription_schedule(provider, schedule_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(schedule_id) do
+    capable(
+      :subscription_schedule,
+      :subscription_schedule_cancel,
+      provider,
+      tenant,
+      & &1.cancel_subscription_schedule(schedule_id, opts, &2)
+    )
   end
 
   # A subscription list or search, after its `status:` is checked against the statuses a

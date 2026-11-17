@@ -58,7 +58,7 @@
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -134,6 +134,19 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   requests).
 - Stripe sends `credit_note.created`, `.updated` and `.voided`; the event's `:object_id` is the
   note.
+
+## Subscription schedules
+
+- A schedule (`sub_sched_...`) is `POST /v1/subscription_schedules`. This API version has no
+  phase `iterations`: Mishka Pay sends a phase's `:iterations` and `:interval` as its `duration`.
+- `from_subscription` takes nothing else, metadata neither: a schedule made from a subscription
+  with a `:reference` or `:metadata` gets them in a second request (`POST
+  /v1/subscription_schedules/:id`). The reference makes the idempotency key either way.
+- A phase item is a Stripe price (`price_...`); a schedule's first phase starts now unless
+  `:start_at` is given. A changed running schedule needs its current phase with its start date;
+  the trial a phase had stays only with its `:trial_end_at`.
+- A phase that starts with a trial needs no saved card: the subscription is `:trialing`.
+- Test what time does with a test clock on the customer (`MishkaPay.Providers.Stripe.TestClock`).
 
 ## Listing subscriptions
 

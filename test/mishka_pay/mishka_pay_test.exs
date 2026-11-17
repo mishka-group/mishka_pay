@@ -669,6 +669,23 @@ defmodule MishkaPayTest do
                MishkaPay.fetch_subscription("checkout_only", "sub_1")
     end
 
+    test "a provider without subscription schedules refuses them, after the schedule is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :subscription_schedule}} =
+               MishkaPay.create_subscription_schedule(%{
+                 provider: "acme",
+                 subscription_id: "acme_sub_1"
+               })
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :subscription_schedule}} =
+               MishkaPay.list_subscription_schedules("acme", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.create_subscription_schedule(%{
+                 provider: "acme",
+                 phases: [%{items: [%{id: "acme_price_1"}]}]
+               })
+    end
+
     test "a provider without credit notes refuses them, after the note is checked" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
                MishkaPay.list_credit_notes("acme", "site-a", invoice_id: "acme_in_1")
