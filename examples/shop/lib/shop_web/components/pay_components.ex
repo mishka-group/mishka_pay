@@ -167,6 +167,7 @@ defmodule ShopWeb.PayComponents do
 
   attr :product, :map, required: true
   attr :open?, :boolean, required: true
+  attr :provider, :string, default: "stripe", doc: "the provider picked under Pay with"
 
   def product(assigns) do
     ~H"""
@@ -187,7 +188,7 @@ defmodule ShopWeb.PayComponents do
           {@product.trial_days}-day free trial
         </span>
         <span
-          :if={@product.stripe_price_id}
+          :if={@product.stripe_price_id && @provider == "stripe"}
           class="badge badge-ghost badge-sm"
           title={@product.stripe_price_id}
           data-testid="product-catalog-price"
@@ -198,7 +199,7 @@ defmodule ShopWeb.PayComponents do
           name="product"
           value={@product.slug}
           class="btn btn-primary"
-          phx-disable-with="Opening Stripe..."
+          phx-disable-with={"Opening #{MishkaPay.Provider.label_of(@provider)}..."}
           data-testid={"buy-#{@product.slug}"}
         >
           {if @product.interval, do: "Subscribe", else: "Buy"}
@@ -213,6 +214,7 @@ defmodule ShopWeb.PayComponents do
   attr :max_quantity, :integer, required: true
   attr :paypal?, :boolean, default: false
   attr :buyer?, :boolean, default: false
+  attr :provider, :string, default: "stripe", doc: "the provider picked under Pay with"
 
   def checkout_options(assigns) do
     ~H"""
@@ -226,9 +228,14 @@ defmodule ShopWeb.PayComponents do
       <div class="collapse-content grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label class="fieldset">
           <span class="fieldset-legend">Pay with</span>
-          <select name="provider" class="select select-sm" data-testid="option-provider">
-            <option value="stripe">Stripe</option>
-            <option value="paypal" disabled={!@paypal?}>
+          <select
+            name="provider"
+            class="select select-sm"
+            phx-change="pay_with"
+            data-testid="option-provider"
+          >
+            <option value="stripe" selected={@provider == "stripe"}>Stripe</option>
+            <option value="paypal" disabled={!@paypal?} selected={@provider == "paypal"}>
               {if @paypal?, do: "PayPal", else: "PayPal (no keys)"}
             </option>
           </select>
@@ -251,12 +258,20 @@ defmodule ShopWeb.PayComponents do
           <input
             name="email"
             type="email"
-            placeholder="filled on Stripe's page"
+            placeholder={"filled on #{MishkaPay.Provider.label_of(@provider)}'s page"}
             class="input input-sm"
             data-testid="option-email"
           />
         </label>
-        <label class="fieldset">
+        <p
+          :if={@provider == "paypal"}
+          class="text-sm opacity-70 sm:col-span-2"
+          data-testid="option-paypal-note"
+        >
+          PayPal takes no discounts, tax, page language, expiry, billing address, customer or
+          invoice options here: Mishka Pay refuses them instead of leaving them out.
+        </p>
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Merchant of record, this checkout</span>
           <select name="merchant_of_record" class="select select-sm" data-testid="option-merchant">
             <option value="">The site's setting</option>
@@ -281,7 +296,7 @@ defmodule ShopWeb.PayComponents do
             />
           </div>
         </div>
-        <label class="fieldset">
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Discount</span>
           <select name="discount_mode" class="select select-sm" data-testid="option-discount-mode">
             <option value="">None</option>
@@ -290,7 +305,7 @@ defmodule ShopWeb.PayComponents do
             <option value="coupon">Apply a coupon (its id)</option>
           </select>
         </label>
-        <label class="fieldset">
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Code or coupon id to apply</span>
           <input
             name="discount_id"
@@ -299,7 +314,7 @@ defmodule ShopWeb.PayComponents do
             data-testid="option-discount-id"
           />
         </label>
-        <label class="fieldset">
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Page language</span>
           <select name="locale" class="select select-sm" data-testid="option-locale">
             <option value="">Stripe's choice</option>
@@ -311,7 +326,7 @@ defmodule ShopWeb.PayComponents do
             <option value="ja">Japanese</option>
           </select>
         </label>
-        <label class="fieldset">
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Expires in minutes, 30 to 1440</span>
           <input
             name="expires_in"
@@ -323,14 +338,14 @@ defmodule ShopWeb.PayComponents do
             data-testid="option-expires-in"
           />
         </label>
-        <label class="fieldset">
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Billing address</span>
           <select name="billing_address" class="select select-sm" data-testid="option-billing-address">
             <option value="">Only when needed</option>
             <option value="required">Always ask</option>
           </select>
         </label>
-        <label class="fieldset">
+        <label :if={@provider == "stripe"} class="fieldset">
           <span class="fieldset-legend">Make a Stripe customer, one-time only</span>
           <select
             name="customer_creation"
@@ -342,7 +357,7 @@ defmodule ShopWeb.PayComponents do
             <option value="if_required">Only if needed</option>
           </select>
         </label>
-        <div class="fieldset gap-1">
+        <div :if={@provider == "stripe"} class="fieldset gap-1">
           <label class="fieldset">
             <span class="fieldset-legend">Stripe Tax, this checkout</span>
             <select name="automatic_tax" class="select select-sm" data-testid="option-automatic-tax">

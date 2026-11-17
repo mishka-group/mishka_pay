@@ -78,6 +78,7 @@ defmodule ShopWeb.ShopLive do
      |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
+     |> assign(pay_with: "stripe")
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -208,6 +209,10 @@ defmodule ShopWeb.ShopLive do
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
+
+  # The provider picked under "Pay with": the cards and the options follow it.
+  def handle_event("pay_with", %{"provider" => provider}, socket),
+    do: {:noreply, assign(socket, pay_with: provider_choice(provider))}
 
   def handle_event("sync", %{"payment_id" => payment_id}, socket) do
     with {:ok, payment_id} <- payment_id(payment_id),
@@ -416,6 +421,7 @@ defmodule ShopWeb.ShopLive do
               :if={!Shop.Catalog.plan?(product)}
               product={product}
               open?={@setting.open}
+              provider={@pay_with}
             />
           </div>
           <h3 class="font-medium flex items-center gap-2">
@@ -428,10 +434,16 @@ defmodule ShopWeb.ShopLive do
               :if={Shop.Catalog.plan?(product)}
               product={product}
               open?={@setting.open}
+              provider={@pay_with}
             />
           </div>
           <.buyer_bar :if={@buyer} buyer={@buyer} />
-          <.checkout_options max_quantity={@max_quantity} paypal?={@paypal?} buyer?={!!@buyer} />
+          <.checkout_options
+            max_quantity={@max_quantity}
+            paypal?={@paypal?}
+            buyer?={!!@buyer}
+            provider={@pay_with}
+          />
         </form>
         <.test_cards />
       </section>
@@ -897,9 +909,18 @@ defmodule ShopWeb.ShopLive do
 
   defp payment_id(value) do
     case blank_nil(value) do
-      nil -> {:error, "Type a payment id first, it starts with pi_."}
+      nil -> {:error, "Type a payment id first: pi_... (Stripe) or a PayPal order id."}
       "cs_" <> _ -> {:error, ~s|That is a checkout id (cs_). Use "Read a checkout back" below.|}
-      id -> {:ok, id}
+      "pi_" <> _ = id -> {:ok, id}
+      id -> paypal_order_id(id)
+    end
+  end
+
+  # Anything not a Stripe pi_ id is read from PayPal, whose order ids are letters and digits.
+  defp paypal_order_id(id) do
+    case Regex.match?(~r/\A[A-Z0-9]{6,40}\z/, id) do
+      true -> {:ok, id}
+      false -> {:error, "That is not a payment id: pi_... (Stripe) or a PayPal order id."}
     end
   end
 

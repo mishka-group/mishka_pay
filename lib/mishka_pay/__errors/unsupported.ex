@@ -20,6 +20,12 @@ defmodule MishkaPay.Errors.Unsupported do
     do:
       Messages.text(:unsupported,
         provider: MishkaPay.Provider.label_of(provider),
-        operation: operation
+        operation: words(operation)
       )
+
+  # A capability (`:subscription_change`) reads as words; an operation given as a phrase stays.
+  defp words(operation) when is_atom(operation),
+    do: operation |> Atom.to_string() |> String.replace("_", " ")
+
+  defp words(operation), do: operation
 end

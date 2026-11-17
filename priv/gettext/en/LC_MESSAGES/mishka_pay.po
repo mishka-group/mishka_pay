@@ -11,11 +11,6 @@ msgstr ""
 "Language: en\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: lib/mishka_pay/messages.ex:713
-#, elixir-autogen, elixir-format
-msgid "%{provider} cannot do %{operation}"
-msgstr ""
-
 #: lib/mishka_pay/messages.ex:675
 #, elixir-autogen, elixir-format
 msgid "%{provider} declined the payment"
@@ -267,7 +262,7 @@ msgid "The number of months goes with a coupon that repeats, and only with it"
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:273
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "The percent off must be a number more than 0 and at most 100"
 msgstr ""
 
@@ -302,7 +297,7 @@ msgid "This subscription has more than one item: say which one changes"
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:423
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "%{provider} did not accept the value given for %{param}: check it and try again"
 msgstr ""
 
@@ -317,7 +312,7 @@ msgid "A proration date goes only with prorations, and not with a new billing pe
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:419
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "The smallest quantity must be less than the largest"
 msgstr ""
 
@@ -342,7 +337,7 @@ msgid "Stripe takes %{currency} only in whole units"
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:585
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
 msgstr ""
 
@@ -387,7 +382,7 @@ msgid "A setup checkout needs a currency: it decides which payment methods the p
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:297
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "Making a customer at checkout works only in a one-time or a setup checkout"
 msgstr ""
 
@@ -467,7 +462,7 @@ msgid "Holding the money to capture later does not go with an invoice made at pa
 msgstr ""
 
 #: lib/mishka_pay/messages.ex:564
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "The amount field is more than the payment holds"
 msgstr ""
 
@@ -559,4 +554,9 @@ msgstr ""
 #: lib/mishka_pay/messages.ex:534
 #, elixir-autogen, elixir-format
 msgid "PayPal keeps 127 characters for the reference and the owner together: use shorter ones"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:713
+#, elixir-autogen, elixir-format
+msgid "%{provider} does not support %{operation}"
 msgstr ""
