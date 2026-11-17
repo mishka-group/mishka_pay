@@ -610,9 +610,12 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       cleanup(key, &delete_customer(customer, &1))
     end)
 
+    # A customer made on Accounts v2 (the default) is named as `customer_account`.
+    {customer_param, ^customer} = Stripe.Mapper.customer_param(customer)
+
     {200, %{"id" => id, "items" => %{"data" => [%{"price" => %{"id" => price}}]}}} =
       stripe(key, :post, "/v1/subscriptions", %{
-        "customer" => customer,
+        customer_param => customer,
         "trial_period_days" => 7,
         "metadata" => %{"mishka_pay_reference" => "subs-#{run}"},
         "items" => [
@@ -801,7 +804,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.update_customer(%{provider: "stripe", id: id, name: "Live Buyer 2"})
 
     assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer{id: ^id}]}} =
-             MishkaPay.list_customers("stripe", nil, email: email)
+             MishkaPay.list_customers("stripe", nil, email: email, api: :v1)
 
     assert {:ok, %MishkaPay.Customer{email: ^email}} = MishkaPay.fetch_customer("stripe", id)
 
@@ -1179,6 +1182,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
+  # Some twenty Stripe calls in a row, against a sandbox that answers in seconds each.
+  @tag timeout: 180_000
   test "a one-off bill is made with its items, opened, sent, paid by hand, and another voided or given up" do
     run = run_id()
 
@@ -1776,7 +1781,12 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       })
 
     {200, %{"id" => "pm_" <> _ = card}} =
-      stripe(key, :post, "/v1/payment_methods/pm_card_visa/attach", %{"customer" => customer_id})
+      stripe(
+        key,
+        :post,
+        "/v1/payment_methods/pm_card_visa/attach",
+        Map.new([Stripe.Mapper.customer_param(customer_id)])
+      )
 
     assert {:ok,
             %MishkaPay.Page{
