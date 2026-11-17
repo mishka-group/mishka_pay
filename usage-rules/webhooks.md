@@ -52,8 +52,11 @@ and per call:
   event about a PaymentIntent, subscription, customer, product or another object named by its own
   id needs none. An object deleted since is named by its id alone; a detached payment method by
   the customer the full event's `changes` give. A read Stripe refuses answers 400, so Stripe
-  sends the event again. `event.type` stays Stripe's own: `v1.invoice.paid` on thin,
-  `invoice.paid` on snapshot; match on the ids, or on both names.
+  sends the event again. `event.type` is the snapshot name in both modes: a thin
+  `v1.invoice.paid` arrives as `invoice.paid`, a thin-only `v1.invoice.overpaid` as
+  `invoice.overpaid` (`Stripe.Mapper.event_type/1`), so a listener matches one name; API v2's
+  own events keep Stripe's names (`v2.core.account.updated`). `list_events/3` and
+  `replay_events/3` take `types:` by either name.
 - Thin events add names with no snapshot form: `v1.customer.subscription.active`, `.past_due`,
   `.unpaid`, `.trialing`, `.incomplete` (and the subscription's item, cancel date and payment
   method changes) sync the subscription; `v1.invoice.payment_succeeded`, `.will_be_due`,
@@ -87,8 +90,9 @@ A refused message is never stored.
 
 ## The events that change anything
 
-`MishkaPay.Providers.Stripe.handled_events/0` is the list, each tested; on thin events each is
-`v1.<name>` (`Stripe.thin_events/0`, with the thin-only names above).
+`MishkaPay.Providers.Stripe.handled_events/0` is the list, each tested; Stripe sends each thin as
+`v1.<name>` (`Stripe.thin_events/0`, with the thin-only names above), and its Event carries
+`<name>` (`Stripe.event_types/0` is both, by Event type).
 `WebhookEndpoint.ensure/3` subscribes the endpoint to them:
 
 | Stripe events | Updates |

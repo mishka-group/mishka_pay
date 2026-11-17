@@ -12,7 +12,7 @@ defmodule Mix.Tasks.MishkaPay.ReplayEvents do
   an outage. The project starts, for its keys and listeners.
 
       mix mishka_pay.replay_events --provider stripe --tenant site-42 --since 2026-11-15T08:00:00Z
-      mix mishka_pay.replay_events --since 2026-11-15T08:00:00Z --type v1.invoice.paid
+      mix mishka_pay.replay_events --since 2026-11-15T08:00:00Z --type invoice.paid
 
   Options:
 

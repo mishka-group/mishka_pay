@@ -500,6 +500,18 @@ defmodule MishkaPay.Providers.Stripe do
         |> Map.merge(@thin_only)
         |> Map.merge(@thin_accounts)
 
+  @event_types @thin
+               |> Map.new(fn {type, updates} -> {Mapper.event_type(type), updates} end)
+               |> Map.merge(@handled)
+
+  @doc """
+  The events Mishka Pay acts on, by the type their `MishkaPay.Event` carries: `handled_events/0`,
+  and `thin_events/0` named as `Mapper.event_type/1` names them (`invoice.overpaid`,
+  `v2.core.account.updated`). `MishkaPay.replay_events/3` delivers only these.
+  """
+  @spec event_types() :: %{String.t() => [atom()]}
+  def event_types, do: @event_types
+
   @doc """
   The thin events Mishka Pay maps, each with what it updates (the words of `handled_events/0`),
   as an event destination with the thin payload sends them (the default of
@@ -527,8 +539,10 @@ defmodule MishkaPay.Providers.Stripe do
   `MishkaPay.Event` a snapshot event gives: an id that sits inside the object (the payment of a
   charge, the subscription of an invoice, the customer of a tax id) is read from the object, one
   request as the event's account; an event whose object is itself the id it names (a
-  PaymentIntent, a subscription, a customer, a product) needs none. Its `:type` stays Stripe's
-  (`v1.invoice.paid`).
+  PaymentIntent, a subscription, a customer, a product) needs none. Its `:type` is the snapshot
+  event's (`invoice.paid` for `v1.invoice.paid`, `invoice.overpaid` for the thin-only
+  `v1.invoice.overpaid`: `Mapper.event_type/1`), so a listener matches one name in either mode;
+  API v2's own events keep Stripe's names (`v2.core.account.updated`).
   """
   @spec thin_events() :: %{String.t() => [atom()]}
   def thin_events, do: @thin
@@ -2979,7 +2993,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp events_page(:thin, types, opts, keys) do
     filters = %{
-      "types" => types,
+      "types" => Enum.map(types, &thin_type/1),
       "created" => opts[:since] && %{"gte" => DateTime.to_iso8601(opts[:since])}
     }
 
@@ -2993,6 +3007,11 @@ defmodule MishkaPay.Providers.Stripe do
 
     page("/v1/events", filters, opts, keys, &Mapper.event/1)
   end
+
+  # A type is asked for by the name its Event carries or by Stripe's: `invoice.paid` is the thin
+  # `v1.invoice.paid`, and a name Stripe gives a thin event (`v1.`, `v2.`) stays.
+  defp thin_type("v" <> <<_digit, ".", _rest::binary>> = type), do: type
+  defp thin_type(type), do: "v1." <> type
 
   defp listed_event(event, keys) do
     with {:ok, mapped} <- Mapper.event(event), do: in_full(event, mapped, keys)

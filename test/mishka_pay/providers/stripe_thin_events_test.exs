@@ -57,7 +57,10 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
 
   defp deliver(type, related, opts \\ []) do
     {body, headers} = MishkaPay.Test.signed_thin_event(type, related, @secret, opts)
+    post(body, headers)
+  end
 
+  defp post(body, headers) do
     headers
     |> Enum.reduce(conn(:post, "/pay/webhooks/stripe/site-a", body), fn {name, value}, conn ->
       put_req_header(conn, name, value)
@@ -81,8 +84,9 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
           {"v1.product.default_price_changed",
            related("prod_1", "product", "/v1/products/prod_1"), :object_id, "prod_1"}
         ] do
+      snapshot_type = String.replace_prefix(type, "v1.", "")
       assert deliver(type, related, id: "evt_test_#{id}").status == 200
-      assert_received {:webhook_event, %Event{type: ^type, tenant: "site-a"} = event}
+      assert_received {:webhook_event, %Event{type: ^snapshot_type, tenant: "site-a"} = event}
       assert Map.fetch!(event, field) == id, "#{type} does not name #{field}"
       assert event.object_type == related["type"]
     end
@@ -106,7 +110,7 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
 
     assert_received {:webhook_event,
                      %Event{
-                       type: "v1.charge.refunded",
+                       type: "charge.refunded",
                        object_id: "ch_1",
                        object_type: "charge",
                        payment_id: "pi_9",
@@ -159,7 +163,7 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
 
     assert_received {:webhook_event,
                      %Event{
-                       type: "v1.billing.meter.error_report_triggered",
+                       type: "billing.meter.error_report_triggered",
                        object_id: "mtr_1",
                        object_type: "billing.meter"
                      }}
@@ -168,7 +172,53 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
              200
 
     assert_received {:webhook_event,
-                     %Event{type: "v1.charge.updated", object_id: "ch_1", payment_id: nil}}
+                     %Event{type: "charge.updated", object_id: "ch_1", payment_id: nil}}
+  end
+
+  test "a thin event carries its snapshot event's type, so one listener takes either mode; API v2's keep Stripe's" do
+    stripe(%{
+      "/v1/invoices/in_1" => %{
+        "id" => "in_1",
+        "object" => "invoice",
+        "parent" => %{"subscription_details" => %{"subscription" => "sub_1"}}
+      }
+    })
+
+    assert deliver("v1.invoice.paid", related("in_1", "invoice", "/v1/invoices/in_1")).status ==
+             200
+
+    assert_received {:webhook_event,
+                     %Event{type: "invoice.paid", subscription_id: "sub_1"} = thin}
+
+    {body, headers} =
+      MishkaPay.Test.signed_event(
+        "invoice.paid",
+        %{
+          "id" => "in_1",
+          "object" => "invoice",
+          "parent" => %{"subscription_details" => %{"subscription" => "sub_1"}}
+        },
+        @secret
+      )
+
+    assert post(body, headers).status == 200
+    assert_received {:webhook_event, %Event{type: "invoice.paid"} = snapshot}
+
+    assert Map.take(thin, [:type, :subscription_id, :object_id]) ==
+             Map.take(snapshot, [:type, :subscription_id, :object_id])
+
+    assert deliver("v1.invoice.overpaid", related("in_1", "invoice", "/v1/invoices/in_1")).status ==
+             200
+
+    assert_received {:webhook_event, %Event{type: "invoice.overpaid"}}
+    assert is_map_key(Stripe.event_types(), "invoice.overpaid")
+
+    assert deliver(
+             "v2.core.account.updated",
+             related("acct_1", "v2.core.account", "/v2/core/accounts/acct_1")
+           ).status == 200
+
+    assert_received {:webhook_event, %Event{type: "v2.core.account.updated", account: "acct_1"}}
   end
 
   test "a site acting for a connected account refuses another account's thin event before any read" do
@@ -272,10 +322,10 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
       assert {:ok, %MishkaPay.Page{items: [refunded, _issuing], has_more: true, next: next}} =
                MishkaPay.list_events("stripe", "site-a",
                  since: since,
-                 types: ["v1.charge.refunded", "v1.issuing_card.created"]
+                 types: ["charge.refunded", "v1.issuing_card.created"]
                )
 
-      assert %Event{id: "evt_test_2", payment_id: "pi_7", type: "v1.charge.refunded"} = refunded
+      assert %Event{id: "evt_test_2", payment_id: "pi_7", type: "charge.refunded"} = refunded
       assert_received {:query, "/v2/core/events", query}
 
       assert %{

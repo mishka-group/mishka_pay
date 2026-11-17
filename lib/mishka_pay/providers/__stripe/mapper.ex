@@ -1881,9 +1881,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   A Stripe event as a `MishkaPay.Event`, with what it is about: a snapshot event (`object:
   "event"`), or a thin one (`object: "v2.core.event"`, as an event destination sends API v2's
   events), whose related object is what it is about and whose `context`, else the account it is
-  about, is its `:account`; one about an account's customer configuration names that account as
-  its `:customer_id` too. A saved payment method's or a setup's event is about the customer it names (a detached payment method
-  names it in `previous_attributes`), since that customer is what changes.
+  about, is its `:account`, and whose type is `event_type/1`'s; one about an account's customer
+  configuration names that account as its `:customer_id` too. A saved payment method's or a
+  setup's event is about the customer it names (a detached payment method names it in
+  `previous_attributes`), since that customer is what changes.
   """
   @spec event(map()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
   def event(%{"object" => "v2.core.event"} = event) do
@@ -1892,7 +1893,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     %{
       provider: "stripe",
       id: event["id"],
-      type: event["type"],
+      type: event_type(event["type"]),
       object_id: related["id"],
       object_type: related["type"],
       livemode: event["livemode"],
@@ -1927,7 +1928,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @doc """
   A thin event of a v1 resource (`v1.invoice.paid`) as the `MishkaPay.Event` its snapshot event
-  gives, with its own id, type, time and `context` (its `:account`): its ids are read from
+  gives, with its own id, time and `context` (its `:account`) and the snapshot event's type
+  (`event_type/1`): its ids are read from
   `object`, the related object as Stripe answers it now, or, left `nil`, from the related object's
   id and type alone; `before` is the full event's `changes.before`, where a detached payment
   method still names its customer.
@@ -1939,7 +1941,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
     event(%{
       "id" => thin["id"],
-      "type" => thin["type"],
+      "type" => event_type(thin["type"]),
       "livemode" => thin["livemode"],
       "account" => thin["context"],
       "created" => thin["created"],
@@ -1949,6 +1951,16 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       }
     })
   end
+
+  @doc """
+  The type a Stripe event's `MishkaPay.Event` carries: a thin event of a v1 resource is named as
+  its snapshot event (`v1.invoice.paid` is `invoice.paid`, `v1.invoice.overpaid` is
+  `invoice.overpaid`), so a listener takes either kind by one name; API v2's own events keep
+  Stripe's names (`v2.core.account.updated`).
+  """
+  @spec event_type(String.t()) :: String.t()
+  def event_type("v1." <> type), do: type
+  def event_type(type), do: type
 
   # A thin event about a connected account names it only as its related object.
   defp account_of(%{"type" => "v2.core.account", "id" => id}), do: id

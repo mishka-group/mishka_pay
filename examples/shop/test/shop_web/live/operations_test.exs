@@ -156,8 +156,10 @@ defmodule ShopWeb.OperationsTest do
     assert has_element?(
              view,
              "[data-testid=event-row][data-event-id=evt_test_1]",
-             "v1.product.updated"
+             "product.updated"
            )
+
+    refute has_element?(view, "[data-testid=event-row]", "v1.product.updated")
 
     view
     |> form("[data-testid=operations-replay-form]", %{window: "1h"})

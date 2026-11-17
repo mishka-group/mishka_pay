@@ -2085,8 +2085,9 @@ defmodule MishkaPay do
   `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, plus `limit:` and
   `after:`. At a provider with two kinds of events, `events:` (`:thin` or `:snapshot`, else the
   tenant's `:events`) picks which are read: Stripe's thin events come from API v2
-  (`/v2/core/events`, 20 a page, named `v1.invoice.paid`), each the same Event its webhook gives;
-  snapshot events from `/v1/events`.
+  (`/v2/core/events`, 20 a page), each the same Event its webhook gives, named as its snapshot
+  event (`invoice.paid`), and `types:` takes those names or Stripe's thin ones
+  (`v1.invoice.paid`); snapshot events from `/v1/events`.
   """
   @spec list_events(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -2123,13 +2124,13 @@ defmodule MishkaPay do
     end
   end
 
-  # The snapshot events the provider acts on, and their thin forms when it has those.
+  # The events the provider acts on, by their Event type: of both kinds when it has two.
   defp handled(module) do
-    case {function_exported?(module, :handled_events, 0),
-          function_exported?(module, :thin_events, 0)} do
-      {true, true} -> Map.merge(module.handled_events(), module.thin_events())
-      {true, false} -> module.handled_events()
-      {false, _thin} -> nil
+    case {function_exported?(module, :event_types, 0),
+          function_exported?(module, :handled_events, 0)} do
+      {true, _snapshot} -> module.event_types()
+      {false, true} -> module.handled_events()
+      {false, false} -> nil
     end
   end
 
