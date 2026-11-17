@@ -5,7 +5,7 @@ defmodule ShopWeb.PortalConfigsComponentTest do
 
   alias ShopWeb.StripeRoutes
 
-  test "setups are listed page by page, one is made, turned off, and the portal opens with one",
+  test "setups are read only when shown, page by page; one is made, turned off, and the portal opens with one",
        %{conn: conn} do
     StripeRoutes.stub(%{
       {"GET", "/v1/billing_portal/configurations"} => fn
@@ -24,6 +24,12 @@ defmodule ShopWeb.PortalConfigsComponentTest do
 
     {:ok, view, _html} = live(conn, ~p"/")
 
+    refute_received {:stripe, "GET", "/v1/billing_portal/configurations", _params}
+    refute has_element?(view, "[data-testid=portal-config-list]")
+
+    view |> element("[data-testid=portal-configs-show]") |> render_click()
+    render_async(view)
+
     assert_received {:stripe, "GET", "/v1/billing_portal/configurations", listed}
     assert listed["expand"] == ["data.features.subscription_update.products"]
 
@@ -38,8 +44,10 @@ defmodule ShopWeb.PortalConfigsComponentTest do
            )
 
     view |> element("[data-testid=portal-config-next]") |> render_click()
+    render_async(view)
     assert has_element?(view, "[data-testid=portal-config-row][data-config-id=bpc_old]")
     view |> element("[data-testid=portal-config-first]") |> render_click()
+    render_async(view)
 
     view
     |> form("[data-testid=portal-config-form]", %{
@@ -103,6 +111,8 @@ defmodule ShopWeb.PortalConfigsComponentTest do
     })
 
     {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=portal-configs-show]") |> render_click()
+    render_async(view)
     assert has_element?(view, "[data-testid=portal-config-empty]")
 
     view |> form("[data-testid=portal-open-form]", %{}) |> render_submit()

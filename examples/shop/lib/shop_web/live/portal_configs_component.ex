@@ -6,6 +6,9 @@ defmodule ShopWeb.PortalConfigsComponent do
   the plans a buyer may switch to), turns one off or on (`MishkaPay.update_portal_configuration/1`),
   and opens the portal for a customer with the one picked (`MishkaPay.portal_session/1` with
   `configuration:`).
+
+  Nothing is read when the page opens: "Show setups" reads the first page in the background and
+  the shop's customers for the portal form, and each page after that is read only when asked.
   """
 
   use ShopWeb, :live_component
@@ -18,8 +21,10 @@ defmodule ShopWeb.PortalConfigsComponent do
   def mount(socket) do
     {:ok,
      assign(socket,
-       loaded?: false,
+       open?: false,
+       reading?: false,
        configs: [],
+       customers: [],
        next: nil,
        page: 0,
        form: %{"name" => "Teams", "subscription_cancel" => "at_period_end"}
@@ -27,16 +32,12 @@ defmodule ShopWeb.PortalConfigsComponent do
   end
 
   @impl true
-  def update(assigns, socket) do
-    socket = assign(socket, tenant: assigns.tenant, customers: customers())
-
-    case socket.assigns.loaded? do
-      true -> {:ok, socket}
-      false -> {:ok, socket |> assign(loaded?: true) |> read(nil)}
-    end
-  end
+  def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
   @impl true
+  def handle_event("show", _params, socket),
+    do: {:noreply, socket |> assign(open?: true, page: 0, customers: customers()) |> read(nil)}
+
   def handle_event("next", _params, socket), do: {:noreply, read(socket, socket.assigns.next)}
 
   def handle_event("first", _params, socket),
@@ -93,6 +94,18 @@ defmodule ShopWeb.PortalConfigsComponent do
   end
 
   @impl true
+  def handle_async(:page, {:ok, {:ok, %MishkaPay.Page{items: configs, next: next}}}, socket) do
+    {:noreply,
+     assign(socket, configs: configs, next: next, page: socket.assigns.page + 1, reading?: false)}
+  end
+
+  def handle_async(:page, {:ok, {:error, error}}, socket),
+    do: {:noreply, socket |> read_failed() |> say(:error, MishkaPay.Ash.message(error))}
+
+  def handle_async(:page, {:exit, reason}, socket),
+    do: {:noreply, socket |> read_failed() |> say(:error, inspect(reason))}
+
+  @impl true
   def render(assigns) do
     ~H"""
     <section data-testid="portal-configs" class="space-y-4">
@@ -102,7 +115,17 @@ defmodule ShopWeb.PortalConfigsComponent do
         portal opens.
       </p>
 
-      <div class="grid gap-4 md:grid-cols-2">
+      <button
+        :if={!@open?}
+        class="btn btn-sm"
+        phx-click="show"
+        phx-target={@myself}
+        data-testid="portal-configs-show"
+      >
+        Show setups
+      </button>
+
+      <div :if={@open?} class="grid gap-4 md:grid-cols-2">
         <form
           id="portal-config-form"
           phx-submit="create"
@@ -266,10 +289,15 @@ defmodule ShopWeb.PortalConfigsComponent do
         </form>
       </div>
 
-      <div class="space-y-2" data-testid="portal-config-list">
+      <div :if={@open?} class="space-y-2" data-testid="portal-config-list">
         <div class="flex flex-wrap items-center gap-2 text-sm">
           <.hint>MishkaPay.list_portal_configurations/3</.hint>
           <span data-testid="portal-config-page">Page {@page}</span>
+          <span
+            :if={@reading?}
+            class="loading loading-dots loading-xs"
+            data-testid="portal-config-reading"
+          ></span>
           <button
             :if={@page > 1}
             class="btn btn-xs"
@@ -280,7 +308,7 @@ defmodule ShopWeb.PortalConfigsComponent do
             First page
           </button>
           <button
-            :if={@next}
+            :if={@next && !@reading?}
             class="btn btn-xs btn-primary"
             phx-click="next"
             phx-target={@myself}
@@ -289,7 +317,11 @@ defmodule ShopWeb.PortalConfigsComponent do
             Next page
           </button>
         </div>
-        <p :if={@configs == []} class="text-sm opacity-70" data-testid="portal-config-empty">
+        <p
+          :if={@configs == [] && !@reading?}
+          class="text-sm opacity-70"
+          data-testid="portal-config-empty"
+        >
           No portal setups on Stripe yet: the portal uses Stripe's default.
         </p>
         <ul class="text-sm space-y-1">
@@ -326,17 +358,17 @@ defmodule ShopWeb.PortalConfigsComponent do
     """
   end
 
+  # One page from Stripe in the background, so the page stays live while Stripe answers.
   defp read(socket, cursor) do
     opts = Enum.reject([limit: 10, after: cursor], fn {_name, value} -> is_nil(value) end)
+    tenant = socket.assigns.tenant
 
-    case MishkaPay.list_portal_configurations("stripe", socket.assigns.tenant, opts) do
-      {:ok, %MishkaPay.Page{items: configs, next: next}} ->
-        assign(socket, configs: configs, next: next, page: socket.assigns.page + 1)
-
-      {:error, error} ->
-        socket |> assign(configs: [], next: nil) |> say(:error, MishkaPay.Ash.message(error))
-    end
+    socket
+    |> assign(reading?: true)
+    |> start_async(:page, fn -> MishkaPay.list_portal_configurations("stripe", tenant, opts) end)
   end
+
+  defp read_failed(socket), do: assign(socket, configs: [], next: nil, reading?: false)
 
   defp config_attrs(params, tenant) do
     %{
