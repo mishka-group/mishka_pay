@@ -201,12 +201,13 @@ if Code.ensure_loaded?(Ash) do
 
     @doc """
     The plain words of an error, for a person or a log: the error's own message, without the
-    breadcrumbs and stack traces a Splode class adds; a class gives its errors' words, joined.
+    breadcrumbs and stack traces a Splode class adds; a class gives its errors' words, each its own
+    sentence.
     """
     @spec message(term()) :: String.t()
-    def message(%{errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+    def message(%{errors: [_ | _] = errors}), do: sentences(errors)
 
-    def message(%{child_errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+    def message(%{child_errors: [_ | _] = errors}), do: sentences(errors)
 
     def message(%{__exception__: true, bread_crumbs: [_ | _]} = error),
       do: message(%{error | bread_crumbs: []})
@@ -220,6 +221,10 @@ if Code.ensure_loaded?(Ash) do
     def message(%{__exception__: true, __struct__: module} = error), do: module.message(error)
     def message(text) when is_binary(text), do: text
     def message(other), do: inspect(other)
+
+    # Each error's words start with a capital, so they are joined as sentences.
+    defp sentences(errors),
+      do: Enum.map_join(errors, ". ", &(&1 |> message() |> String.trim_trailing(".")))
 
     # A nested input reports its own failures under it; the person needs the inner ones.
     defp leaves(%{child_errors: [_ | _] = errors}), do: Enum.flat_map(errors, &leaves/1)
