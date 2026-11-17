@@ -86,6 +86,7 @@ defmodule ShopWeb.ShopLive do
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
      |> assign(lookup: nil, typed: %{}, lookup_failure: nil, refund_form: @refund_form)
+     |> assign(checkout_lookup: nil)
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -271,6 +272,10 @@ defmodule ShopWeb.ShopLive do
         {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
+
+  # What is typed stays through the page's live updates and a reconnect.
+  def handle_event("checkout_lookup", %{"checkout_id" => value}, socket),
+    do: {:noreply, assign(socket, checkout_lookup: value)}
 
   def handle_event("read_checkout", %{"checkout_id" => checkout_id}, socket) do
     with {:ok, checkout_id} <- checkout_id(checkout_id),
@@ -573,12 +578,15 @@ defmodule ShopWeb.ShopLive do
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
+          id="read-checkout-form"
+          phx-change="checkout_lookup"
           phx-submit="read_checkout"
           class="join w-full max-w-2xl"
           data-testid="read-checkout-form"
         >
           <input
             name="checkout_id"
+            value={@checkout_lookup}
             placeholder="cs_test_... (shown after each purchase)"
             class="input input-sm join-item min-w-0 flex-1"
             data-testid="read-checkout-input"
