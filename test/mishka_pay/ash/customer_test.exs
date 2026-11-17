@@ -221,6 +221,81 @@ defmodule MishkaPay.Ash.CustomerTest do
     assert {gone.email, gone.name, gone.tenant} == {"ava@example.com", "Ava", "site-a"}
   end
 
+  test "a v2 customer's account events sync its row; a seller's account event is done with no row" do
+    MishkaPay.Test.start_plugin!(Stripe)
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a", webhook_secret: @secret})
+    MishkaPay.Test.start_plugin!(Inbox)
+    MishkaPay.Test.start_plugin!(CustomerSync)
+
+    answer_accounts(%{
+      "acct_buyer" => %{
+        "applied_configurations" => ["customer"],
+        "contact_email" => "new@example.com",
+        "display_name" => "Ava New"
+      },
+      "acct_seller" => %{"applied_configurations" => ["merchant"]}
+    })
+
+    for {type, account} <- [
+          {"v2.core.account.updated", "acct_buyer"},
+          {"v2.core.account.updated", "acct_seller"},
+          {"v2.core.account[identity].updated", "acct_seller"},
+          {"v2.core.account.closed", "acct_seller"}
+        ] do
+      assert deliver_thin(type, account) == 200
+    end
+
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    assert [%{provider_id: "acct_buyer", email: "new@example.com", name: "Ava New"}] =
+             Ash.read!(@customer, authorize?: false)
+
+    assert [_, _, _, _] = inbox = Ash.read!(MishkaPay.Support.WebhookEvent, authorize?: false)
+    assert Enum.all?(inbox, &match?(%{status: :processed, last_error: nil}, &1))
+
+    answer_accounts(%{
+      "acct_buyer" => %{"applied_configurations" => ["customer"], "closed" => true}
+    })
+
+    assert deliver_thin("v2.core.account.closed", "acct_buyer") == 200
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    assert [%{provider_id: "acct_buyer", email: "new@example.com", deleted_at: %DateTime{}}] =
+             Ash.read!(@customer, authorize?: false)
+  end
+
+  # Stripe's Accounts v2 answering a read of each account by id, in its own shape.
+  defp answer_accounts(accounts) do
+    MishkaPay.Test.stub_http(fn %{request_path: "/v2/core/accounts/" <> id} = conn ->
+      fields = Map.fetch!(accounts, id)
+
+      Req.Test.json(
+        conn,
+        Map.merge(%{"id" => id, "object" => "v2.core.account", "closed" => false}, fields)
+      )
+    end)
+  end
+
+  # A signed Stripe thin event about `account`, as an event destination posts it.
+  defp deliver_thin(type, account) do
+    related = %{
+      "id" => account,
+      "type" => "v2.core.account",
+      "url" => "/v2/core/accounts/#{account}"
+    }
+
+    {body, headers} = MishkaPay.Test.signed_thin_event(type, related, @secret)
+
+    conn =
+      headers
+      |> Enum.reduce(conn(:post, "/pay/webhooks/stripe/site-a", body), fn {name, value}, conn ->
+        put_req_header(conn, name, value)
+      end)
+      |> Webhook.call(Webhook.init(at: "/pay/webhooks"))
+
+    conn.status
+  end
+
   defp answer_customer(fields) do
     MishkaPay.Test.stub_http(fn %{request_path: "/v1/customers/cus_gone"} = conn ->
       Req.Test.json(conn, Map.merge(%{"id" => "cus_gone", "object" => "customer"}, fields))

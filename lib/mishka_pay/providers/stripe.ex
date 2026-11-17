@@ -431,11 +431,11 @@ defmodule MishkaPay.Providers.Stripe do
 
   @thin_accounts %{
     "v2.core.account.created" => [:account],
-    "v2.core.account.updated" => [:account],
-    "v2.core.account.closed" => [:account],
+    "v2.core.account.updated" => [:account, :customer],
+    "v2.core.account.closed" => [:account, :customer],
     "v2.core.account[requirements].updated" => [:account],
     "v2.core.account[future_requirements].updated" => [:account],
-    "v2.core.account[identity].updated" => [:account],
+    "v2.core.account[identity].updated" => [:account, :customer],
     "v2.core.account[defaults].updated" => [:account],
     "v2.core.account[configuration.merchant].updated" => [:account],
     "v2.core.account[configuration.merchant].capability_status_updated" => [:account],
@@ -530,10 +530,11 @@ defmodule MishkaPay.Providers.Stripe do
       `:object_id` is the meter (`mtr_...`) when Stripe found one; the counts and samples are in
       the full event, `GET /v2/core/events/:id` (`MishkaPay.request/1`);
     * API v2's connected account events (`v2.core.account.*`, `:account`): `:object_id` and
-      `:account` are the account (read it with `MishkaPay.fetch_connected_account/4`). An event
-      about an account's customer configuration (`v2.core.account[configuration.customer].*`) is
-      about a customer made on Accounts v2 too: its `:customer_id` is the account, so the Ash
-      customer listener syncs the customer on it.
+      `:account` are the account (read it with `MishkaPay.fetch_connected_account/4`). The
+      events a customer made on Accounts v2 sends (`v2.core.account.updated` and `.closed`,
+      `[identity].updated`, `[configuration.customer].*`) name the account as its `:customer_id`
+      too, so the Ash customer listener syncs it; for an account that is only a seller, that
+      read answers `resource_missing` and the listener leaves the event done.
 
   A thin event names its object and no more. `verify_webhook/3` turns one into the same
   `MishkaPay.Event` a snapshot event gives: an id that sits inside the object (the payment of a

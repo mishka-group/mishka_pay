@@ -805,9 +805,6 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   def customer(%{"deleted" => true, "id" => id}, _view),
     do: no_customer("customer_deleted", "Customer #{id} was deleted")
 
-  def customer(%{"object" => "v2.core.account", "closed" => true, "id" => id}, _view),
-    do: no_customer("customer_deleted", "Customer #{id} was closed")
-
   def customer(%{"object" => "v2.core.account"} = account, _view),
     do: account_customer(account, "customer" in List.wrap(account["applied_configurations"]))
 
@@ -829,6 +826,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
     |> built_customer()
   end
+
+  # A closed account keeps its configurations listed: a seller's closed account is no customer.
+  defp account_customer(%{"closed" => true, "id" => id}, true),
+    do: no_customer("customer_deleted", "Customer #{id} was closed")
 
   defp account_customer(account, true) do
     individual = get_in(account, ["identity", "individual"]) || %{}
@@ -1881,8 +1882,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   A Stripe event as a `MishkaPay.Event`, with what it is about: a snapshot event (`object:
   "event"`), or a thin one (`object: "v2.core.event"`, as an event destination sends API v2's
   events), whose related object is what it is about and whose `context`, else the account it is
-  about, is its `:account`, and whose type is `event_type/1`'s; one about an account's customer
-  configuration names that account as its `:customer_id` too. A saved payment method's or a
+  about, is its `:account`, and whose type is `event_type/1`'s; one a customer made on Accounts v2
+  sends (`v2.core.account.updated`, `.closed`, `[identity].updated`,
+  `[configuration.customer].*`) names that account as its `:customer_id` too. A saved payment method's or a
   setup's event is about the customer it names (a detached payment method names it in
   `previous_attributes`), since that customer is what changes.
   """
@@ -1966,9 +1968,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp account_of(%{"type" => "v2.core.account", "id" => id}), do: id
   defp account_of(_other), do: nil
 
-  # An event about an account's customer configuration is about the customer that account is.
+  # The account events a customer made on Accounts v2 sends (its email, name, phone, address,
+  # invoice default or close) name the customer that account may be; one that is only a seller
+  # reads as no customer.
+  @customer_account_events ~w(v2.core.account.updated v2.core.account.closed v2.core.account[identity].updated)
+
   defp customer_account_of("v2.core.account[configuration.customer]." <> _, %{"id" => id}),
     do: id
+
+  defp customer_account_of(type, %{"id" => id}) when type in @customer_account_events, do: id
 
   defp customer_account_of(_type, _related), do: nil
 

@@ -1334,6 +1334,9 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:error, %Errors.Rejected{code: "resource_missing"}} =
                MishkaPay.fetch_customer("stripe", "acct_seller", "site-a")
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} =
+               MishkaPay.fetch_customer("stripe", "acct_seller_closed", "site-a")
     end
 
     test "a customer is deleted as Stripe's spec accepts, and an id of another kind never reaches a path" do
@@ -6358,8 +6361,11 @@ defmodule MishkaPay.Providers.StripeTest do
              for {"v2." <> _ = type, kinds} <- Stripe.thin_events(), :customer in kinds, do: type
            ) ==
              [
+               "v2.core.account.closed",
+               "v2.core.account.updated",
                "v2.core.account[configuration.customer].capability_status_updated",
-               "v2.core.account[configuration.customer].updated"
+               "v2.core.account[configuration.customer].updated",
+               "v2.core.account[identity].updated"
              ]
   end
 
@@ -6426,8 +6432,9 @@ defmodule MishkaPay.Providers.StripeTest do
   end
 
   # Stripe's answers about customers, in their own shapes (as Stripe answered them live): an
-  # account with the customer configuration, the list of such accounts, one closed, one that is
-  # only a seller, and the Customer Stripe links to an account, which `/v1/customers` answers.
+  # account with the customer configuration, the list of such accounts, one closed (a closed
+  # account keeps its configurations listed), one that is only a seller, open and closed, and the
+  # Customer Stripe links to an account, which `/v1/customers` answers.
   defp customer_answer("GET", "/v2/core/accounts"),
     do: %{
       "data" => [
@@ -6441,7 +6448,15 @@ defmodule MishkaPay.Providers.StripeTest do
     do: %{
       "id" => "acct_closed",
       "object" => "v2.core.account",
-      "applied_configurations" => [],
+      "applied_configurations" => ["customer"],
+      "closed" => true
+    }
+
+  defp customer_answer(_method, "/v2/core/accounts/acct_seller_closed"),
+    do: %{
+      "id" => "acct_seller_closed",
+      "object" => "v2.core.account",
+      "applied_configurations" => ["merchant"],
       "closed" => true
     }
 

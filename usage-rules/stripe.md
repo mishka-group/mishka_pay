@@ -492,12 +492,13 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   `v2.core.account[configuration.customer].updated` (and `[identity].updated` with a phone or
   address); a new invoice default `[configuration.customer].updated`; a new email or name
   `v2.core.account.updated`; a new phone or address `[identity].updated`; a close
-  `v2.core.account.closed`. Only the `v2.core.account[configuration.customer].*` ones say the
-  account is a customer, so only they name it as `:customer_id` and reach the customer listener;
-  the others look the same for a seller's account and stay with the account. A change made
-  outside Mishka Pay to a v2 customer's email, name, phone or address, or its close, reaches the
-  Ash row only when the row is read again (`:sync`). Its subscriptions and invoices still send v1
-  snapshot events, and read back with the account as their `:customer_id`.
+  `v2.core.account.closed`. Each of these names the account as its `:customer_id` too, so the
+  Ash customer listener syncs the row on a change made outside Mishka Pay to a v2 customer's
+  email, name, phone or address, or its close. `v2.core.account.updated`, `.closed` and
+  `[identity].updated` look the same for a seller's account: there the listener's read answers
+  `resource_missing` (the account has no customer configuration) and the event counts as done,
+  with no row written. Its subscriptions and invoices still send v1 snapshot events, and read
+  back with the account as their `:customer_id`.
 - Tax ids start with `txi_`. Stripe checks EU VAT, GB VAT and AU ABN numbers against the
   government register after they are added: `:verification` is `:pending` first, and
   `customer.tax_id.updated` comes when the check ends. Other kinds get their format checked only.
