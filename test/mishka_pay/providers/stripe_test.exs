@@ -2841,6 +2841,21 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert map_size(eu) == 3
 
+      assert {:ok, %MishkaPay.TaxRegistration{id: "taxreg_" <> _}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 country: "FR",
+                 type: "standard",
+                 place_of_supply_scheme: "small_seller"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
+                       %{
+                         "country_options[fr][type]" => "standard",
+                         "country_options[fr][standard][place_of_supply_scheme]" => "small_seller"
+                       }, _key}
+
       ends = ~U[2030-01-01 00:00:00Z]
 
       assert {:ok, %MishkaPay.TaxRegistration{}} =
@@ -2939,6 +2954,18 @@ defmodule MishkaPay.Providers.StripeTest do
                type: "standard",
                state: "BY"
              }), :state},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "IS",
+               type: "standard",
+               place_of_supply_scheme: :standard
+             }), :place_of_supply_scheme},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "DE",
+               type: "oss_union",
+               place_of_supply_scheme: :small_seller
+             }), :place_of_supply_scheme},
             {MishkaPay.checkout(%{
                @checkout
                | items: [%{id: "price_1", tax_rate_ids: ["shr_1"]}]
@@ -4626,6 +4653,26 @@ defmodule MishkaPay.Providers.StripeTest do
                "status" => "scheduled",
                "active_from" => 1_894_825_000
              })
+
+    for {scheme, read} <- [{"small_seller", :small_seller}, {"inbound_goods", nil}] do
+      assert {:ok,
+              %MishkaPay.TaxRegistration{
+                country: "DE",
+                type: "standard",
+                place_of_supply_scheme: ^read
+              }} =
+               Stripe.Mapper.tax_registration(%{
+                 "id" => "taxreg_2",
+                 "country" => "DE",
+                 "country_options" => %{
+                   "de" => %{
+                     "type" => "standard",
+                     "standard" => %{"place_of_supply_scheme" => scheme}
+                   }
+                 },
+                 "status" => "active"
+               })
+    end
 
     assert {:ok, %MishkaPay.TaxSettings{status: :pending, missing_fields: ["head_office"]} = none} =
              Stripe.Mapper.tax_settings(%{

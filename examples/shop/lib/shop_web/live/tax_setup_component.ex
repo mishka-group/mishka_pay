@@ -3,7 +3,9 @@ defmodule ShopWeb.TaxSetupComponent do
   The site's tax setup on Stripe, in the demo shop: tax rates set by hand
   (`MishkaPay.create_tax_rate/1`, `list_tax_rates/3`, archived with `update_tax_rate/1`), where
   the site is registered to collect tax (`MishkaPay.create_tax_registration/1`,
-  `list_tax_registrations/3`, ended with `expire_tax_registration/4`), and Stripe Tax's settings
+  `list_tax_registrations/3`, ended with `expire_tax_registration/4`; the form offers only the
+  kinds Stripe takes in the country typed, a state where the kind needs one, and the place of
+  supply scheme of an EU standard registration), and Stripe Tax's settings
   (`MishkaPay.fetch_tax_settings/2`, `update_tax_settings/1`): the head office and the defaults.
 
   Nothing is read when the page opens: "Show tax setup" reads the three in the background
@@ -22,7 +24,19 @@ defmodule ShopWeb.TaxSetupComponent do
     "tax_type" => "vat"
   }
 
-  @registration_form %{"country" => "DE", "type" => "standard", "state" => ""}
+  @registration_form %{
+    "country" => "DE",
+    "type" => "standard",
+    "state" => "",
+    "place_of_supply_scheme" => "standard"
+  }
+
+  # The registration kinds Stripe takes in each country (its API's `country_options`).
+  @eu ~w(AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK)
+  @simplified_only ~w(AM AZ BJ BY CL CM CO CR CV EC EG GE ID IN KE KG KH KR KZ LA MA MD MX MY NG
+                      NP PE PH RU SA SN TH TJ TR TW TZ UA UG UZ VN ZM)
+  @us_kinds ~w(state_sales_tax state_communications_tax state_retail_delivery_fee
+               local_amusement_tax local_lease_tax)
 
   @impl true
   def mount(socket) do
@@ -90,15 +104,19 @@ defmodule ShopWeb.TaxSetupComponent do
     end
   end
 
+  def handle_event("draft_registration", params, socket),
+    do: {:noreply, assign(socket, registration_form: registration_form(params))}
+
   def handle_event("create_registration", params, socket) do
-    form = Map.take(params, Map.keys(@registration_form))
+    form = registration_form(params)
 
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
       country: form["country"],
       type: form["type"],
-      state: blank(form["state"])
+      state: if(state?(form), do: blank(form["state"])),
+      place_of_supply_scheme: if(scheme?(form), do: form["place_of_supply_scheme"])
     }
 
     case MishkaPay.create_tax_registration(attrs) do
@@ -184,6 +202,28 @@ defmodule ShopWeb.TaxSetupComponent do
       end
     end)
   end
+
+  # The form as typed, with a kind the country takes: the first one when the country changed.
+  defp registration_form(params) do
+    form = Map.merge(@registration_form, Map.take(params, Map.keys(@registration_form)))
+    country = form["country"] |> to_string() |> String.trim() |> String.upcase()
+    kinds = kinds(country)
+    type = (form["type"] in kinds && form["type"]) || hd(kinds)
+    %{form | "country" => country, "type" => type}
+  end
+
+  defp kinds(country) when country in @eu, do: ~w(standard oss_union oss_non_union ioss)
+  defp kinds("US"), do: @us_kinds
+  defp kinds("CA"), do: ~w(standard province_standard simplified)
+  defp kinds(country) when country in @simplified_only, do: ~w(simplified)
+  defp kinds(_country), do: ~w(standard)
+
+  defp state?(%{"country" => "US"}), do: true
+  defp state?(%{"country" => "CA", "type" => "province_standard"}), do: true
+  defp state?(_form), do: false
+
+  defp scheme?(%{"country" => country, "type" => "standard"}), do: country in @eu
+  defp scheme?(_form), do: false
 
   defp done(socket, notice), do: assign(socket, notice: notice, error: nil)
   defp failed(socket, error), do: assign(socket, error: MishkaPay.Ash.message(error), notice: nil)
@@ -365,6 +405,7 @@ defmodule ShopWeb.TaxSetupComponent do
           </.hint>
           <form
             id="tax-registration-form"
+            phx-change="draft_registration"
             phx-submit="create_registration"
             phx-target={@myself}
             class="flex flex-wrap items-end gap-2 rounded-box bg-base-200 p-3"
@@ -382,21 +423,45 @@ defmodule ShopWeb.TaxSetupComponent do
             </label>
             <label class="fieldset">
               <span class="fieldset-legend">Kind</span>
-              <input
-                name="type"
-                value={@registration_form["type"]}
-                placeholder="standard, oss_union, state_sales_tax"
-                class="input input-sm w-40"
-                data-testid="tax-registration-type"
-              />
+              <select name="type" class="select select-sm" data-testid="tax-registration-type">
+                <option
+                  :for={kind <- kinds(@registration_form["country"])}
+                  value={kind}
+                  selected={kind == @registration_form["type"]}
+                >
+                  {kind}
+                </option>
+              </select>
             </label>
-            <label class="fieldset">
-              <span class="fieldset-legend">State or province</span>
+            <label :if={scheme?(@registration_form)} class="fieldset">
+              <span class="fieldset-legend">Place of supply scheme</span>
+              <select
+                name="place_of_supply_scheme"
+                class="select select-sm"
+                data-testid="tax-registration-scheme"
+              >
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"standard", "standard"},
+                      {"small_seller", "small seller (under the EU threshold)"}
+                    ]
+                  }
+                  value={value}
+                  selected={value == @registration_form["place_of_supply_scheme"]}
+                >
+                  {label}
+                </option>
+              </select>
+            </label>
+            <label :if={state?(@registration_form)} class="fieldset">
+              <span class="fieldset-legend">
+                {if @registration_form["country"] == "CA", do: "Province", else: "State"}
+              </span>
               <input
                 name="state"
                 value={@registration_form["state"]}
                 maxlength="2"
-                placeholder="US, CA only"
                 class="input input-sm w-24"
                 data-testid="tax-registration-state"
               />

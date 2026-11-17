@@ -75,6 +75,10 @@ defmodule ShopWeb.TaxSetupTest do
           "country_options" => %{"us" => %{"type" => "state_sales_tax", "state" => "CA"}}
         })
 
+      "POST", "/v1/tax/registrations", params ->
+        send(test, {:registered, params})
+        registration("taxreg_de")
+
       "POST", "/v1/tax/registrations/taxreg_1", params ->
         send(test, {:registration_ended, params})
         registration("taxreg_1", %{"expires_at" => 1_790_000_100, "status" => "expired"})
@@ -157,6 +161,7 @@ defmodule ShopWeb.TaxSetupTest do
 
   test "a US registration needs its state; with it, it is added; one is ended", %{conn: conn} do
     view = shown(conn)
+    view |> form("[data-testid=tax-registration-form]", %{country: "US"}) |> render_change()
 
     view
     |> form("[data-testid=tax-registration-form]", %{country: "US", type: "state_sales_tax"})
@@ -191,6 +196,47 @@ defmodule ShopWeb.TaxSetupTest do
              "[data-registration-id=taxreg_1] [data-testid=tax-registration-status]",
              "expired"
            )
+  end
+
+  test "the kinds offered follow the country, and the default EU standard one says its scheme",
+       %{conn: conn} do
+    view = shown(conn)
+    form = "[data-testid=tax-registration-form]"
+    kind = "[data-testid=tax-registration-type]"
+
+    assert has_element?(view, "#{kind} option[value=standard][selected]")
+    assert has_element?(view, "#{kind} option[value=oss_union]")
+    refute has_element?(view, "#{kind} option[value=state_sales_tax]")
+    refute has_element?(view, "[data-testid=tax-registration-state]")
+
+    view |> form(form) |> render_submit()
+
+    assert_received {:registered,
+                     %{
+                       "country" => "DE",
+                       "country_options" => %{
+                         "de" => %{
+                           "type" => "standard",
+                           "standard" => %{"place_of_supply_scheme" => "standard"}
+                         }
+                       }
+                     }}
+
+    view |> form(form, %{country: "us"}) |> render_change()
+    assert has_element?(view, "#{kind} option[value=state_sales_tax][selected]")
+    refute has_element?(view, "#{kind} option[value=oss_union]")
+    assert has_element?(view, "[data-testid=tax-registration-state]")
+    refute has_element?(view, "[data-testid=tax-registration-scheme]")
+
+    view |> form(form, %{country: "IS"}) |> render_change()
+    assert has_element?(view, "#{kind} option[value=standard][selected]")
+    refute has_element?(view, "[data-testid=tax-registration-state]")
+    refute has_element?(view, "[data-testid=tax-registration-scheme]")
+
+    view |> form(form, %{country: "CA"}) |> render_change()
+    refute has_element?(view, "[data-testid=tax-registration-state]")
+    view |> form(form, %{type: "province_standard"}) |> render_change()
+    assert has_element?(view, "[data-testid=tax-registration-state]")
   end
 
   test "the settings are saved: the head office and the default behavior", %{conn: conn} do

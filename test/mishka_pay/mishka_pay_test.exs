@@ -783,6 +783,14 @@ defmodule MishkaPayTest do
 
       assert {:error, %Errors.Invalid{errors: [%{field: :type}]}} =
                MishkaPay.create_tax_registration(%{provider: "acme", country: "DE"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :place_of_supply_scheme}]}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "acme",
+                 country: "DE",
+                 type: "standard",
+                 place_of_supply_scheme: "sometimes"
+               })
     end
 
     test "a line's tax rates are a list of ids" do

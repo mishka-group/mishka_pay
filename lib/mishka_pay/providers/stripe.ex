@@ -243,6 +243,8 @@ defmodule MishkaPay.Providers.Stripe do
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
+
+  @eu_countries ~w(AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK)
   @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
@@ -1335,6 +1337,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def create_tax_registration(%MishkaPay.TaxRegistration{} = registration, keys) do
     with :ok <- registration_state(registration),
+         :ok <- registration_scheme(registration),
          {:ok, answer} <-
            request(
              :post,
@@ -1395,6 +1398,15 @@ defmodule MishkaPay.Providers.Stripe do
   defp registration_state(%{country: "CA", type: "province_standard"}), do: :ok
   defp registration_state(%{state: nil}), do: :ok
   defp registration_state(_other), do: invalid(:state, Messages.text(:registration_state))
+
+  # A place of supply scheme goes only with a standard registration in an EU country.
+  defp registration_scheme(%{place_of_supply_scheme: nil}), do: :ok
+
+  defp registration_scheme(%{country: country, type: "standard"}) when country in @eu_countries,
+    do: :ok
+
+  defp registration_scheme(_other),
+    do: invalid(:place_of_supply_scheme, Messages.text(:registration_scheme))
 
   # Every tax rate a line or a bill names is a Stripe tax rate id.
   defp tax_rates(lines) do

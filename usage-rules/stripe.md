@@ -325,7 +325,10 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - A tax registration (`taxreg_...`) is `POST /v1/tax/registrations`: the `:type` and `:state`
   go under `country_options[<country>]` (Canada's provincial one as
   `province_standard[province]`); a US registration and Canada's `"province_standard"` need
-  `:state`, refused before any request without it, and any other registration refuses one. `expire_tax_registration/4` sets
+  `:state`, refused before any request without it, and any other registration refuses one.
+  Stripe needs a `"standard"` registration in an EU country to say its `:place_of_supply_scheme`
+  (`:small_seller` or `:standard`, sent as `standard[place_of_supply_scheme]`); one given with
+  another kind or outside the EU is `Errors.Invalid` before any request. `expire_tax_registration/4` sets
   `expires_at` (`now` unless `at:`); Stripe never deletes one. A second registration of the same
   kind in a country is `Errors.Rejected`.
 - `fetch_tax_settings/2` and `update_tax_settings/1` are `GET` and `POST /v1/tax/settings`:

@@ -1056,8 +1056,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp tax_rate_ids(_none), do: nil
 
   @doc """
-  Params of `POST /v1/tax/registrations`: the country, and its kind (and state or province)
-  under the country's own `country_options`; it starts now unless `:active_from` says when.
+  Params of `POST /v1/tax/registrations`: the country, and its kind (and state or province, or
+  an EU standard registration's place of supply scheme) under the country's own
+  `country_options`; it starts now unless `:active_from` says when.
   """
   @spec tax_registration_params(MishkaPay.TaxRegistration.t()) :: map()
   def tax_registration_params(%MishkaPay.TaxRegistration{} = registration) do
@@ -1079,9 +1080,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp registration_options(%{country: "US", type: type, state: state}),
     do: %{"type" => type, "state" => state}
 
+  defp registration_options(%{type: type, place_of_supply_scheme: scheme})
+       when not is_nil(scheme),
+       do: %{"type" => type, type => %{"place_of_supply_scheme" => Atom.to_string(scheme)}}
+
   defp registration_options(%{type: type}), do: %{"type" => type}
 
   @registration_statuses %{"active" => :active, "scheduled" => :scheduled, "expired" => :expired}
+  @supply_schemes %{"small_seller" => :small_seller, "standard" => :standard}
 
   @doc "A Stripe Tax Registration as a `MishkaPay.TaxRegistration`."
   @spec tax_registration(map()) ::
@@ -1097,6 +1103,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       country: country,
       type: type,
       state: options["state"] || get_in(options, [type || "", "province"]),
+      place_of_supply_scheme:
+        Map.get(@supply_schemes, get_in(options, [type || "", "place_of_supply_scheme"])),
       status: Map.get(@registration_statuses, registration["status"]),
       active_from: time(registration["active_from"]),
       expires_at: time(registration["expires_at"]),

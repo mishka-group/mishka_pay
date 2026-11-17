@@ -129,6 +129,7 @@ defmodule MishkaPay.Messages do
           | :tax_rates_line_only
           | :tax_rates_automatic
           | :registration_state
+          | :registration_scheme
           | :credit_line_needs
           | :phase_prices
           | :phase_length
@@ -745,6 +746,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "Tax rates go on the lines of a checkout or a bill, not on a catalog price or a payment link"
+      )
+
+  defp msgid(:registration_scheme),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A place of supply scheme goes only with a standard registration in an EU country"
       )
 
   defp msgid(:registration_state),
