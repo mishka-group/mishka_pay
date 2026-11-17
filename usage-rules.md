@@ -107,6 +107,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_invoice(provider, invoice_id, tenant)` | `%MishkaPay.Invoice{}` with its `:lines` |
 | `MishkaPay.create_invoice(attrs)` (`MishkaPay.InvoiceDraft`) | a draft `%MishkaPay.Invoice{}` for a customer, with its items |
 | `MishkaPay.finalize_invoice/3`, `send_invoice/3`, `pay_invoice(p, id, tenant, out_of_band: true)`, `void_invoice/3`, `mark_invoice_uncollectible/3`, `delete_invoice/3` | open, email, settle or end a one-off bill |
+| `MishkaPay.create_invoice_item(attrs)` (`MishkaPay.InvoiceItem`: `:customer_id`, `:price_id` or `:name` and `:amount`, `:quantity`, `:invoice_id`, `:reference`), `update_invoice_item/1`, `delete_invoice_item/3`, `list_invoice_items(p, tenant, customer_id: id, pending: true)` | `%MishkaPay.InvoiceItem{}`: a charge that waits for the customer's next bill (or goes on a draft one); the provider needs `:invoice_item` |
 | `MishkaPay.fetch_dispute/3`, `list_disputes/3`, `update_dispute(attrs)`, `accept_dispute/3` | `%MishkaPay.Dispute{}`: a chargeback, answered with evidence or accepted |
 | `MishkaPay.upload_file(%{provider:, tenant:, purpose: :dispute_evidence, filename:, content_type:, content:})` | `%MishkaPay.File{}`; its `:id` goes in a dispute's file evidence (`"receipt"`, `"uncategorized_file"`...) |
 | `MishkaPay.fetch_file(provider, file_id, tenant)`, `file_link(provider, file_id, tenant, expires_at: dt)` | the file read again; a `%MishkaPay.FileLink{}` whose `:url` a page can show |

@@ -55,7 +55,9 @@ defmodule MishkaPay do
       `:subscription_unpause`, `:subscription_list`, `:subscription_search`, `:invoices`,
       `:invoice`, `:invoice_upcoming`;
     * one-off bills: `:invoice_create`, `:invoice_finalize`, `:invoice_send`, `:invoice_pay`,
-      `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`;
+      `:invoice_void`, `:invoice_uncollectible`, `:invoice_delete`, and charges kept for a bill:
+      `:invoice_item_create`, `:invoice_item_update`, `:invoice_item_delete`,
+      `:invoice_item_list`;
     * customers: `:customer_create`, `:customer_update`, `:customer`, `:customer_list`,
       `:customer_search`, `:customer_delete`, `:portal`, and their tax ids: `:tax_id_create`, `:tax_id_list`,
       `:tax_id_delete`;
@@ -1115,6 +1117,87 @@ defmodule MishkaPay do
 
   defp invoice_call(operation, provider, tenant, call) when is_binary(provider),
     do: capable(:invoice, operation, provider, tenant, call)
+
+  @doc """
+  Adds a charge for a customer from `attrs` (see `MishkaPay.InvoiceItem`): a catalog
+  `:price_id`, or a `:name` and `:amount`, with a `:quantity`. Without `:invoice_id` it waits and
+  goes on the customer's next bill (a renewal or a one-off bill); with it, on that draft bill.
+
+      MishkaPay.create_invoice_item(%{provider: "stripe", tenant: site_id, customer_id: id,
+                                      name: "Setup fee", amount: %{amount: "49", currency: "USD"},
+                                      reference: "setup-" <> account.id})
+  """
+  @spec create_invoice_item(map()) ::
+          {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+  def create_invoice_item(attrs) when is_map(attrs) do
+    needed = [:provider, :customer_id]
+
+    made(
+      :invoice_item_create,
+      :invoice_item,
+      attrs,
+      MishkaPay.InvoiceItem,
+      needed,
+      :create_invoice_item
+    )
+  end
+
+  @doc """
+  Changes invoice item `attrs.id` at `attrs.provider`: only the fields given (`:name`,
+  `:amount`, `:quantity`, `:price_id`, the tax fields, `:metadata`). Its customer and bill stay:
+  `:customer_id` or `:invoice_id` here is refused.
+  """
+  @spec update_invoice_item(map()) ::
+          {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+  def update_invoice_item(%{} = attrs) do
+    case {field(attrs, :id), Enum.find([:customer_id, :invoice_id], &field(attrs, &1))} do
+      {nil, _moved} ->
+        MishkaPay.ProviderKit.invalid(:id, Messages.text(:customer_needs, field: :id))
+
+      {_id, nil} ->
+        made(
+          :invoice_item_update,
+          :invoice_item,
+          attrs,
+          MishkaPay.InvoiceItem,
+          [:provider],
+          :update_invoice_item
+        )
+
+      {_id, moved} ->
+        MishkaPay.ProviderKit.invalid(moved, Messages.text(:invoice_item_moves))
+    end
+  end
+
+  @doc "Removes invoice item `invoice_item_id`; one on a finalized bill cannot go."
+  @spec delete_invoice_item(String.t(), String.t(), term()) :: :ok | {:error, Splode.Error.t()}
+  def delete_invoice_item(provider, invoice_item_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(invoice_item_id) do
+    capable(
+      :invoice_item,
+      :invoice_item_delete,
+      provider,
+      tenant,
+      & &1.delete_invoice_item(invoice_item_id, &2)
+    )
+  end
+
+  @doc """
+  One page of invoice items at `provider`, newest first (`MishkaPay.Page` of
+  `MishkaPay.InvoiceItem`): `customer_id:` one customer's, `invoice_id:` those on one bill,
+  `pending: true` only those still waiting for a bill, plus `limit:` and `after:`.
+  """
+  @spec list_invoice_items(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_invoice_items(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :invoice_item,
+      :invoice_item_list,
+      provider,
+      tenant,
+      & &1.list_invoice_items(limited(opts), &2)
+    )
+  end
 
   @doc """
   One page of `provider`'s events for `tenant`, newest first (`MishkaPay.Page`), each a

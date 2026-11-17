@@ -628,6 +628,14 @@ defmodule MishkaPayTest do
                MishkaPay.fetch_subscription("checkout_only", "sub_1")
     end
 
+    test "a provider that bills without keeping charges between bills refuses invoice items" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :invoice_item}} =
+               MishkaPay.list_invoice_items("acme", "site-a", customer_id: "acme_cus_1")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.create_invoice_item(%{provider: "acme", customer_id: "acme_cus_1"})
+    end
+
     test "a provider with subscriptions but no list of them refuses a list and a search" do
       ref =
         :telemetry_test.attach_event_handlers(self(), [

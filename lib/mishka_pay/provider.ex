@@ -59,6 +59,8 @@ defmodule MishkaPay.Provider do
     * `:subscription_list`: `list_subscriptions/2`, `search_subscriptions/2`;
     * `:invoice`: `create_invoice/2`, `finalize_invoice/2`, `send_invoice/2`, `pay_invoice/3`,
       `void_invoice/2`, `mark_invoice_uncollectible/2`, `delete_invoice/2`;
+    * `:invoice_item`: `create_invoice_item/2`, `update_invoice_item/2`, `delete_invoice_item/2`,
+      `list_invoice_items/2`;
     * `:customer`: `create_customer/2`, `fetch_customer/2`, `update_customer/2`, `list_customers/2`,
       `search_customers/2`, `delete_customer/2`;
     * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
@@ -108,6 +110,7 @@ defmodule MishkaPay.Provider do
     :subscription_change,
     :subscription_list,
     :invoice,
+    :invoice_item,
     :customer,
     :tax_id,
     :tax,
@@ -147,6 +150,9 @@ defmodule MishkaPay.Provider do
       searches them by status, reference or metadata. A provider can run subscriptions without
       it: PayPal has no list of them.
     * `:invoice`: makes one-off bills for a customer, and opens, sends, settles or ends them.
+    * `:invoice_item`: keeps charges on their own (add, change, remove, list) that wait for a
+      customer's next bill, or go on a draft one. Apart from `:invoice`: a provider may bill
+      without keeping charges between bills (PayPal's invoices hold their items only inside one).
     * `:customer`: keeps buyers (create, read, update, list, delete).
     * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
     * `:tax`: counts the tax on a sale made outside its checkout, and records the sale for the
@@ -181,6 +187,7 @@ defmodule MishkaPay.Provider do
           | :subscription_change
           | :subscription_list
           | :invoice
+          | :invoice_item
           | :customer
           | :tax_id
           | :tax
@@ -290,6 +297,28 @@ defmodule MishkaPay.Provider do
   @doc "With `:invoice`. Deletes a draft bill."
   @callback delete_invoice(invoice_id :: String.t(), MishkaPay.Credentials.t()) ::
               :ok | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:invoice_item`. Adds a charge for `:customer_id`, on draft bill `:invoice_id` or waiting
+  for the next bill, and answers it with its `:id`.
+  """
+  @callback create_invoice_item(MishkaPay.InvoiceItem.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice_item`. Changes the fields set on the item whose `:id` it carries."
+  @callback update_invoice_item(MishkaPay.InvoiceItem.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:invoice_item`. Removes an item that is not on a finalized bill."
+  @callback delete_invoice_item(invoice_item_id :: String.t(), MishkaPay.Credentials.t()) ::
+              :ok | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:invoice_item`. One page of items, newest first; only those of `:customer_id`, on
+  `:invoice_id`, or waiting for a bill (`pending: true`) when given.
+  """
+  @callback list_invoice_items(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:event_list`. One page of the provider's events, newest first: `:since` (a `DateTime`)
@@ -691,6 +720,10 @@ defmodule MishkaPay.Provider do
                       void_invoice: 2,
                       mark_invoice_uncollectible: 2,
                       delete_invoice: 2,
+                      create_invoice_item: 2,
+                      update_invoice_item: 2,
+                      delete_invoice_item: 2,
+                      list_invoice_items: 2,
                       list_refunds: 2,
                       fetch_subscription: 2,
                       cancel_subscription: 3,
@@ -792,6 +825,12 @@ defmodule MishkaPay.Provider do
       void_invoice: 2,
       mark_invoice_uncollectible: 2,
       delete_invoice: 2
+    ],
+    invoice_item: [
+      create_invoice_item: 2,
+      update_invoice_item: 2,
+      delete_invoice_item: 2,
+      list_invoice_items: 2
     ],
     customer: [
       create_customer: 2,

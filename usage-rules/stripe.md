@@ -106,6 +106,17 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
   `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
 
+## Invoice items
+
+- An invoice item (`ii_...`) is `POST /v1/invoiceitems`, the same line `create_invoice/1` adds for
+  each item of a draft; without `:invoice_id` Stripe keeps it pending and puts it on the
+  customer's next invoice, a subscription's renewal too. Its `:reference` makes the idempotency
+  key and is kept in its metadata.
+- A change cannot move an item to another customer or bill, and an item on a finalized invoice
+  cannot change or be deleted (`Errors.Rejected`). A changed `:amount` is in the item's own
+  currency. `:amount` reads back as the price of one, `:total` as all of it.
+- `list_invoice_items/3` filters by `customer_id:`, `invoice_id:` and `pending: true`.
+
 ## Listing subscriptions
 
 - `list_subscriptions/3` is `GET /v1/subscriptions` (`customer`, `price`, `status`); without

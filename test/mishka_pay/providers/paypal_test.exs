@@ -167,6 +167,26 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal keeps no charges between bills: every invoice item call is refused before any request" do
+      for call <- [
+            fn ->
+              MishkaPay.create_invoice_item(%{
+                provider: "paypal",
+                customer_id: "C1",
+                price_id: "P1"
+              })
+            end,
+            fn -> MishkaPay.update_invoice_item(%{provider: "paypal", id: "I1", quantity: 2}) end,
+            fn -> MishkaPay.delete_invoice_item("paypal", "I1", "site-a") end,
+            fn -> MishkaPay.list_invoice_items("paypal", "site-a", pending: true) end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :invoice_item}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "a decline and a refusal keep PayPal's debug id and error page, never in their words" do
       PayPalStub.order("ORDER3", "APPROVED", declined: true)
 

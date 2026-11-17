@@ -8,6 +8,8 @@ defmodule ShopWeb.BillsComponent do
 
   Stripe sells as merchant of record only through checkouts and payment links: with merchant of
   record on, Stripe refuses a one-off bill, and the page says so.
+
+  Below it, `ShopWeb.InvoiceItemsComponent` keeps charges that wait for a customer's next bill.
   """
 
   use ShopWeb, :live_component
@@ -250,6 +252,13 @@ defmodule ShopWeb.BillsComponent do
           </ol>
         </div>
       </div>
+
+      <.live_component
+        module={ShopWeb.InvoiceItemsComponent}
+        id="invoice-items"
+        tenant={@tenant}
+        customers={@customers}
+      />
     </section>
     """
   end

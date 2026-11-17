@@ -55,6 +55,10 @@ defmodule MishkaPay.Providers.Stripe do
       (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
       (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
       An account without Stripe Tax turned on is refused with code `"tax_not_set_up"`.
+    * `create_invoice_item/2`, `update_invoice_item/2`, `delete_invoice_item/2` and
+      `list_invoice_items/2` keep Invoice Items (`ii_...`) on their own: a charge that waits for
+      the customer's next invoice, or goes on a draft one; the reference makes the idempotency
+      key and is kept in the item's metadata.
     * `refund/2` refunds a PaymentIntent, in full or in part, once or many times as the tenant
       allows (`MishkaPay.Refund`).
     * `upload_file/2` sends a file to `files.stripe.com` as `multipart/form-data`; dispute
@@ -120,6 +124,7 @@ defmodule MishkaPay.Providers.Stripe do
       :subscription_change,
       :subscription_list,
       :invoice,
+      :invoice_item,
       :customer,
       :tax_id,
       :tax,
@@ -141,6 +146,7 @@ defmodule MishkaPay.Providers.Stripe do
     Coupon,
     Customer,
     Errors,
+    InvoiceItem,
     Messages,
     Page,
     PaymentLink,
@@ -610,6 +616,59 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
          {:ok, _deleted} <- request(:delete, "/v1/invoices/#{invoice_id}", [], keys),
          do: :ok
+  end
+
+  # An item kept on its own; its reference makes the idempotency key, so a retry never charges
+  # twice.
+  @impl MishkaPay.Provider
+  def create_invoice_item(%InvoiceItem{} = item, keys) do
+    with :ok <- stripe_id(item.customer_id, "cus_", :customer_id),
+         :ok <- maybe_id(item.invoice_id, "in_", :invoice_id),
+         :ok <- item_fits(item),
+         {:ok, answer} <-
+           request(:post, "/v1/invoiceitems", Mapper.invoice_item_params(item), keys,
+             key: ProviderKit.idempotency_key("invoice-item-own", item.tenant, item.reference)
+           ) do
+      Mapper.invoice_item(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_invoice_item(%InvoiceItem{id: id} = item, keys) do
+    with :ok <- stripe_id(id, "ii_", :id),
+         :ok <- item_fits(item),
+         {:ok, answer} <-
+           request(:post, "/v1/invoiceitems/#{id}", Mapper.invoice_item_update_params(item), keys) do
+      Mapper.invoice_item(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def delete_invoice_item(invoice_item_id, keys) do
+    with :ok <- stripe_id(invoice_item_id, "ii_", :invoice_item_id),
+         {:ok, _deleted} <- request(:delete, "/v1/invoiceitems/#{invoice_item_id}", [], keys),
+         do: :ok
+  end
+
+  @impl MishkaPay.Provider
+  def list_invoice_items(opts, keys) do
+    with :ok <- maybe_id(opts[:customer_id], "cus_", :customer_id),
+         :ok <- maybe_id(opts[:invoice_id], "in_", :invoice_id) do
+      filters = [
+        customer: opts[:customer_id],
+        invoice: opts[:invoice_id],
+        pending: opts[:pending]
+      ]
+
+      page("/v1/invoiceitems", filters, opts, keys, &Mapper.invoice_item/1)
+    end
+  end
+
+  # A catalog price by its Stripe id, an amount in a currency Stripe counts, metadata it keeps.
+  defp item_fits(item) do
+    with :ok <- maybe_id(item.price_id, "price_", :price_id),
+         :ok <- currencies([item]),
+         do: metadata(item.metadata)
   end
 
   defp invoice_step(invoice_id, step, params, keys) do

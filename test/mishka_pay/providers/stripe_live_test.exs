@@ -647,6 +647,46 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, status: :all)
   end
 
+  test "a pending invoice item is added once per reference, changed, listed and removed",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "items-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    item = %{
+      provider: "stripe",
+      customer_id: customer,
+      name: "Setup fee #{run}",
+      amount: %{amount: "49.00", currency: "USD"},
+      quantity: 2,
+      reference: "setup-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.InvoiceItem{id: "ii_" <> _ = id, invoice_id: nil} = made} =
+             MishkaPay.create_invoice_item(item)
+
+    assert {made.amount, made.total, made.reference} ==
+             {Money.new(:USD, "49.00"), Money.new(:USD, "98.00"), "setup-#{run}"}
+
+    assert {:ok, %MishkaPay.InvoiceItem{id: ^id}} = MishkaPay.create_invoice_item(item)
+
+    assert {:ok, %MishkaPay.InvoiceItem{quantity: 3, total: total}} =
+             MishkaPay.update_invoice_item(%{provider: "stripe", id: id, quantity: 3})
+
+    assert total == Money.new(:USD, "147.00")
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.InvoiceItem{id: ^id}]}} =
+             MishkaPay.list_invoice_items("stripe", nil, customer_id: customer, pending: true)
+
+    assert :ok = MishkaPay.delete_invoice_item("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_invoice_items("stripe", nil, customer_id: customer, pending: true)
+  end
+
   defp delete_customer(id, keys) do
     with :ok <- Stripe.delete_customer(id, keys), do: {:ok, :deleted}
   end

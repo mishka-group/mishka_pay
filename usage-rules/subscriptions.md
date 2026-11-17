@@ -91,6 +91,13 @@ change = %{provider: "stripe", tenant: site.id, subscription_id: sub.id,
 - `MishkaPay.fetch_invoice(p, invoice_id, tenant)` reads one bill with its `:lines`; a credit line
   for unused time has a negative `:amount`.
 - Usage-based billing is not in Mishka Pay yet.
+- A one-off charge on the next renewal (a setup fee, an extra seat this month) is an invoice item:
+  `MishkaPay.create_invoice_item(%{provider: "stripe", tenant: site.id, customer_id: id,
+  name: "Setup fee", amount: money, reference: r})`. Without `:invoice_id` it waits for the
+  customer's next bill, a renewal included; `list_invoice_items/3` with `pending: true` shows what
+  waits, and `delete_invoice_item/3` takes one back before that bill is finalized. Its
+  `:reference` makes it charge once. The provider needs `:invoice_item` (Stripe has it, PayPal
+  not).
 
 ## Keep access right
 

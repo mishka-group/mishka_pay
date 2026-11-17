@@ -1080,6 +1080,134 @@ defmodule MishkaPay.Providers.StripeTest do
       assert :ok = MishkaPay.delete_invoice("stripe", "in_123", "site-a")
     end
 
+    test "invoice items are added, changed, listed and removed as Stripe's spec accepts" do
+      assert {:ok, %MishkaPay.InvoiceItem{id: "ii_" <> _, provider: "stripe"}} =
+               MishkaPay.create_invoice_item(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 name: "Setup fee",
+                 amount: %{amount: "49.00", currency: "USD"},
+                 quantity: 2,
+                 tax_behavior: :exclusive,
+                 reference: "setup-1",
+                 metadata: %{"team" => "ops"}
+               })
+
+      assert {:ok, %MishkaPay.InvoiceItem{}} =
+               MishkaPay.create_invoice_item(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 invoice_id: "in_123",
+                 price_id: "price_123"
+               })
+
+      assert {:ok, %MishkaPay.InvoiceItem{}} =
+               MishkaPay.update_invoice_item(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: "ii_123",
+                 name: "Setup fee, two hours",
+                 amount: %{amount: "60", currency: "USD"},
+                 quantity: 3
+               })
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.InvoiceItem{} | _]}} =
+               MishkaPay.list_invoice_items("stripe", "site-a",
+                 customer_id: "cus_123",
+                 pending: true,
+                 limit: 3
+               )
+
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_invoice_items("stripe", "site-a", invoice_id: "in_123")
+
+      assert :ok = MishkaPay.delete_invoice_item("stripe", "ii_123", "site-a")
+    end
+
+    test "an invoice item goes to Stripe as a draft's item does, keyed by its reference" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        key = Plug.Conn.get_req_header(conn, "idempotency-key")
+        send(test, {:stripe, conn.method, conn.request_path, URI.decode_query(body), key})
+        Req.Test.json(conn, %{"object" => "invoiceitem", "id" => "ii_1", "currency" => "usd"})
+      end)
+
+      item = %{
+        provider: "stripe",
+        tenant: "site-a",
+        customer_id: "cus_123",
+        name: "Late fee",
+        amount: %{amount: "12.50", currency: "EUR"},
+        tax_code: "txcd_20030000",
+        reference: "late-7"
+      }
+
+      {:ok, _item} = MishkaPay.create_invoice_item(item)
+      {:ok, _again} = MishkaPay.create_invoice_item(item)
+
+      assert_received {:stripe, "POST", "/v1/invoiceitems", params, [key]}
+
+      assert params == %{
+               "customer" => "cus_123",
+               "description" => "Late fee",
+               "currency" => "eur",
+               "unit_amount_decimal" => "1250",
+               "tax_code" => "txcd_20030000",
+               "metadata[mishka_pay_reference]" => "late-7"
+             }
+
+      assert_received {:stripe, "POST", "/v1/invoiceitems", _params, [^key]}
+
+      {:ok, _changed} =
+        MishkaPay.update_invoice_item(%{provider: "stripe", id: "ii_1", quantity: 4})
+
+      assert_received {:stripe, "POST", "/v1/invoiceitems/ii_1", %{"quantity" => "4"} = change,
+                       _key}
+
+      assert map_size(change) == 1
+    end
+
+    test "an invoice item that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      base = %{provider: "stripe", customer_id: "cus_123", price_id: "price_123"}
+
+      for {attrs, field} <- [
+            {Map.delete(base, :price_id), :amount},
+            {%{base | customer_id: "cs_1"}, :customer_id},
+            {Map.delete(base, :customer_id), :customer_id},
+            {%{base | price_id: "prod_1"}, :price_id},
+            {Map.put(base, :invoice_id, "sub_1"), :invoice_id},
+            {Map.merge(base, %{
+               price_id: nil,
+               name: "Fee",
+               amount: %{amount: "1.005", currency: "KWD"}
+             }), :amount}
+          ] do
+        assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.create_invoice_item(attrs)
+        assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
+      end
+
+      for {attrs, field} <- [
+            {%{provider: "stripe", id: "ii_1", customer_id: "cus_2"}, :customer_id},
+            {%{provider: "stripe", id: "ii_1", invoice_id: "in_2"}, :invoice_id},
+            {%{provider: "stripe", id: "in_1", quantity: 2}, :id},
+            {%{provider: "stripe", quantity: 2}, :id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} =
+                 MishkaPay.update_invoice_item(attrs)
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :invoice_item_id}]}} =
+               MishkaPay.delete_invoice_item("stripe", "ii_1/../../v1/charges")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.list_invoice_items("stripe", nil, customer_id: "in_1")
+    end
+
     test "a bill that cannot be right is refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
       line = %{name: "Setup", amount: %{amount: "10", currency: "USD"}}
@@ -2569,6 +2697,46 @@ defmodule MishkaPay.Providers.StripeTest do
                "type" => "customer.subscription.updated",
                "data" => %{"object" => %{"id" => "sub_9", "object" => "subscription"}}
              })
+  end
+
+  test "an invoice item maps with its price of one, its total, its bill and its reference" do
+    item = %{
+      "object" => "invoiceitem",
+      "id" => "ii_1",
+      "customer" => "cus_1",
+      "invoice" => nil,
+      "currency" => "usd",
+      "amount" => 9_800,
+      "quantity" => 2,
+      "description" => "Setup fee",
+      "date" => 1_794_000_000,
+      "period" => %{"start" => 1_794_000_000, "end" => 1_794_000_000},
+      "pricing" => %{
+        "type" => "price_details",
+        "price_details" => %{"price" => "price_1", "product" => "prod_1"},
+        "unit_amount_decimal" => "4900"
+      },
+      "metadata" => %{"mishka_pay_reference" => "setup-1", "team" => "ops"}
+    }
+
+    assert {:ok, %MishkaPay.InvoiceItem{} = mapped} = Stripe.Mapper.invoice_item(item)
+
+    assert {mapped.id, mapped.customer_id, mapped.invoice_id, mapped.price_id, mapped.name} ==
+             {"ii_1", "cus_1", nil, "price_1", "Setup fee"}
+
+    assert {mapped.amount, mapped.total, mapped.quantity} ==
+             {Money.new(:USD, "49.00"), Money.new(:USD, "98.00"), 2}
+
+    assert {mapped.reference, mapped.metadata} == {"setup-1", %{"team" => "ops"}}
+    assert mapped.created_at == DateTime.from_unix!(1_794_000_000)
+
+    assert {:ok, %MishkaPay.InvoiceItem{total: credit, amount: nil, invoice_id: "in_1"}} =
+             item
+             |> Map.merge(%{"amount" => -500, "invoice" => "in_1", "quantity" => 1})
+             |> put_in(["pricing", "unit_amount_decimal"], "-499.5")
+             |> Stripe.Mapper.invoice_item()
+
+    assert credit == Money.new(:USD, "-5.00")
   end
 
   test "a customer maps with its reference and card on file, and a deleted one is a rejection" do

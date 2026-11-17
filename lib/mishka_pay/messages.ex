@@ -112,6 +112,7 @@ defmodule MishkaPay.Messages do
           | :search_needs
           | :subscription_search_needs
           | :subscription_status
+          | :invoice_item_moves
           | :fields_three
           | :merchant_of_record_off
           | :portal_feature_off
@@ -640,6 +641,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:subscription_search_needs),
     do: dgettext_noop("mishka_pay", "Search needs a status, a reference or metadata")
+
+  defp msgid(:invoice_item_moves),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "An invoice item stays on its customer and bill: delete it and add a new one instead"
+      )
 
   defp msgid(:subscription_status),
     do: dgettext_noop("mishka_pay", "The status field must be one of: %{statuses}")

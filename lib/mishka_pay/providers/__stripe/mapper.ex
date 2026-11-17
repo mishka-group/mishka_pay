@@ -15,6 +15,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Customer,
     Event,
     Invoice,
+    InvoiceItem,
     Money,
     Payment,
     PaymentLink,
@@ -860,31 +861,101 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     end)
   end
 
-  @doc "Params of `POST /v1/invoiceitems` for one item of a draft, on `invoice_id`."
-  @spec invoice_item_params(Price.t(), String.t(), String.t()) :: map()
-  def invoice_item_params(%Price{id: id, quantity: quantity}, invoice_id, customer_id)
-      when is_binary(id) do
-    %{
-      "invoice" => invoice_id,
-      "customer" => customer_id,
-      "pricing" => %{"price" => id},
-      "quantity" => quantity
-    }
+  @doc """
+  Params of `POST /v1/invoiceitems` for one item of a draft, on `invoice_id`, or for one kept on
+  its own (`invoice_id` nil: it waits for the customer's next bill).
+  """
+  @spec invoice_item_params(Price.t(), String.t() | nil, String.t()) :: map()
+  def invoice_item_params(%Price{} = price, invoice_id, customer_id) do
+    price
+    |> charge_params()
+    |> Map.merge(%{"invoice" => invoice_id, "customer" => customer_id})
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  def invoice_item_params(%Price{} = price, invoice_id, customer_id) do
+  @doc """
+  Params of `POST /v1/invoiceitems` for a `MishkaPay.InvoiceItem` made on its own: the line a
+  draft's item sends (`invoice_item_params/3`), with the reference in its metadata.
+  """
+  @spec invoice_item_params(InvoiceItem.t()) :: map()
+  def invoice_item_params(%InvoiceItem{} = item) do
+    item
+    |> InvoiceItem.price()
+    |> invoice_item_params(item.invoice_id, item.customer_id)
+    |> Map.merge(item_metadata(item))
+  end
+
+  @doc """
+  Params of `POST /v1/invoiceitems/:id`: only what the change sets. Stripe keeps the item's
+  currency, so the amount is sent in its places without one.
+  """
+  @spec invoice_item_update_params(InvoiceItem.t()) :: map()
+  def invoice_item_update_params(%InvoiceItem{} = item) do
+    item
+    |> InvoiceItem.price()
+    |> charge_params()
+    |> Map.delete("currency")
+    |> Map.merge(item_metadata(item))
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  # What one line charges: a catalog price by id, or a name with the price of one.
+  defp charge_params(%Price{id: id, quantity: quantity}) when is_binary(id),
+    do: %{"pricing" => %{"price" => id}, "quantity" => quantity}
+
+  defp charge_params(%Price{amount: amount} = price) do
     %{
-      "invoice" => invoice_id,
-      "customer" => customer_id,
       "description" => price.name,
-      "currency" => price.amount.currency |> to_string() |> String.downcase(),
-      "unit_amount_decimal" => price.amount |> minor() |> Integer.to_string(),
+      "currency" => amount && amount.currency |> to_string() |> String.downcase(),
+      "unit_amount_decimal" => amount && amount |> minor() |> Integer.to_string(),
       "quantity" => price.quantity,
       "tax_code" => price.tax_code,
       "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
     }
-    |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
+
+  defp item_metadata(%InvoiceItem{metadata: nil, reference: nil}), do: %{}
+
+  defp item_metadata(%InvoiceItem{} = item) do
+    reference = (item.reference && %{@reference => item.reference}) || %{}
+    %{"metadata" => Map.merge(item.metadata || %{}, reference)}
+  end
+
+  @doc "A Stripe invoice item (`object: \"invoiceitem\"`) as a `MishkaPay.InvoiceItem`."
+  @spec invoice_item(map()) :: {:ok, InvoiceItem.t()} | {:error, Splode.Error.t()}
+  def invoice_item(item) do
+    currency = item["currency"]
+
+    %{
+      provider: "stripe",
+      id: item["id"],
+      customer_id: id_of(item["customer"]),
+      invoice_id: id_of(item["invoice"]),
+      price_id: id_of(get_in(item, ["pricing", "price_details", "price"])),
+      name: blank(item["description"]),
+      amount: unit_money(get_in(item, ["pricing", "unit_amount_decimal"]), currency),
+      quantity: item["quantity"],
+      total: signed_money(item["amount"], currency),
+      period_start: time(get_in(item, ["period", "start"])),
+      period_end: time(get_in(item, ["period", "end"])),
+      reference: get_in(item, ["metadata", @reference]),
+      metadata: Map.delete(item["metadata"] || %{}, @reference),
+      created_at: time(item["date"])
+    }
+    |> InvoiceItem.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # Stripe gives the price of one as a decimal string of its smallest units; a fraction of one
+  # unit is not kept.
+  defp unit_money(decimal, currency) when is_binary(decimal) do
+    case Integer.parse(decimal) do
+      {minor, ""} -> signed_money(minor, currency)
+      _fraction -> nil
+    end
+  end
+
+  defp unit_money(_none, _currency), do: nil
 
   # Stripe sums an invoice's taxes in `total_taxes`.
   defp tax_of(%{"total_taxes" => taxes}) when is_list(taxes),
