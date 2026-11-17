@@ -6062,7 +6062,7 @@ defmodule MishkaPay.Providers.StripeTest do
   end
 
   test "every thin API v2 event Mishka Pay maps names the connected account it is about" do
-    for {type, [:account]} <- Stripe.thin_events() do
+    for {"v2." <> _ = type, [:account]} <- Stripe.thin_events() do
       assert {:ok,
               %MishkaPay.Event{
                 id: "evt_test_1",

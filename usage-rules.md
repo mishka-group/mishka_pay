@@ -80,7 +80,11 @@ and payment link of this site with Stripe Tax; a checkout's own choice wins), `b
 `:included`) for the site's new subscriptions (a checkout's or a schedule's own wins), `account_id` (the
 connected account the site acts for on a Stripe Connect platform: `acct_...`, sent as
 `Stripe-Account` on every request; see `usage-rules/stripe.md`), `connect_api` (`:v2` default,
-Stripe's Accounts v2 for connected accounts, or `:v1`; a call's `api:` wins), `extra` (a map). Answer `nil` for a tenant without keys.
+Stripe's Accounts v2 for connected accounts, or `:v1`; a call's `api:` wins), `events` (`:thin`
+default, Stripe's thin events, or `:snapshot`: the kind the site's webhook endpoint is set up for
+and `list_events/3`, `replay_events/3` read; a call's `events:` wins), `webhook_api` (`:v2`
+default, a Stripe event destination, or `:v1`, `/v1/webhook_endpoints`, snapshot only; see
+`usage-rules/webhooks.md`), `extra` (a map). Answer `nil` for a tenant without keys.
 
 Mount the webhook endpoint **before** `Plug.Parsers` in the endpoint (it needs the raw body):
 
@@ -140,7 +144,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_tax_registration(attrs)` (`MishkaPay.TaxRegistration`: `:country`, `:type`, `:state`, `:place_of_supply_scheme`, `:active_from`, `:expires_at`), `list_tax_registrations(p, tenant, status: :all)`, `expire_tax_registration(p, id, tenant, at: dt)` | `%MishkaPay.TaxRegistration{}`: where the seller collects tax; the provider needs `:tax_setup` |
 | `MishkaPay.fetch_tax_settings(provider, tenant)`, `update_tax_settings(%{provider:, tenant:, head_office: address, tax_code:, tax_behavior:})` | `%MishkaPay.TaxSettings{}`: the head office and tax defaults, with `:status` and `:missing_fields` |
 | `MishkaPay.create_shipping_rate(attrs)`, `list_shipping_rates(provider, tenant, active: true)` | `%MishkaPay.ShippingRate{}`: a way to ship and its price, offered by id on checkouts |
-| `MishkaPay.list_events(provider, tenant, since: dt, types: [...])` | a `MishkaPay.Page` of `%MishkaPay.Event{}` |
+| `MishkaPay.list_events(provider, tenant, since: dt, types: [...], events: :thin)` | a `MishkaPay.Page` of `%MishkaPay.Event{}`; Stripe: thin events from `/v2/core/events` (the default) or `events: :snapshot` from `/v1/events` |
 | `MishkaPay.request(%{provider:, tenant:, method: :get, path: "/v1/...", params:, reference:, options: %{api_version:, expand: [...]}})` (`MishkaPay.RawRequest`) | `{:ok, map}`: the provider's own answer, for what has no typed call yet; the provider needs `:raw_request` |
 | `MishkaPay.replay_events(provider, tenant, since: dt)` | `%{delivered: n, failed: [{id, reason}]}`: missed events handed to the listeners again |
 | `MishkaPay.Check.run(tenant: t, webhook_url: url, domain: MyApp.Pay)` | `[{check, :ok \| {:error, reason}}]`: the site's setup |

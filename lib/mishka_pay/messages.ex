@@ -153,6 +153,7 @@ defmodule MishkaPay.Messages do
           | :intent_of_invoice
           | :intent_of_checkout
           | :endpoint_url
+          | :thin_needs_v2
           | :dropdown_options
           | :declined
           | :declined_reason
@@ -733,6 +734,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The webhook address must be an https URL, such as https://shop.example/pay/webhooks/stripe"
+      )
+
+  defp msgid(:thin_needs_v2),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Thin events come only through an event destination: use the v2 webhook API, or snapshot events"
       )
 
   defp msgid(:subscription_of_another),

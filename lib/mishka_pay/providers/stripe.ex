@@ -167,7 +167,12 @@ defmodule MishkaPay.Providers.Stripe do
       `webhook_secrets` while a rolled secret runs out, compared in constant time with every
       `v1` signature in it, signed within the last five minutes
       (`config :mishka_pay, MishkaPay.Providers.Stripe, webhook_tolerance: seconds`), and from the
-      same mode (live or test) as the tenant's keys.
+      same mode (live or test) as the tenant's keys. It takes snapshot and thin events alike; a
+      thin one becomes the Event its snapshot event gives (`thin_events/0`), reading its object
+      when an id it needs sits inside it.
+    * `list_events/2` reads the tenant's kind of events (`:events`, a call's `events:` first):
+      thin ones from API v2's `/v2/core/events`, snapshot ones from `/v1/events`.
+      `MishkaPay.Providers.Stripe.WebhookEndpoint` sets up the endpoint for either kind.
 
   A tenant whose keys name a connected account (`:account_id`, `acct_...`) acts as that account:
   every request carries it in the `Stripe-Account` header (`Stripe-Context` on an API v2 path),
@@ -264,7 +269,7 @@ defmodule MishkaPay.Providers.Stripe do
     SubscriptionSchedule
   }
 
-  alias MishkaPay.Helpers.TokenCache
+  alias MishkaPay.Helpers.{Choice, TokenCache}
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -406,7 +411,7 @@ defmodule MishkaPay.Providers.Stripe do
   @spec handled_events() :: %{String.t() => [atom()]}
   def handled_events, do: @handled
 
-  @thin %{
+  @thin_accounts %{
     "v2.core.account.created" => [:account],
     "v2.core.account.updated" => [:account],
     "v2.core.account.closed" => [:account],
@@ -422,14 +427,87 @@ defmodule MishkaPay.Providers.Stripe do
     "v2.core.account[configuration.customer].capability_status_updated" => [:account]
   }
 
+  # Thin events with no snapshot event of their name: what changed, said more exactly, about an
+  # object Mishka Pay already keeps; and the usage reports Stripe refused after answering.
+  @thin_only %{
+    "v1.customer.subscription.active" => [:subscription],
+    "v1.customer.subscription.past_due" => [:subscription],
+    "v1.customer.subscription.unpaid" => [:subscription],
+    "v1.customer.subscription.trialing" => [:subscription],
+    "v1.customer.subscription.incomplete" => [:subscription],
+    "v1.customer.subscription.incomplete_expired" => [:subscription],
+    "v1.customer.subscription.cancel_at_changed" => [:subscription],
+    "v1.customer.subscription.default_payment_method_changed" => [:subscription],
+    "v1.customer.subscription.item_added" => [:subscription],
+    "v1.customer.subscription.item_removed" => [:subscription],
+    "v1.customer.subscription.item_price_changed" => [:subscription],
+    "v1.customer.subscription.item_quantity_changed" => [:subscription],
+    "v1.customer.subscription.item_tax_rates_changed" => [:subscription],
+    "v1.invoice.payment_succeeded" => [:subscription, :invoice],
+    "v1.invoice.payment_attempt_required" => [:subscription, :invoice],
+    "v1.invoice.finalization_failed" => [:subscription, :invoice],
+    "v1.invoice.will_be_due" => [:subscription, :invoice],
+    "v1.invoice.overpaid" => [:subscription, :invoice],
+    "v1.invoice.discount_added" => [:invoice],
+    "v1.invoice.discount_removed" => [:invoice],
+    "v1.invoice.line_item_added" => [:invoice],
+    "v1.invoice.line_item_removed" => [:invoice],
+    "v1.invoice.line_item_pricing_changed" => [:invoice],
+    "v1.invoice.line_item_quantity_changed" => [:invoice],
+    "v1.subscription_schedule.phase_added" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_removed" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_end_date_changed" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_trial_end_changed" => [:subscription_schedule, :subscription],
+    "v1.subscription_schedule.phase_default_tax_rates_changed" => [
+      :subscription_schedule,
+      :subscription
+    ],
+    "v1.product.activated" => [:product],
+    "v1.product.deactivated" => [:product],
+    "v1.product.default_price_changed" => [:product],
+    "v1.product.tax_code_changed" => [:product],
+    "v1.price.activated" => [:price],
+    "v1.price.deactivated" => [:price],
+    "v1.price.lookup_key_changed" => [:price],
+    "v1.price.tax_behavior_changed" => [:price],
+    "v1.promotion_code.fully_redeemed" => [:promotion_code],
+    "v1.entitlements.active_entitlement_summary.entitlement_added" => [:customer],
+    "v1.entitlements.active_entitlement_summary.entitlement_removed" => [:customer],
+    "v1.billing.meter.error_report_triggered" => [:meter],
+    "v1.billing.meter.no_meter_found" => [:meter]
+  }
+
+  @thin @handled
+        |> Map.new(fn {type, updates} -> {"v1." <> type, updates} end)
+        |> Map.merge(@thin_only)
+        |> Map.merge(@thin_accounts)
+
   @doc """
-  The thin events Mishka Pay maps, each with what it is about: API v2's connected account events
-  (`v2.core.account.*`), which Stripe sends only to an event destination with the thin payload,
-  never to a `/v1/webhook_endpoints` endpoint. Point that destination at the platform's webhook
-  URL and add its signing secret to the tenant's `:webhook_secrets`: `verify_webhook/3` checks
-  it as it checks any message, and each answers an Event whose `:object_id` and `:account` are
-  the account (read it with `MishkaPay.fetch_connected_account/4`). Stripe sends no state in
-  them; the read is the truth.
+  The thin events Mishka Pay maps, each with what it updates (the words of `handled_events/0`),
+  as an event destination with the thin payload sends them (the default of
+  `MishkaPay.Providers.Stripe.WebhookEndpoint`); Stripe never sends one to a
+  `/v1/webhook_endpoints` endpoint:
+
+    * `v1.<type>` for each of `handled_events/0`, the thin form of the same event;
+    * thin events with no snapshot event of their name, about what Mishka Pay keeps: a
+      subscription that turned `active`, `past_due`, `unpaid`, `trialing` or `incomplete`, or
+      whose items, cancel date or payment method changed; an invoice paid, due, overpaid, or
+      whose lines or discounts changed; a schedule's phases; a product's or a price's activation,
+      tax code, lookup key or default price; a promotion code used up; an entitlement added or
+      removed;
+    * `v1.billing.meter.error_report_triggered` and `v1.billing.meter.no_meter_found`
+      (`:meter`): usage reports Stripe refused after answering (a streamed report). The event's
+      `:object_id` is the meter (`mtr_...`) when Stripe found one; the counts and samples are in
+      the full event, `GET /v2/core/events/:id` (`MishkaPay.request/1`);
+    * API v2's connected account events (`v2.core.account.*`, `:account`): `:object_id` and
+      `:account` are the account (read it with `MishkaPay.fetch_connected_account/4`).
+
+  A thin event names its object and no more. `verify_webhook/3` turns one into the same
+  `MishkaPay.Event` a snapshot event gives: an id that sits inside the object (the payment of a
+  charge, the subscription of an invoice, the customer of a tax id) is read from the object, one
+  request as the event's account; an event whose object is itself the id it names (a
+  PaymentIntent, a subscription, a customer, a product) needs none. Its `:type` stays Stripe's
+  (`v1.invoice.paid`).
   """
   @spec thin_events() :: %{String.t() => [atom()]}
   def thin_events, do: @thin
@@ -2757,7 +2835,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   # One page of an API v2 list, each item mapped; the cursor of the next page is the query of
   # Stripe's `next_page_url`, which a later page sends back as it is.
-  defp v2_page(path, filters, opts, keys, map) do
+  @doc false
+  def v2_page(path, filters, opts, keys, map) do
     params = v2_page_params(opts[:after], filters, opts[:limit])
 
     with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
@@ -2808,19 +2887,63 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Stripe keeps events for 30 days and filters them by type, up to 20 types a call.
   @impl MishkaPay.Provider
+  # The tenant's kind of events (`:events`, a call's own `events:` first) picks the event API: thin
+  # events are API v2's `/v2/core/events`, each turned into an Event as a webhook's is; snapshot
+  # events are `/v1/events`.
   def list_events(opts, keys) do
     types = List.wrap(opts[:types])
 
-    case Enum.drop(types, 20) != [] do
+    with :ok <- event_types(types),
+         {:ok, kind} <- events_kind(opts[:events], keys) do
+      events_page(kind, types, opts, keys)
+    end
+  end
+
+  defp event_types(types) do
+    case Enum.drop(types, 20) do
+      [] -> :ok
+      _over -> invalid(:types, Messages.text(:stripe_event_types))
+    end
+  end
+
+  defp events_page(:thin, types, opts, keys) do
+    filters = %{
+      "types" => types,
+      "created" => opts[:since] && %{"gte" => DateTime.to_iso8601(opts[:since])}
+    }
+
+    v2_page("/v2/core/events", filters, opts, keys, &listed_event(&1, keys))
+  end
+
+  defp events_page(:snapshot, types, opts, keys) do
+    filters =
+      [{:"created[gte]", opts[:since] && DateTime.to_unix(opts[:since])}] ++
+        Enum.map(types, &{:"types[]", &1})
+
+    page("/v1/events", filters, opts, keys, &Mapper.event/1)
+  end
+
+  defp listed_event(event, keys) do
+    with {:ok, mapped} <- Mapper.event(event), do: in_full(event, mapped, keys)
+  end
+
+  # A call's own kind of events, else the tenant's `:events`, else thin.
+  @doc false
+  def events_kind(kind, keys),
+    do: option(kind || Map.get(keys, :events) || :thin, :events, [:thin, :snapshot])
+
+  # One of `choices`, given as the atom or its string; anything else is `Errors.Invalid` on
+  # `field`, naming them.
+  @doc false
+  def option(value, field, choices) do
+    {:ok, _field, chosen} = Choice.atom(field, value, Enum.map(choices, &Atom.to_string/1))
+
+    case chosen in choices do
       true ->
-        invalid(:types, Messages.text(:stripe_event_types))
+        {:ok, chosen}
 
       false ->
-        filters =
-          [{:"created[gte]", opts[:since] && DateTime.to_unix(opts[:since])}] ++
-            Enum.map(types, &{:"types[]", &1})
-
-        page("/v1/events", filters, opts, keys, &Mapper.event/1)
+        invalid(field, Messages.text(:choices, field: field, choices: Enum.join(choices, ", ")))
     end
   end
 
@@ -2835,9 +2958,52 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- same_mode(event, keys),
          {:ok, mapped} <- Mapper.event(event),
          :ok <- same_account(mapped, keys) do
-      {:ok, mapped}
+      in_full(event, mapped, keys)
     end
   end
+
+  # The related objects whose Event ids sit inside them (a charge's payment, an invoice's
+  # subscription, a tax id's customer); a thin event about any other names its id itself.
+  @read_through ~w(checkout.session charge refund dispute invoice invoice_payment subscription_schedule tax_id payment_method setup_intent radar.early_fraud_warning review entitlements.active_entitlement_summary)
+
+  # A thin event Mishka Pay maps, of a v1 resource, becomes the Event its snapshot event gives,
+  # its account's objects read as that account; any other event is already whole, and one Mishka
+  # Pay does not act on costs no request. Called only after the event is known to be this tenant's.
+  defp in_full(%{"object" => "v2.core.event", "type" => "v1." <> _ = type} = thin, mapped, keys)
+       when is_map_key(@thin, type) do
+    with {:ok, object, before} <- thin_parts(thin, as_account(keys, mapped.account)),
+         do: Mapper.thin_event(thin, object, before)
+  end
+
+  defp in_full(_whole, mapped, _keys), do: {:ok, mapped}
+
+  defp as_account(keys, nil), do: keys
+  defp as_account(keys, account), do: Map.put(keys, :account_id, account)
+
+  # A detached payment method no longer names its customer: the full event's `changes` hold the
+  # one it had (an event read from a list carries them already).
+  defp thin_parts(%{"type" => "v1.payment_method.detached", "changes" => %{} = changes}, _keys),
+    do: {:ok, nil, changes["before"]}
+
+  defp thin_parts(%{"type" => "v1.payment_method.detached", "id" => id}, keys) do
+    with :ok <- stripe_id(id, "evt_", :event_id),
+         {:ok, full} <- request(:get, "/v2/core/events/#{id}", [], keys),
+         do: thin_parts(Map.put(full, "changes", full["changes"] || %{}), keys)
+  end
+
+  # An object gone since (a deleted invoice) is named by its id alone.
+  defp thin_parts(%{"related_object" => %{"type" => type, "url" => "/v1/" <> _ = url}}, keys)
+       when type in @read_through do
+    %URI{path: path, query: query} = URI.parse(url)
+
+    case request(:get, path, URI.decode_query(query || ""), keys) do
+      {:ok, object} -> {:ok, object, nil}
+      {:error, %Errors.Rejected{code: "resource_missing"}} -> {:ok, nil, nil}
+      error -> error
+    end
+  end
+
+  defp thin_parts(_named_by_id, _keys), do: {:ok, nil, nil}
 
   @doc """
   Stripe's signature of `payload` at `timestamp` (Unix seconds) with webhook `secret`: the `v1`
@@ -3208,7 +3374,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   # A Stripe id is its object's prefix, then letters, digits and underscores; anything else never
   # reaches a path, and an id of another kind (a checkout id read as a payment) is refused here.
-  defp stripe_id(id, prefix, field) do
+  @doc false
+  def stripe_id(id, prefix, field) do
     case is_binary(id) and String.starts_with?(id, prefix) and
            Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id) do
       true ->

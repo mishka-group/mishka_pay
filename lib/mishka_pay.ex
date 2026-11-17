@@ -2074,7 +2074,10 @@ defmodule MishkaPay do
   @doc """
   One page of `provider`'s events for `tenant`, newest first (`MishkaPay.Page`), each a
   `MishkaPay.Event`: `since:` a `DateTime`, `types:` a list of event types, plus `limit:` and
-  `after:`.
+  `after:`. At a provider with two kinds of events, `events:` (`:thin` or `:snapshot`, else the
+  tenant's `:events`) picks which are read: Stripe's thin events come from API v2
+  (`/v2/core/events`, 20 a page, named `v1.invoice.paid`), each the same Event its webhook gives;
+  snapshot events from `/v1/events`.
   """
   @spec list_events(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -2089,7 +2092,8 @@ defmodule MishkaPay do
   delivered, when the provider says which: the window is read once, a hundred events a request,
   and the others are left out. `types:` names the events to deliver instead, and asks the
   provider for only those (Stripe takes 20 types a request). A listener keeps each event once, so
-  one already taken is not done twice.
+  one already taken is not done twice. `events:` reads the thin or the snapshot events, as in
+  `list_events/3`: replay the kind the site's webhook takes, so the ids match those it kept.
 
   Answers how many were delivered and which failed, by event id.
   """
@@ -2110,10 +2114,13 @@ defmodule MishkaPay do
     end
   end
 
+  # The snapshot events the provider acts on, and their thin forms when it has those.
   defp handled(module) do
-    case function_exported?(module, :handled_events, 0) do
-      true -> module.handled_events()
-      false -> nil
+    case {function_exported?(module, :handled_events, 0),
+          function_exported?(module, :thin_events, 0)} do
+      {true, true} -> Map.merge(module.handled_events(), module.thin_events())
+      {true, false} -> module.handled_events()
+      {false, _thin} -> nil
     end
   end
 

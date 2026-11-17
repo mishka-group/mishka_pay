@@ -13,32 +13,45 @@ defmodule Mix.Tasks.MishkaPay.Stripe.WebhookEndpoint do
 
       mix mishka_pay.stripe.webhook_endpoint --url https://shop.test/pay/webhooks/stripe/site-42 --tenant site-42
       mix mishka_pay.stripe.webhook_endpoint --url https://shop.test/pay/webhooks/stripe --check
+      mix mishka_pay.stripe.webhook_endpoint --url https://shop.test/pay/webhooks/stripe --events snapshot --api v1
 
-  A new endpoint's signing secret is shown once: keep it as the site's `webhook_secret`.
+  Options beside `--url`, `--tenant` and `--check`: `--events thin|snapshot` (the tenant's
+  `:events` by default, thin), `--api v2|v1` (the tenant's `:webhook_api`, v2: an event
+  destination) and `--connected-accounts` (a platform's endpoint takes its connected accounts'
+  events too). A new endpoint's signing secret is shown once: keep it as the site's
+  `webhook_secret`.
   """
 
   use Mix.Task
 
   alias MishkaPay.Providers.Stripe.WebhookEndpoint
 
-  @switches [url: :string, tenant: :string, check: :boolean]
+  @switches [
+    url: :string,
+    tenant: :string,
+    check: :boolean,
+    events: :string,
+    api: :string,
+    connected_accounts: :boolean
+  ]
 
   @impl Mix.Task
   def run(args) do
     {opts, _rest} = OptionParser.parse!(args, strict: @switches)
     url = opts[:url] || Mix.raise("--url is required: the site's webhook address")
+    endpoint_opts = Keyword.take(opts, [:events, :api, :connected_accounts])
     Mix.Task.run("app.start")
 
     case opts[:check] do
-      true -> check(opts[:tenant], url)
-      _set -> ensure(opts[:tenant], url)
+      true -> check(opts[:tenant], url, endpoint_opts)
+      _set -> ensure(opts[:tenant], url, endpoint_opts)
     end
   end
 
-  defp check(tenant, url) do
-    case WebhookEndpoint.check(tenant, url) do
+  defp check(tenant, url, opts) do
+    case WebhookEndpoint.check(tenant, url, opts) do
       {:ok, %{endpoint: nil}} ->
-        Mix.raise("Stripe has no webhook endpoint at #{url}")
+        Mix.raise("Stripe has no webhook endpoint of that kind at #{url}")
 
       {:ok, %{missing: []}} ->
         Mix.shell().info("#{url} sends every event Mishka Pay acts on")
@@ -51,11 +64,11 @@ defmodule Mix.Tasks.MishkaPay.Stripe.WebhookEndpoint do
     end
   end
 
-  defp ensure(tenant, url) do
-    case WebhookEndpoint.ensure(tenant, url) do
+  defp ensure(tenant, url, opts) do
+    case WebhookEndpoint.ensure(tenant, url, opts) do
       {:ok, %{secret: "whsec_" <> _ = secret} = endpoint} ->
         Mix.shell().info("""
-        made #{endpoint.id} at #{url}
+        made #{endpoint.id} (#{endpoint.events} events) at #{url}
         signing secret (shown once, keep it as the site's webhook_secret): #{secret}
         """)
 
