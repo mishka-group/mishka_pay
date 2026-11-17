@@ -1894,5 +1894,148 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
   end
 
+  test "a tax rate is made once, put on a checkout's line and a pending charge, and archived; a registration is added and ended; the settings are read and set as they were",
+       %{key: key} do
+    run = run_id()
+
+    rate = %{
+      provider: "stripe",
+      display_name: "Live VAT",
+      percentage: "19",
+      inclusive: false,
+      country: "DE",
+      jurisdiction: "DE",
+      tax_type: "vat",
+      reference: "rate-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.TaxRate{id: "txr_" <> _ = id, active: true, inclusive: false} = made} =
+             MishkaPay.create_tax_rate(rate)
+
+    on_exit(fn ->
+      cleanup(
+        key,
+        &Stripe.update_tax_rate(%MishkaPay.TaxRate{provider: "stripe", id: id, active: false}, &1)
+      )
+    end)
+
+    assert Decimal.equal?(made.percentage, 19)
+
+    assert {:ok, %MishkaPay.TaxRate{id: ^id, reference: "rate-" <> _}} =
+             MishkaPay.create_tax_rate(rate)
+
+    assert {:ok, %MishkaPay.TaxRate{id: ^id, description: "Made by a live test"}} =
+             MishkaPay.update_tax_rate(%{
+               provider: "stripe",
+               id: id,
+               description: "Made by a live test"
+             })
+
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [
+                 %{name: "Ebook", amount: %{amount: "10", currency: "EUR"}, tax_rate_ids: [id]}
+               ],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false,
+               automatic_tax: false,
+               reference: "rated-#{run}"
+             })
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "rated-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    assert {:ok, %MishkaPay.InvoiceItem{tax_rate_ids: [^id]}} =
+             MishkaPay.create_invoice_item(%{
+               provider: "stripe",
+               customer_id: customer,
+               name: "Setup",
+               amount: %{amount: "20", currency: "EUR"},
+               tax_rate_ids: [id]
+             })
+
+    assert {:ok, %MishkaPay.TaxRate{id: ^id, active: false}} =
+             MishkaPay.update_tax_rate(%{provider: "stripe", id: id, active: false})
+
+    assert {:ok, %MishkaPay.Page{items: archived}} =
+             MishkaPay.list_tax_rates("stripe", nil, active: false, limit: 100)
+
+    assert Enum.any?(archived, &(&1.id == id))
+
+    # Stripe takes one registration in a country at a time and ends one only after it started, so
+    # this run's starts when an earlier run's ends (now, when none still runs) and ends a minute
+    # after it starts, always ahead of the request that sets it.
+    starts = earlier_end("IS")
+
+    assert {:ok,
+            %MishkaPay.TaxRegistration{
+              id: "taxreg_" <> _ = registration,
+              status: status,
+              active_from: %DateTime{} = from
+            }} =
+             MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "IS",
+               type: "standard",
+               active_from: starts
+             })
+
+    assert status == ((starts && :scheduled) || :active)
+    on_exit(fn -> cleanup(key, &end_registration(registration, &1)) end)
+    ends = from |> DateTime.add(60) |> DateTime.truncate(:second)
+
+    assert {:ok,
+            %MishkaPay.TaxRegistration{
+              id: ^registration,
+              country: "IS",
+              type: "standard",
+              expires_at: ^ends
+            }} = MishkaPay.expire_tax_registration("stripe", registration, nil, at: ends)
+
+    assert {:ok, %MishkaPay.Page{items: registrations}} =
+             MishkaPay.list_tax_registrations("stripe", nil, status: :all, limit: 100)
+
+    assert Enum.any?(registrations, &(&1.id == registration))
+
+    assert {:ok, %MishkaPay.TaxSettings{status: status} = settings} =
+             MishkaPay.fetch_tax_settings("stripe")
+
+    assert status in [:active, :pending]
+
+    assert {:ok, %MishkaPay.TaxSettings{status: ^status}} =
+             MishkaPay.update_tax_settings(%{
+               provider: "stripe",
+               tax_code: settings.tax_code,
+               tax_behavior: settings.tax_behavior
+             })
+  end
+
+  # When the last registration an earlier run left in `country` ends, if it still runs or waits.
+  defp earlier_end(country) do
+    {:ok, %MishkaPay.Page{items: registrations}} =
+      MishkaPay.list_tax_registrations("stripe", nil, status: :all, limit: 100)
+
+    registrations
+    |> Enum.filter(&(&1.country == country and &1.status in [:active, :scheduled]))
+    |> Enum.map(& &1.expires_at)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  # A registration the test left without an end is ended now; one with its end set keeps it.
+  defp end_registration(registration, keys) do
+    with {:ok, %MishkaPay.Page{items: active}} <-
+           Stripe.list_tax_registrations([status: :active, limit: 100], keys) do
+      case Enum.find(active, &(&1.id == registration)) do
+        %{expires_at: nil} -> Stripe.expire_tax_registration(registration, nil, keys)
+        _ended_or_ending -> {:ok, :ending}
+      end
+    end
+  end
+
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

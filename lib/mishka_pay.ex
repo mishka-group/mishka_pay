@@ -68,7 +68,10 @@ defmodule MishkaPay do
       `:tax_id_delete`;
     * saved payment methods: `:payment_method_list`, `:payment_method`,
       `:payment_method_detach`, `:payment_method_default`;
-    * tax outside a checkout: `:tax_calculate`, `:tax_record`;
+    * tax outside a checkout: `:tax_calculate`, `:tax_record`; tax rates set by hand:
+      `:tax_rate_create`, `:tax_rate`, `:tax_rate_update`, `:tax_rate_list`; the tax setup:
+      `:tax_registration_create`, `:tax_registration_list`, `:tax_registration_expire`,
+      `:tax_settings`, `:tax_settings_update`;
     * shipping: `:shipping_rate_create`, `:shipping_rate_list`;
     * discounts: `:coupon_create`, `:coupon`, `:coupon_list`, `:coupon_delete`,
       `:promotion_code_create`, `:promotion_code`, `:promotion_code_list`,
@@ -414,6 +417,124 @@ defmodule MishkaPay do
           & &1.record_tax(calculation_id, reference, &2)
         )
     end
+  end
+
+  @doc """
+  Makes a tax rate from `attrs` (see `MishkaPay.TaxRate`): a `:display_name`, a `:percentage` and
+  whether it is `:inclusive`, and where it applies. Put its `:id` in a line's or a bill's
+  `:tax_rate_ids`. Its `:reference` makes it once.
+  """
+  @spec create_tax_rate(map()) :: {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+  def create_tax_rate(attrs) when is_map(attrs) do
+    needed = [:provider, :display_name, :percentage, :inclusive]
+    made(:tax_rate_create, :tax_rate, attrs, MishkaPay.TaxRate, needed, :create_tax_rate)
+  end
+
+  @doc "Reads tax rate `tax_rate_id` from `provider`, with `tenant`'s keys."
+  @spec fetch_tax_rate(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+  def fetch_tax_rate(provider, tax_rate_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(tax_rate_id) do
+    capable(:tax_rate, :tax_rate, provider, tenant, & &1.fetch_tax_rate(tax_rate_id, &2))
+  end
+
+  @doc """
+  Changes tax rate `attrs.id` at `attrs.provider`: only the fields given (`:active`,
+  `:display_name`, `:description`, the place, `:tax_type`, `:metadata`). `active: false` archives
+  it. Its `:percentage` and `:inclusive` never change: make a new rate instead.
+  """
+  @spec update_tax_rate(map()) :: {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+  def update_tax_rate(%{} = attrs) do
+    in_place(attrs, [:percentage, :inclusive], :tax_rate_fixed, fn ->
+      made(:tax_rate_update, :tax_rate, attrs, MishkaPay.TaxRate, [:provider], :update_tax_rate)
+    end)
+  end
+
+  @doc """
+  One page of `provider`'s tax rates, newest first (`MishkaPay.Page` of `MishkaPay.TaxRate`):
+  `active: true` or `false`, `inclusive: true` or `false`, plus `limit:` and `after:`.
+  """
+  @spec list_tax_rates(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_tax_rates(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:tax_rate, :tax_rate_list, provider, tenant, & &1.list_tax_rates(limited(opts), &2))
+  end
+
+  @doc """
+  Registers the seller to collect tax in a country, from `attrs` (see `MishkaPay.TaxRegistration`):
+  its `:country` and `:type`, a `:state` where the kind needs one, and when it starts and ends.
+  The provider's tax counting then charges tax there.
+  """
+  @spec create_tax_registration(map()) ::
+          {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+  def create_tax_registration(attrs) when is_map(attrs) do
+    made(
+      :tax_registration_create,
+      :tax_setup,
+      attrs,
+      MishkaPay.TaxRegistration,
+      [:provider, :country, :type],
+      :create_tax_registration
+    )
+  end
+
+  @doc """
+  One page of the seller's tax registrations (`MishkaPay.Page` of `MishkaPay.TaxRegistration`):
+  `status:` `:active` (the provider's default), `:scheduled`, `:expired` or `:all`, plus `limit:`
+  and `after:`.
+  """
+  @spec list_tax_registrations(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_tax_registrations(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(
+      :tax_setup,
+      :tax_registration_list,
+      provider,
+      tenant,
+      & &1.list_tax_registrations(limited(opts), &2)
+    )
+  end
+
+  @doc """
+  Ends tax registration `registration_id`, now or `at:` a later `DateTime`: the provider stops
+  charging tax there. A registration is never deleted. Answers it after.
+  """
+  @spec expire_tax_registration(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+  def expire_tax_registration(provider, registration_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(registration_id) do
+    capable(
+      :tax_setup,
+      :tax_registration_expire,
+      provider,
+      tenant,
+      & &1.expire_tax_registration(registration_id, opts[:at], &2)
+    )
+  end
+
+  @doc "Reads `tenant`'s tax settings at `provider` (`MishkaPay.TaxSettings`)."
+  @spec fetch_tax_settings(String.t(), term()) ::
+          {:ok, MishkaPay.TaxSettings.t()} | {:error, Splode.Error.t()}
+  def fetch_tax_settings(provider, tenant \\ nil) when is_binary(provider) do
+    capable(:tax_setup, :tax_settings, provider, tenant, & &1.fetch_tax_settings(&2))
+  end
+
+  @doc """
+  Changes the tax settings of `attrs.tenant` at `attrs.provider` (see `MishkaPay.TaxSettings`):
+  the `:head_office`, the default `:tax_code` and `:tax_behavior`, only those given. Answers them
+  after, with the `:status` they leave.
+  """
+  @spec update_tax_settings(map()) ::
+          {:ok, MishkaPay.TaxSettings.t()} | {:error, Splode.Error.t()}
+  def update_tax_settings(attrs) when is_map(attrs) do
+    made(
+      :tax_settings_update,
+      :tax_setup,
+      attrs,
+      MishkaPay.TaxSettings,
+      [:provider],
+      :update_tax_settings
+    )
   end
 
   @doc """

@@ -66,6 +66,15 @@ defmodule MishkaPay.Providers.Stripe do
       (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
       (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
       An account without Stripe Tax turned on is refused with code `"tax_not_set_up"`.
+    * `create_tax_rate/2`, `fetch_tax_rate/2`, `update_tax_rate/2` and `list_tax_rates/2` keep
+      Tax Rates (`txr_...`) set by hand; a rate's reference makes the idempotency key and is kept
+      in its metadata. A checkout's line takes them as `tax_rates`, an invoice item too, and a
+      draft invoice as `default_tax_rates`; Stripe takes none on a price or a payment link, nor
+      with automatic tax on the same checkout.
+    * `create_tax_registration/2`, `list_tax_registrations/2` and `expire_tax_registration/3`
+      keep Stripe Tax Registrations (`taxreg_...`), the type and state sent under the country's
+      own `country_options`; `fetch_tax_settings/1` and `update_tax_settings/2` read and change
+      Stripe Tax's settings (head office, default tax code and behavior).
     * `create_invoice_item/2`, `update_invoice_item/2`, `delete_invoice_item/2` and
       `list_invoice_items/2` keep Invoice Items (`ii_...`) on their own: a charge that waits for
       the customer's next invoice, or goes on a draft one; the reference makes the idempotency
@@ -160,6 +169,8 @@ defmodule MishkaPay.Providers.Stripe do
       :customer,
       :tax_id,
       :tax,
+      :tax_rate,
+      :tax_setup,
       :shipping,
       :portal,
       :payment_method,
@@ -296,14 +307,16 @@ defmodule MishkaPay.Providers.Stripe do
     "entitlements.active_entitlement_summary.updated" => [:customer],
     "customer.tax_id.created" => [:customer],
     "customer.tax_id.updated" => [:customer],
-    "customer.tax_id.deleted" => [:customer]
+    "customer.tax_id.deleted" => [:customer],
+    "tax_rate.created" => [:tax_rate],
+    "tax_rate.updated" => [:tax_rate]
   }
 
   @doc """
   The Stripe events that change what Mishka Pay keeps, each with what it updates: `:payment`
   (a resource with `mishka_pay do kind :payment end`), `:subscription`, `:customer`, `:dispute`,
   `:invoice`, `:product`, `:price`, `:coupon`, `:promotion_code` or `:payment_link`; or the
-  provider object it is about (`:credit_note`; `:subscription_schedule`, which names its
+  provider object it is about (`:credit_note`, `:tax_rate`; `:subscription_schedule`, which names its
   subscription too; `:fraud_warning` and `:fraud_review`, which name their payment too). Each is mapped to its
   ids (`MishkaPay.Event`) and tested; any other event is still verified and stored, and changes
   nothing. Send these to the webhook endpoint in the Stripe Dashboard.
@@ -342,6 +355,8 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- currencies(checkout.items),
+         :ok <- tax_rates(List.wrap(checkout.items)),
+         :ok <- rates_without_automatic_tax(checkout, keys),
          :ok <- metadata(checkout.metadata),
          :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
@@ -687,6 +702,7 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- stripe_id(draft.customer_id, "cus_", :customer_id),
          :ok <- invoice_prices(draft.items),
          :ok <- currencies(draft.items),
+         :ok <- tax_rates([%{tax_rate_ids: draft.tax_rate_ids} | draft.items]),
          :ok <- metadata(draft.metadata),
          {:ok, %{"id" => invoice_id}} <-
            request(:post, "/v1/invoices", Mapper.invoice_params(draft), keys,
@@ -764,6 +780,7 @@ defmodule MishkaPay.Providers.Stripe do
   def create_invoice_item(%InvoiceItem{} = item, keys) do
     with :ok <- stripe_id(item.customer_id, "cus_", :customer_id),
          :ok <- maybe_id(item.invoice_id, "in_", :invoice_id),
+         :ok <- tax_rates([item]),
          :ok <- item_fits(item),
          {:ok, answer} <-
            request(:post, "/v1/invoiceitems", Mapper.invoice_item_params(item), keys,
@@ -776,6 +793,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def update_invoice_item(%InvoiceItem{id: id} = item, keys) do
     with :ok <- stripe_id(id, "ii_", :id),
+         :ok <- tax_rates([item]),
          :ok <- item_fits(item),
          {:ok, answer} <-
            request(:post, "/v1/invoiceitems/#{id}", Mapper.invoice_item_update_params(item), keys) do
@@ -1088,6 +1106,142 @@ defmodule MishkaPay.Providers.Stripe do
              key: ProviderKit.idempotency_key("tax-record", keys.tenant, reference)
            ) do
       Mapper.tax_transaction(answer, calculation_id)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_tax_rate(%MishkaPay.TaxRate{} = rate, keys) do
+    with :ok <- metadata(rate.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/tax_rates", Mapper.tax_rate_params(rate), keys,
+             key: ProviderKit.idempotency_key("tax-rate", rate.tenant, rate.reference)
+           ) do
+      Mapper.tax_rate(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_tax_rate(tax_rate_id, keys) do
+    with :ok <- stripe_id(tax_rate_id, "txr_", :tax_rate_id),
+         {:ok, answer} <- request(:get, "/v1/tax_rates/#{tax_rate_id}", [], keys) do
+      Mapper.tax_rate(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_tax_rate(%MishkaPay.TaxRate{id: id} = rate, keys) do
+    with :ok <- stripe_id(id, "txr_", :id),
+         :ok <- metadata(rate.metadata),
+         {:ok, answer} <-
+           request(:post, "/v1/tax_rates/#{id}", Mapper.tax_rate_params(rate), keys) do
+      Mapper.tax_rate(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_tax_rates(opts, keys) do
+    filters = [active: opts[:active], inclusive: opts[:inclusive]]
+    page("/v1/tax_rates", filters, opts, keys, &Mapper.tax_rate/1)
+  end
+
+  # A registration has no reference of its own: retries reuse one fresh key, and Stripe itself
+  # refuses a second registration of the same kind in a country.
+  @impl MishkaPay.Provider
+  def create_tax_registration(%MishkaPay.TaxRegistration{} = registration, keys) do
+    with :ok <- registration_state(registration),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/registrations",
+             Mapper.tax_registration_params(registration),
+             keys
+           ) do
+      Mapper.tax_registration(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def list_tax_registrations(opts, keys) do
+    filters = [status: opts[:status]]
+    page("/v1/tax/registrations", filters, opts, keys, &Mapper.tax_registration/1)
+  end
+
+  @impl MishkaPay.Provider
+  def expire_tax_registration(registration_id, at, keys) do
+    expires_at = (at && DateTime.to_unix(at)) || "now"
+
+    with :ok <- stripe_id(registration_id, "taxreg_", :registration_id),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/tax/registrations/#{registration_id}",
+             %{"expires_at" => expires_at},
+             keys
+           ) do
+      Mapper.tax_registration(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_tax_settings(keys) do
+    with {:ok, answer} <- request(:get, "/v1/tax/settings", [], keys) do
+      Mapper.tax_settings(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_tax_settings(%MishkaPay.TaxSettings{} = settings, keys) do
+    with {:ok, answer} <-
+           request(:post, "/v1/tax/settings", Mapper.tax_settings_params(settings), keys) do
+      Mapper.tax_settings(answer)
+    end
+  end
+
+  # A US registration names its state, and a Canadian provincial one its province; no other
+  # registration takes one.
+  defp registration_state(%{country: "US", state: nil}),
+    do: invalid(:state, Messages.text(:customer_needs, field: :state))
+
+  defp registration_state(%{country: "CA", type: "province_standard", state: nil}),
+    do: invalid(:state, Messages.text(:customer_needs, field: :state))
+
+  defp registration_state(%{country: "US"}), do: :ok
+  defp registration_state(%{country: "CA", type: "province_standard"}), do: :ok
+  defp registration_state(%{state: nil}), do: :ok
+  defp registration_state(_other), do: invalid(:state, Messages.text(:registration_state))
+
+  # Every tax rate a line or a bill names is a Stripe tax rate id.
+  defp tax_rates(lines) do
+    lines
+    |> Enum.flat_map(&List.wrap(&1.tax_rate_ids))
+    |> Enum.find_value(:ok, fn id ->
+      case stripe_id(id, "txr_", :tax_rate_ids) do
+        :ok -> nil
+        error -> error
+      end
+    end)
+  end
+
+  # Stripe adds tax rates only to the lines of a checkout or a bill.
+  defp line_rates_only(prices) do
+    case Enum.any?(prices, &(&1.tax_rate_ids not in [nil, []])) do
+      true -> invalid(:tax_rate_ids, Messages.text(:tax_rates_line_only))
+      false -> :ok
+    end
+  end
+
+  # Stripe counts the tax itself with automatic tax, so a line's own rates are refused with it on,
+  # by the checkout or by the site.
+  defp rates_without_automatic_tax(checkout, keys) do
+    rated? = Enum.any?(List.wrap(checkout.items), &(&1.tax_rate_ids not in [nil, []]))
+
+    automatic? =
+      checkout.automatic_tax == true or
+        (is_nil(checkout.automatic_tax) and Map.get(keys, :automatic_tax) == true)
+
+    case rated? and automatic? do
+      true -> invalid(:tax_rate_ids, Messages.text(:tax_rates_automatic))
+      false -> :ok
     end
   end
 
@@ -1437,7 +1591,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def create_price(%Price{} = price, keys) do
-    with :ok <- plain_id(price.product_id, :product_id),
+    with :ok <- line_rates_only([price]),
+         :ok <- plain_id(price.product_id, :product_id),
          :ok <- maybe_id(price.meter_id, "mtr_", :meter_id),
          :ok <- currencies([price]),
          :ok <- metadata(price.metadata),
@@ -1635,7 +1790,8 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def create_payment_link(%PaymentLink{} = link, keys) do
-    with :ok <- metadata(link.metadata),
+    with :ok <- line_rates_only(link.items),
+         :ok <- metadata(link.metadata),
          :ok <- link_prices(link.items),
          {:ok, answer} <-
            request(:post, "/v1/payment_links", Mapper.payment_link_params(link, keys), keys) do

@@ -129,6 +129,9 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_tax_id(provider, customer_id, %{type: "eu_vat", value: "DE123456789"}, tenant)`, `list_tax_ids/4`, `delete_tax_id/4` | `%MishkaPay.TaxId{}`: a business buyer's VAT or other tax id, with its `:verification` |
 | `MishkaPay.calculate_tax(attrs)` (`MishkaPay.TaxCalculation`: `:items` of `MishkaPay.TaxLine`, `:address` or `:customer_id`, `:shipping`) | `%MishkaPay.TaxCalculation{}`: the tax on a sale outside the checkout, with `:amount_total` to charge |
 | `MishkaPay.record_tax(provider, calculation_id, reference, tenant)` | `%MishkaPay.TaxTransaction{}`: the paid sale in the provider's tax reports |
+| `MishkaPay.create_tax_rate(attrs)` (`MishkaPay.TaxRate`: `:display_name`, `:percentage`, `:inclusive`, `:country`, `:state`, `:jurisdiction`, `:tax_type`, `:description`, `:reference`), `fetch_tax_rate/3`, `update_tax_rate(%{provider:, id:, active: false})`, `list_tax_rates(p, tenant, active: true)` | `%MishkaPay.TaxRate{}`: a rate set by hand; its id goes in `tax_rate_ids:` of a checkout item, an invoice item or a draft bill; the provider needs `:tax_rate` |
+| `MishkaPay.create_tax_registration(attrs)` (`MishkaPay.TaxRegistration`: `:country`, `:type`, `:state`, `:active_from`, `:expires_at`), `list_tax_registrations(p, tenant, status: :all)`, `expire_tax_registration(p, id, tenant, at: dt)` | `%MishkaPay.TaxRegistration{}`: where the seller collects tax; the provider needs `:tax_setup` |
+| `MishkaPay.fetch_tax_settings(provider, tenant)`, `update_tax_settings(%{provider:, tenant:, head_office: address, tax_code:, tax_behavior:})` | `%MishkaPay.TaxSettings{}`: the head office and tax defaults, with `:status` and `:missing_fields` |
 | `MishkaPay.create_shipping_rate(attrs)`, `list_shipping_rates(provider, tenant, active: true)` | `%MishkaPay.ShippingRate{}`: a way to ship and its price, offered by id on checkouts |
 | `MishkaPay.list_events(provider, tenant, since: dt, types: [...])` | a `MishkaPay.Page` of `%MishkaPay.Event{}` |
 | `MishkaPay.request(%{provider:, tenant:, method: :get, path: "/v1/...", params:, reference:, options: %{api_version:, expand: [...]}})` (`MishkaPay.RawRequest`) | `{:ok, map}`: the provider's own answer, for what has no typed call yet; the provider needs `:raw_request` |
@@ -228,6 +231,10 @@ MishkaPay.checkout(%{
 
 - A price's `tax_behavior` is `:exclusive` (tax added on top) or `:inclusive` (the amount holds
   the tax), on catalog prices and on checkout items alike.
+- Tax set by hand instead of counted: make a `MishkaPay.TaxRate` once and put its id in an
+  item's `tax_rate_ids:` (a checkout's, an invoice item's) or a draft bill's. A rate never changes
+  its percentage: make a new one and `update_tax_rate/1` the old one to `active: false`. Rates
+  and `automatic_tax` do not go together on one checkout.
 - A coupon takes `percent_off` (more than 0, at most 100) or `amount_off` (money), one of them;
   `duration: :repeating` needs `duration_in_months`.
 - A checkout read back has `amount_discount` beside `amount_total` and `amount_tax`.

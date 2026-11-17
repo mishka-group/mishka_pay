@@ -77,7 +77,7 @@
 ## Ids and what is refused before any request
 
 - Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, early fraud warnings `issfr_`, reviews `prv_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, tax rates `txr_`, tax registrations `taxreg_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, early fraud warnings `issfr_`, reviews `prv_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -215,9 +215,30 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - An account without Stripe Tax turned on answers `Errors.Rejected` with code
   `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
   it on but with no registration where the buyer is counts a tax of zero.
-- Stripe Tax must be turned on in the Dashboard (origin address, registrations) before
-  `automatic_tax` counts anything. A price's `tax_behavior` can be set once on a price that had
+- Stripe Tax must be turned on (head office, registrations) before `automatic_tax` counts
+  anything: `update_tax_settings/1` sets the head office and defaults, `create_tax_registration/1`
+  the registrations; `fetch_tax_settings/2` says `:pending` with the `:missing_fields` until then. A price's `tax_behavior` can be set once on a price that had
   none; otherwise make a new price.
+
+## Tax rates, registrations and settings
+
+- A tax rate (`txr_...`) is `POST /v1/tax_rates`; its `:reference` makes the idempotency key and
+  is kept in its metadata. Its percentage and `inclusive` never change, and it is never deleted:
+  `update_tax_rate/1` with `active: false` archives it, and the lines that have it keep it.
+- A checkout's line sends its `:tax_rate_ids` as `line_items[][tax_rates]`, an invoice item as
+  `tax_rates`, a draft bill as `default_tax_rates` (for every line without its own), a schedule's
+  phase item as `tax_rates`. Stripe takes none on a catalog price or a payment link, and none
+  with automatic tax (the checkout's, or the site's `automatic_tax: true`): each is
+  `Errors.Invalid` on `:tax_rate_ids` before any request.
+- A tax registration (`taxreg_...`) is `POST /v1/tax/registrations`: the `:type` and `:state`
+  go under `country_options[<country>]` (Canada's provincial one as
+  `province_standard[province]`); a US registration and Canada's `"province_standard"` need
+  `:state`, refused before any request without it, and any other registration refuses one. `expire_tax_registration/4` sets
+  `expires_at` (`now` unless `at:`); Stripe never deletes one. A second registration of the same
+  kind in a country is `Errors.Rejected`.
+- `fetch_tax_settings/2` and `update_tax_settings/1` are `GET` and `POST /v1/tax/settings`:
+  `:head_office` is `head_office[address]`, `:tax_code` and `:tax_behavior` are `defaults`.
+- Stripe sends `tax_rate.created` and `.updated`; the event's `:object_id` is the rate.
 
 ## Catalog and lists
 

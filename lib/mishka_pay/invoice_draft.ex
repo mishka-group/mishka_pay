@@ -14,7 +14,9 @@ defmodule MishkaPay.InvoiceDraft do
     * `:customer_id`: the provider customer it bills (`MishkaPay.create_customer/1`).
     * `:items`: one or more `MishkaPay.Price`, all in one currency: a catalog price by its `:id`,
       or a `:name` with an `:amount` and a `:quantity`. A recurring price is refused: a plan
-      starts with a checkout.
+      starts with a checkout. An item's `:tax_rate_ids` add the seller's own tax rates to it.
+    * `:tax_rate_ids`: the seller's own tax rates (`MishkaPay.TaxRate`) for every line of the bill
+      that names none of its own.
     * `:collection`: `:charge_automatically` (the default) charges the customer's saved payment
       method when it is finalized; `:send_invoice` emails a bill they pay on the provider's page,
       within `:days_until_due` (30 unless given).
@@ -51,6 +53,7 @@ defmodule MishkaPay.InvoiceDraft do
       validator: {__MODULE__, :collection}
 
     field :days_until_due, pos_integer(), derives: "validate(integer, min_len=1)"
+    field :tax_rate_ids, list(), validator: {MishkaPay.TaxRate, :ids}
     field :description, String.t(), derives: "sanitize(trim) validate(string, max_len=1500)"
     field :footer, String.t(), derives: "sanitize(trim) validate(string, max_len=5000)"
 

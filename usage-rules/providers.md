@@ -77,6 +77,12 @@ end
   - `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;
   - `:fraud`: `fetch_fraud_warning/2`, `list_fraud_warnings/2` (`:payment_id`, `:charge_id`),
     `fetch_fraud_review/2`, `list_fraud_reviews/2` (open ones), `approve_fraud_review/2`;
+  - `:tax_rate`: `create_tax_rate/2`, `fetch_tax_rate/2`, `update_tax_rate/2` (never the
+    percentage or `:inclusive`), `list_tax_rates/2` (`:active`, `:inclusive`); a line's or a
+    bill's `:tax_rate_ids` it cannot send are refused, never dropped;
+  - `:tax_setup`: `create_tax_registration/2`, `list_tax_registrations/2` (`:status`),
+    `expire_tax_registration/3` (the registration's id and when, `nil` for now),
+    `fetch_tax_settings/1`, `update_tax_settings/2`;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

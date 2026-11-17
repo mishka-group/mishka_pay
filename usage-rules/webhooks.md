@@ -60,6 +60,7 @@ webhook endpoint to these:
 | `radar.early_fraud_warning.created`, `.updated` | its payment (synced again); `:object_id` is the warning (`:object_type` `"radar.early_fraud_warning"`), read with `fetch_fraud_warning/3` |
 | `review.opened`, `.closed` | its payment (synced again); `:object_id` is the review (`:object_type` `"review"`), read with `fetch_fraud_review/3` |
 | `credit_note.created`, `.updated`, `.voided` | nothing kept: `:object_id` is the note (`:object_type` `"credit_note"`), read with `fetch_credit_note/3` |
+| `tax_rate.created`, `.updated` | nothing kept: `:object_id` is the rate (`:object_type` `"tax_rate"`), read with `fetch_tax_rate/3` |
 
 Any other event is verified and stored, and changes nothing.
 

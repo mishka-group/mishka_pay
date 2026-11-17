@@ -34,7 +34,25 @@ defmodule MishkaPay.Support.StripeMock do
   @spec forward(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   def forward(conn, url \\ @url) do
     {:ok, body, conn} = Plug.Conn.read_body(conn)
+    send_on(conn, body, url)
+  end
 
+  @doc """
+  As `forward/1`, after telling `pid` what the request sent:
+  `{:stripe_sent, method, path, params, idempotency_key}`, with the query and the form body
+  decoded into one map of Stripe's flat names (`"line_items[0][tax_rates][0]"`). stripe-mock still
+  checks the request, so a test sees both what went and that Stripe's spec takes it.
+  """
+  @spec forward_telling(Plug.Conn.t(), pid()) :: Plug.Conn.t()
+  def forward_telling(conn, pid) do
+    {:ok, body, conn} = Plug.Conn.read_body(conn)
+    params = [conn.query_string, body] |> Enum.reject(&(&1 == "")) |> Enum.join("&")
+    key = conn |> Plug.Conn.get_req_header("idempotency-key") |> List.first()
+    send(pid, {:stripe_sent, conn.method, conn.request_path, URI.decode_query(params), key})
+    send_on(conn, body, @url)
+  end
+
+  defp send_on(conn, body, url) do
     Req.request(
       method: conn.method,
       url: url <> conn.request_path <> query(conn.query_string),

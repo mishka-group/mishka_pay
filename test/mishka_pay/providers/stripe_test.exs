@@ -2179,6 +2179,272 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, "POST", "/v1/reviews/prv_123/approve", ""}
     end
 
+    test "tax rates are made, read, archived and listed as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      rate = %{
+        provider: "stripe",
+        tenant: "site-a",
+        display_name: "Sales tax",
+        percentage: "7.25",
+        inclusive: false,
+        country: "us",
+        state: "ny",
+        jurisdiction: "New York",
+        tax_type: "sales_tax",
+        description: "NY state",
+        reference: "ny-rate"
+      }
+
+      assert {:ok, %MishkaPay.TaxRate{id: "txr_" <> _, percentage: %Decimal{}, inclusive: false}} =
+               MishkaPay.create_tax_rate(rate)
+
+      assert_received {:stripe_sent, "POST", "/v1/tax_rates", sent, key}
+
+      assert sent == %{
+               "display_name" => "Sales tax",
+               "percentage" => "7.25",
+               "inclusive" => "false",
+               "country" => "US",
+               "state" => "NY",
+               "jurisdiction" => "New York",
+               "tax_type" => "sales_tax",
+               "description" => "NY state",
+               "metadata[mishka_pay_reference]" => "ny-rate"
+             }
+
+      assert key =~ "tax-rate"
+
+      assert {:ok, %MishkaPay.TaxRate{id: "txr_123", tax_type: "vat", country: "DE"}} =
+               MishkaPay.fetch_tax_rate("stripe", "txr_123", "site-a")
+
+      assert {:ok, %MishkaPay.TaxRate{}} =
+               MishkaPay.update_tax_rate(%{provider: "stripe", id: "txr_123", active: false})
+
+      assert_received {:stripe_sent, "GET", "/v1/tax_rates/txr_123", _query, _key}
+
+      assert_received {:stripe_sent, "POST", "/v1/tax_rates/txr_123",
+                       %{"active" => "false"} = change, _}
+
+      assert map_size(change) == 1
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxRate{} | _]}} =
+               MishkaPay.list_tax_rates("stripe", "site-a", active: true, inclusive: false)
+
+      assert_received {:stripe_sent, "GET", "/v1/tax_rates",
+                       %{"active" => "true", "inclusive" => "false"}, _key}
+    end
+
+    test "checkouts, draft bills and invoice items take tax rates, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(%{
+                 @checkout
+                 | items: [
+                     %{
+                       name: "Ebook",
+                       amount: %{amount: "10", currency: "USD"},
+                       tax_rate_ids: ["txr_1", "txr_2"]
+                     },
+                     %{id: "price_1", tax_rate_ids: ["txr_1"]}
+                   ]
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/checkout/sessions", session, _key}
+      assert session["line_items[0][tax_rates][1]"] == "txr_2"
+      assert session["line_items[1][tax_rates][0]"] == "txr_1"
+
+      assert {:ok, %Invoice{}} =
+               MishkaPay.create_invoice(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 tax_rate_ids: ["txr_1"],
+                 items: [
+                   %{name: "Consulting", amount: %{amount: "100", currency: "USD"}},
+                   %{id: "price_1", tax_rate_ids: ["txr_2"]}
+                 ]
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/invoices", %{"default_tax_rates[0]" => "txr_1"},
+                       _}
+
+      assert_received {:stripe_sent, "POST", "/v1/invoiceitems", first, _key}
+      refute Map.has_key?(first, "tax_rates[0]")
+
+      assert_received {:stripe_sent, "POST", "/v1/invoiceitems", %{"tax_rates[0]" => "txr_2"},
+                       _key}
+
+      assert {:ok, %MishkaPay.InvoiceItem{}} =
+               MishkaPay.create_invoice_item(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 price_id: "price_123",
+                 tax_rate_ids: ["txr_3"]
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/invoiceitems", %{"tax_rates[0]" => "txr_3"},
+                       _key}
+    end
+
+    test "tax registrations are added, listed and ended, and the tax settings read and changed, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.TaxRegistration{id: "taxreg_" <> _}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 country: "de",
+                 type: "oss_union"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
+                       %{
+                         "country" => "DE",
+                         "country_options[de][type]" => "oss_union",
+                         "active_from" => "now"
+                       } = eu, _key}
+
+      assert map_size(eu) == 3
+
+      ends = ~U[2030-01-01 00:00:00Z]
+
+      assert {:ok, %MishkaPay.TaxRegistration{}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 country: "US",
+                 type: "state_sales_tax",
+                 state: "CA",
+                 expires_at: ends
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
+                       %{"country_options[us][state]" => "CA", "expires_at" => "1893456000"},
+                       _key}
+
+      assert {:ok, %MishkaPay.TaxRegistration{}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 country: "CA",
+                 type: "province_standard",
+                 state: "BC"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
+                       %{"country_options[ca][province_standard][province]" => "BC"}, _key}
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxRegistration{} | _]}} =
+               MishkaPay.list_tax_registrations("stripe", "site-a", status: :all)
+
+      assert_received {:stripe_sent, "GET", "/v1/tax/registrations", %{"status" => "all"}, _key}
+
+      assert {:ok, %MishkaPay.TaxRegistration{}} =
+               MishkaPay.expire_tax_registration("stripe", "taxreg_123", "site-a")
+
+      assert {:ok, %MishkaPay.TaxRegistration{}} =
+               MishkaPay.expire_tax_registration("stripe", "taxreg_123", "site-a", at: ends)
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations/taxreg_123",
+                       %{"expires_at" => "now"}, _key}
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/registrations/taxreg_123",
+                       %{"expires_at" => "1893456000"}, _key}
+
+      assert {:ok,
+              %MishkaPay.TaxSettings{
+                head_office: %MishkaPay.Address{country: "US"},
+                tax_code: "txcd_" <> _,
+                status: :active
+              }} = MishkaPay.fetch_tax_settings("stripe", "site-a")
+
+      assert {:ok, %MishkaPay.TaxSettings{}} =
+               MishkaPay.update_tax_settings(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 head_office: %{country: "de", postal_code: "10115", city: "Berlin"},
+                 tax_behavior: "exclusive"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/tax/settings", settings, _key}
+
+      assert settings == %{
+               "head_office[address][country]" => "DE",
+               "head_office[address][postal_code]" => "10115",
+               "head_office[address][city]" => "Berlin",
+               "defaults[tax_behavior]" => "exclusive"
+             }
+    end
+
+    test "tax rates where Stripe takes none, and tax setups that cannot be right, are refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      rated = [
+        %{name: "Ebook", amount: %{amount: "10", currency: "USD"}, tax_rate_ids: ["txr_1"]}
+      ]
+
+      for {result, field} <- [
+            {MishkaPay.fetch_tax_rate("stripe", "txr_1/../charges"), :tax_rate_id},
+            {MishkaPay.fetch_tax_rate("stripe", "taxreg_1"), :tax_rate_id},
+            {MishkaPay.update_tax_rate(%{provider: "stripe", id: "../x", active: false}), :id},
+            {MishkaPay.expire_tax_registration("stripe", "txr_1"), :registration_id},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "US",
+               type: "state_sales_tax"
+             }), :state},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "CA",
+               type: "province_standard"
+             }), :state},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "DE",
+               type: "standard",
+               state: "BY"
+             }), :state},
+            {MishkaPay.checkout(%{
+               @checkout
+               | items: [%{id: "price_1", tax_rate_ids: ["shr_1"]}]
+             }), :tax_rate_ids},
+            {MishkaPay.checkout(Map.merge(@checkout, %{items: rated, automatic_tax: true})),
+             :tax_rate_ids},
+            {MishkaPay.create_invoice_item(%{
+               provider: "stripe",
+               customer_id: "cus_1",
+               price_id: "price_1",
+               tax_rate_ids: ["txr_1&x=y"]
+             }), :tax_rate_ids},
+            {MishkaPay.create_price(%{
+               provider: "stripe",
+               product_id: "ebook",
+               amount: %{amount: "10", currency: "USD"},
+               tax_rate_ids: ["txr_1"]
+             }), :tax_rate_ids},
+            {MishkaPay.create_payment_link(%{
+               provider: "stripe",
+               items: [%{id: "price_1", tax_rate_ids: ["txr_1"]}],
+               success_url: "https://shop.test/thanks"
+             }), :tax_rate_ids}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} = result
+      end
+
+      MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_123", automatic_tax: true})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids, message: message}]}} =
+               MishkaPay.checkout(%{@checkout | items: rated})
+
+      assert message =~ "automatic_tax"
+    end
+
     test "a meter is read, renamed, turned on again, and a wrong report is taken back once, as Stripe's spec accepts" do
       test = self()
 
@@ -3561,6 +3827,76 @@ defmodule MishkaPay.Providers.StripeTest do
     assert line == Money.new(:USD, "10.00")
   end
 
+  test "a tax rate, a registration and the tax settings map from Stripe's answers" do
+    assert {:ok,
+            %MishkaPay.TaxRate{
+              id: "txr_1",
+              percentage: percentage,
+              effective_percentage: nil,
+              inclusive: true,
+              active: false,
+              country: "DE",
+              state: nil,
+              tax_type: "vat",
+              reference: "de-vat",
+              metadata: %{"team" => "eu"}
+            }} =
+             Stripe.Mapper.tax_rate(%{
+               "object" => "tax_rate",
+               "id" => "txr_1",
+               "display_name" => "VAT",
+               "percentage" => 7.25,
+               "effective_percentage" => nil,
+               "inclusive" => true,
+               "active" => false,
+               "country" => "DE",
+               "state" => "",
+               "tax_type" => "vat",
+               "metadata" => %{"mishka_pay_reference" => "de-vat", "team" => "eu"},
+               "created" => 1_794_825_000
+             })
+
+    assert Decimal.equal?(percentage, Decimal.new("7.25"))
+
+    assert {:ok,
+            %MishkaPay.TaxRegistration{country: "CA", type: "province_standard", state: "BC"}} =
+             Stripe.Mapper.tax_registration(%{
+               "id" => "taxreg_1",
+               "country" => "CA",
+               "country_options" => %{
+                 "ca" => %{
+                   "type" => "province_standard",
+                   "province_standard" => %{"province" => "BC"}
+                 }
+               },
+               "status" => "scheduled",
+               "active_from" => 1_894_825_000
+             })
+
+    assert {:ok, %MishkaPay.TaxSettings{status: :pending, missing_fields: ["head_office"]} = none} =
+             Stripe.Mapper.tax_settings(%{
+               "object" => "tax.settings",
+               "defaults" => %{"tax_behavior" => "inferred_by_currency", "tax_code" => nil},
+               "head_office" => nil,
+               "status" => "pending",
+               "status_details" => %{"pending" => %{"missing_fields" => ["head_office"]}}
+             })
+
+    assert {none.head_office, none.tax_behavior} == {nil, :inferred_by_currency}
+
+    rate = %MishkaPay.TaxRate{provider: "stripe", id: "txr_1", percentage: Decimal.new(5)}
+    assert Stripe.Mapper.tax_rate_params(rate) == %{}
+
+    assert {:ok, %MishkaPay.InvoiceItem{tax_rate_ids: ["txr_1"]}} =
+             Stripe.Mapper.invoice_item(%{
+               "object" => "invoiceitem",
+               "id" => "ii_1",
+               "currency" => "usd",
+               "amount" => 1000,
+               "tax_rates" => [%{"object" => "tax_rate", "id" => "txr_1"}]
+             })
+  end
+
   test "an invoice item maps with its price of one, its total, its bill and its reference" do
     item = %{
       "object" => "invoiceitem",
@@ -4148,7 +4484,8 @@ defmodule MishkaPay.Providers.StripeTest do
       "id" => "prv_1",
       "charge" => "ch_1",
       "payment_intent" => "pi_1"
-    }
+    },
+    "tax_rate" => %{"object" => "tax_rate", "id" => "txr_1"}
   }
 
   test "every Stripe event Mishka Pay claims to handle names what it updates" do

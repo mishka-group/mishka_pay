@@ -24,12 +24,12 @@ subscriptions have run against PayPal's sandbox; webhooks from the sandbox are s
   `upcoming_invoice/3`. Cancel with `at: :now`; PayPal has no cancel at the period's end, so
   that and `resume_subscription/3` are refused.
 - Not supported: a subscription with more than one price, listing or searching subscriptions
-  (`:subscription_list`), invoice items (`:invoice_item`), credit notes (`:credit_note`), subscription schedules (`:subscription_schedule`), fraud warnings and reviews (`:fraud`), a customer's bills, one bill by id,
+  (`:subscription_list`), invoice items (`:invoice_item`), credit notes (`:credit_note`), subscription schedules (`:subscription_schedule`), fraud warnings and reviews (`:fraud`), tax rates (`:tax_rate`), tax registrations and settings (`:tax_setup`), a customer's bills, one bill by id,
   changing or pausing a subscription, provider price ids, merchant of record, metadata, currencies PayPal
   does not take, decimals in HUF, JPY, TWD, coupons and promotion codes, ending a checkout, and the
   checkout options (`discounts`, `allow_promotion_codes`, `automatic_tax`, `customer_creation`,
   `locale`, `expires_at`, `billing_address`, `tax_id_collection`, `invoice`, a price's
-  `tax_behavior`), payment links and the catalog: each is refused with
+  `tax_behavior` and `tax_rate_ids`), payment links and the catalog: each is refused with
   `Errors.Unsupported`.
 - Webhooks are verified by PayPal's own API; they cannot be simulated locally.
 - `MishkaPay.request/1` calls any PayPal REST path (`"/v2/checkout/orders/<id>"`) with the

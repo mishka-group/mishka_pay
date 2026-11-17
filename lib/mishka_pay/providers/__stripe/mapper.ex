@@ -339,13 +339,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp managed_payments(nil), do: %{}
   defp managed_payments(enabled), do: %{"managed_payments" => %{"enabled" => enabled}}
 
-  defp line_item(%Price{id: id, quantity: quantity}) when is_binary(id),
-    do: %{"price" => id, "quantity" => quantity}
+  defp line_item(%Price{id: id, quantity: quantity} = price) when is_binary(id),
+    do: reject_nil(%{"price" => id, "quantity" => quantity, "tax_rates" => price.tax_rate_ids})
 
   defp line_item(
          %Price{name: name, amount: amount, quantity: quantity, tax_code: tax_code} = price
        ) do
     %{
+      "tax_rates" => price.tax_rate_ids,
       "price_data" =>
         %{
           "currency" => amount.currency |> to_string() |> String.downcase(),
@@ -357,6 +358,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         |> Map.merge(recurring(price)),
       "quantity" => quantity
     }
+    |> reject_nil()
   end
 
   defp recurring(%Price{interval: nil}), do: %{}
@@ -859,6 +861,156 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp address(_none), do: nil
 
+  @doc """
+  Params of `POST /v1/tax_rates` and `POST /v1/tax_rates/:id`: the fields set, with the reference
+  in the metadata. A change never sets the percentage or whether it is inclusive.
+  """
+  @spec tax_rate_params(MishkaPay.TaxRate.t()) :: map()
+  def tax_rate_params(%MishkaPay.TaxRate{} = rate) do
+    reject_nil(%{
+      "display_name" => rate.display_name,
+      "percentage" =>
+        on_create(rate, rate.percentage && Decimal.to_string(rate.percentage, :normal)),
+      "inclusive" => on_create(rate, rate.inclusive),
+      "active" => rate.active,
+      "country" => rate.country,
+      "state" => rate.state,
+      "jurisdiction" => rate.jurisdiction,
+      "tax_type" => rate.tax_type,
+      "description" => rate.description,
+      "metadata" => with_reference(rate.metadata, rate.reference)
+    })
+  end
+
+  defp on_create(%MishkaPay.TaxRate{id: nil}, value), do: value
+  defp on_create(_change, _value), do: nil
+
+  @doc "A Stripe Tax Rate as a `MishkaPay.TaxRate`."
+  @spec tax_rate(map()) :: {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+  def tax_rate(rate) do
+    %{
+      provider: "stripe",
+      id: rate["id"],
+      display_name: rate["display_name"],
+      percentage: percent(rate["percentage"]),
+      effective_percentage: percent(rate["effective_percentage"]),
+      inclusive: rate["inclusive"],
+      active: rate["active"],
+      country: blank(rate["country"]),
+      state: blank(rate["state"]),
+      jurisdiction: blank(rate["jurisdiction"]),
+      tax_type: blank(rate["tax_type"]),
+      description: blank(rate["description"]),
+      reference: get_in(rate, ["metadata", @reference]),
+      metadata: Map.delete(rate["metadata"] || %{}, @reference),
+      created_at: time(rate["created"])
+    }
+    |> reject_nil()
+    |> MishkaPay.TaxRate.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # Stripe answers a percentage as a JSON number.
+  defp percent(value) when is_integer(value), do: Decimal.new(value)
+  defp percent(value) when is_float(value), do: Decimal.from_float(value)
+  defp percent(_none), do: nil
+
+  # The tax rates on a line, expanded or by id.
+  defp tax_rate_ids([_ | _] = rates), do: Enum.map(rates, &id_of/1)
+  defp tax_rate_ids(_none), do: nil
+
+  @doc """
+  Params of `POST /v1/tax/registrations`: the country, and its kind (and state or province)
+  under the country's own `country_options`; it starts now unless `:active_from` says when.
+  """
+  @spec tax_registration_params(MishkaPay.TaxRegistration.t()) :: map()
+  def tax_registration_params(%MishkaPay.TaxRegistration{} = registration) do
+    country = String.downcase(registration.country)
+
+    %{
+      "country" => registration.country,
+      "country_options" => %{country => registration_options(registration)},
+      "active_from" => (registration.active_from && unix(registration.active_from)) || "now",
+      "expires_at" => unix(registration.expires_at)
+    }
+    |> reject_nil()
+  end
+
+  # Canada names a province only for a provincial registration; the US names its state for each.
+  defp registration_options(%{country: "CA", type: "province_standard" = type, state: state}),
+    do: %{"type" => type, type => %{"province" => state}}
+
+  defp registration_options(%{country: "US", type: type, state: state}),
+    do: %{"type" => type, "state" => state}
+
+  defp registration_options(%{type: type}), do: %{"type" => type}
+
+  @registration_statuses %{"active" => :active, "scheduled" => :scheduled, "expired" => :expired}
+
+  @doc "A Stripe Tax Registration as a `MishkaPay.TaxRegistration`."
+  @spec tax_registration(map()) ::
+          {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+  def tax_registration(registration) do
+    country = registration["country"]
+    options = get_in(registration, ["country_options", String.downcase(country || "")]) || %{}
+    type = options["type"]
+
+    %{
+      provider: "stripe",
+      id: registration["id"],
+      country: country,
+      type: type,
+      state: options["state"] || get_in(options, [type || "", "province"]),
+      status: Map.get(@registration_statuses, registration["status"]),
+      active_from: time(registration["active_from"]),
+      expires_at: time(registration["expires_at"]),
+      created_at: time(registration["created"])
+    }
+    |> reject_nil()
+    |> MishkaPay.TaxRegistration.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "Params of `POST /v1/tax/settings`: only the head office and defaults given."
+  @spec tax_settings_params(MishkaPay.TaxSettings.t()) :: map()
+  def tax_settings_params(%MishkaPay.TaxSettings{} = settings) do
+    defaults =
+      reject_nil(%{
+        "tax_code" => settings.tax_code,
+        "tax_behavior" => settings.tax_behavior && Atom.to_string(settings.tax_behavior)
+      })
+
+    reject_nil(%{
+      "head_office" =>
+        settings.head_office && %{"address" => address_params(settings.head_office)},
+      "defaults" => (defaults != %{} && defaults) || nil
+    })
+  end
+
+  @settings_behaviors %{
+    "inclusive" => :inclusive,
+    "exclusive" => :exclusive,
+    "inferred_by_currency" => :inferred_by_currency
+  }
+
+  @doc "Stripe Tax's settings (`tax.settings`) as a `MishkaPay.TaxSettings`."
+  @spec tax_settings(map()) :: {:ok, MishkaPay.TaxSettings.t()} | {:error, Splode.Error.t()}
+  def tax_settings(settings) do
+    office = address(get_in(settings, ["head_office", "address"]))
+
+    %{
+      provider: "stripe",
+      head_office: office && struct(Address, office),
+      tax_code: get_in(settings, ["defaults", "tax_code"]),
+      tax_behavior: Map.get(@settings_behaviors, get_in(settings, ["defaults", "tax_behavior"])),
+      status: Map.get(%{"active" => :active, "pending" => :pending}, settings["status"]),
+      missing_fields: get_in(settings, ["status_details", "pending", "missing_fields"])
+    }
+    |> reject_nil()
+    |> MishkaPay.TaxSettings.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   @doc "A Stripe Tax Transaction as a `MishkaPay.TaxTransaction`, made from `calculation_id`."
   @spec tax_transaction(map(), String.t()) ::
           {:ok, TaxTransaction.t()} | {:error, Splode.Error.t()}
@@ -933,6 +1085,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "auto_advance" => false,
       "pending_invoice_items_behavior" => "exclude",
       "currency" => draft_currency(draft.items),
+      "default_tax_rates" => draft.tax_rate_ids,
       "metadata" =>
         Map.merge(
           draft.metadata || %{},
@@ -988,8 +1141,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   # What one line charges: a catalog price by id, or a name with the price of one.
-  defp charge_params(%Price{id: id, quantity: quantity}) when is_binary(id),
-    do: %{"pricing" => %{"price" => id}, "quantity" => quantity}
+  defp charge_params(%Price{id: id, quantity: quantity} = price) when is_binary(id),
+    do: %{
+      "pricing" => %{"price" => id},
+      "quantity" => quantity,
+      "tax_rates" => price.tax_rate_ids
+    }
 
   defp charge_params(%Price{amount: amount} = price) do
     %{
@@ -998,7 +1155,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "unit_amount_decimal" => amount && amount |> minor() |> Integer.to_string(),
       "quantity" => price.quantity,
       "tax_code" => price.tax_code,
-      "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
+      "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior),
+      "tax_rates" => price.tax_rate_ids
     }
   end
 
@@ -1026,6 +1184,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       total: signed_money(item["amount"], currency),
       period_start: time(get_in(item, ["period", "start"])),
       period_end: time(get_in(item, ["period", "end"])),
+      tax_rate_ids: tax_rate_ids(item["tax_rates"]),
       reference: get_in(item, ["metadata", @reference]),
       metadata: Map.delete(item["metadata"] || %{}, @reference),
       created_at: time(item["date"])
@@ -1082,7 +1241,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp phase_params(%SubscriptionPhase{} = phase) do
     reject_nil(%{
       "items" =>
-        Enum.map(phase.items, &reject_nil(%{"price" => &1.id, "quantity" => &1.quantity})),
+        Enum.map(
+          phase.items,
+          &reject_nil(%{
+            "price" => &1.id,
+            "quantity" => &1.quantity,
+            "tax_rates" => &1.tax_rate_ids
+          })
+        ),
       "start_date" => unix(phase.start_at),
       "end_date" => unix(phase.end_at),
       "duration" =>

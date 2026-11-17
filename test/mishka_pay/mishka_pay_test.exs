@@ -739,6 +739,49 @@ defmodule MishkaPayTest do
                MishkaPay.reactivate_meter("acme", "m1", "site-a")
     end
 
+    test "a provider without tax rates or a tax setup refuses them, after the rate is checked" do
+      rate = %{provider: "acme", display_name: "VAT", percentage: "19", inclusive: true}
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :tax_rate}} =
+               MishkaPay.create_tax_rate(rate)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :percentage}]}} =
+               MishkaPay.create_tax_rate(%{rate | percentage: 19.5})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :percentage}]}} =
+               MishkaPay.create_tax_rate(%{rate | percentage: "101"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :inclusive}]}} =
+               MishkaPay.create_tax_rate(Map.delete(rate, :inclusive))
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :percentage}]}} =
+               MishkaPay.update_tax_rate(%{provider: "acme", id: "r1", percentage: "7"})
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :tax_setup}} =
+               MishkaPay.fetch_tax_settings("acme", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :type}]}} =
+               MishkaPay.create_tax_registration(%{provider: "acme", country: "DE"})
+    end
+
+    test "a line's tax rates are a list of ids" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids}]}} =
+               MishkaPay.create_invoice_item(%{
+                 provider: "acme",
+                 customer_id: "c1",
+                 price_id: "p1",
+                 tax_rate_ids: "txr_1"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids}]}} =
+               MishkaPay.create_invoice(%{
+                 provider: "acme",
+                 customer_id: "c1",
+                 items: [%{id: "p1"}],
+                 tax_rate_ids: [""]
+               })
+    end
+
     test "a provider without fraud reviews refuses them" do
       assert {:error, %Errors.Unsupported{provider: "acme", operation: :fraud}} =
                MishkaPay.list_fraud_reviews("acme", "site-a")

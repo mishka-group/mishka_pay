@@ -100,6 +100,11 @@ defmodule MishkaPay.Providers.PayPalTest do
                  }
                ]
              }, "checkout with a tax behavior"},
+            {%{
+               items: [
+                 %{name: "Ebook", amount: %{amount: "10", currency: "USD"}, tax_rate_ids: ["T1"]}
+               ]
+             }, "checkout with tax rates"},
             {%{items: [%{id: "price_1"}]}, "checkout by a provider price id"},
             {%{items: [%{name: "Ebook", amount: %{amount: "100", currency: "INR"}}]},
              "checkout in INR"},
@@ -260,6 +265,40 @@ defmodule MishkaPay.Providers.PayPalTest do
             end
           ] do
         assert {:error, %Errors.Unsupported{provider: "paypal", operation: :usage}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no tax rates, registrations or settings: each is refused before any request" do
+      for {call, capability} <- [
+            {fn ->
+               MishkaPay.create_tax_rate(%{
+                 provider: "paypal",
+                 display_name: "VAT",
+                 percentage: 19,
+                 inclusive: true
+               })
+             end, :tax_rate},
+            {fn -> MishkaPay.fetch_tax_rate("paypal", "T1", "site-a") end, :tax_rate},
+            {fn -> MishkaPay.update_tax_rate(%{provider: "paypal", id: "T1", active: false}) end,
+             :tax_rate},
+            {fn -> MishkaPay.list_tax_rates("paypal", "site-a") end, :tax_rate},
+            {fn ->
+               MishkaPay.create_tax_registration(%{
+                 provider: "paypal",
+                 country: "DE",
+                 type: "standard"
+               })
+             end, :tax_setup},
+            {fn -> MishkaPay.list_tax_registrations("paypal", "site-a") end, :tax_setup},
+            {fn -> MishkaPay.expire_tax_registration("paypal", "R1", "site-a") end, :tax_setup},
+            {fn -> MishkaPay.fetch_tax_settings("paypal", "site-a") end, :tax_setup},
+            {fn -> MishkaPay.update_tax_settings(%{provider: "paypal", tax_code: "t"}) end,
+             :tax_setup}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: ^capability}} =
+                 call.()
       end
 
       refute_received {:paypal, _method, _path, _headers, _body}

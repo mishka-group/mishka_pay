@@ -117,6 +117,12 @@ defmodule MishkaPay.Messages do
           | :subscription_status
           | :invoice_item_moves
           | :credit_note_one_of
+          | :tax_percentage
+          | :tax_rate_ids
+          | :tax_rate_fixed
+          | :tax_rates_line_only
+          | :tax_rates_automatic
+          | :registration_state
           | :credit_line_needs
           | :phase_prices
           | :phase_length
@@ -672,6 +678,40 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:choices),
     do: dgettext_noop("mishka_pay", "The %{field} field takes only: %{choices}")
+
+  defp msgid(:tax_percentage),
+    do: dgettext_noop("mishka_pay", "The percentage field must be an exact number from 0 to 100")
+
+  defp msgid(:tax_rate_ids),
+    do: dgettext_noop("mishka_pay", "The tax_rate_ids field must be a list of tax rate ids")
+
+  defp msgid(:tax_rate_fixed),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax rate's percentage and inclusive never change: make a new rate and archive this one"
+      )
+
+  defp msgid(:tax_rates_line_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Tax rates go on the lines of a checkout or a bill, not on a catalog price or a payment link"
+      )
+
+  defp msgid(:registration_state),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A state goes only with a US registration or a Canadian provincial one (province_standard)"
+      )
+
+  defp msgid(:tax_rates_automatic),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Tax rates set by hand do not go with automatic tax: turn automatic_tax off for this checkout"
+      )
 
   defp msgid(:credit_note_one_of),
     do: dgettext_noop("mishka_pay", "A credit note takes an amount or lines, one of them")

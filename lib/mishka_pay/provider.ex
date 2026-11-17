@@ -71,6 +71,10 @@ defmodule MishkaPay.Provider do
       `search_customers/2`, `delete_customer/2`;
     * `:tax_id`: `create_tax_id/2`, `list_tax_ids/2`, `delete_tax_id/3`;
     * `:tax`: `calculate_tax/2`, `record_tax/3`;
+    * `:tax_rate`: `create_tax_rate/2`, `fetch_tax_rate/2`, `update_tax_rate/2`,
+      `list_tax_rates/2` (and a line's or a bill's `:tax_rate_ids`);
+    * `:tax_setup`: `create_tax_registration/2`, `list_tax_registrations/2`,
+      `expire_tax_registration/3`, `fetch_tax_settings/1`, `update_tax_settings/2`;
     * `:shipping`: `create_shipping_rate/2`, `list_shipping_rates/2` (and a checkout's
       `:shipping_countries` and `:shipping_rates`);
     * `:portal`: `portal_session/2`, and the portal's setups: `create_portal_configuration/2`,
@@ -128,6 +132,8 @@ defmodule MishkaPay.Provider do
     :customer,
     :tax_id,
     :tax,
+    :tax_rate,
+    :tax_setup,
     :shipping,
     :portal,
     :payment_method,
@@ -179,6 +185,13 @@ defmodule MishkaPay.Provider do
     * `:tax_id`: keeps a business buyer's tax ids (EU VAT and the rest) on its customer.
     * `:tax`: counts the tax on a sale made outside its checkout, and records the sale for the
       site's tax reports.
+    * `:tax_rate`: keeps tax rates the seller sets by hand (a percentage, inclusive or on top,
+      for a place), and adds them to the lines of its checkouts and bills. Apart from `:tax`: a
+      provider may take fixed rates without counting any tax itself.
+    * `:tax_setup`: keeps where the seller is registered to collect tax, and the site's tax
+      settings (head office, the default tax code and behavior) that its tax counting uses.
+      Apart from `:tax`: a provider that counts the tax as the merchant of record has no
+      registrations of the seller's to keep.
     * `:shipping`: keeps shipping rates, and its checkout asks for a shipping address and
       charges the rate the buyer picks.
     * `:portal`: has a hosted page where a customer manages their own billing, and keeps setups
@@ -221,6 +234,8 @@ defmodule MishkaPay.Provider do
           | :customer
           | :tax_id
           | :tax
+          | :tax_rate
+          | :tax_setup
           | :shipping
           | :portal
           | :payment_method
@@ -581,6 +596,51 @@ defmodule MishkaPay.Provider do
   @callback list_shipping_rates(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
+  @doc "With `:tax_rate`. Makes a tax rate, and answers it with its `:id`."
+  @callback create_tax_rate(MishkaPay.TaxRate.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_rate`. Reads one tax rate, archived or not."
+  @callback fetch_tax_rate(tax_rate_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:tax_rate`. Changes tax rate `:id`: only the fields set, never its percentage or whether it
+  is inclusive.
+  """
+  @callback update_tax_rate(MishkaPay.TaxRate.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxRate.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_rate`. One page of tax rates, newest first; `:active` and `:inclusive` filter."
+  @callback list_tax_rates(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_setup`. Registers the seller to collect tax in a country, and answers it."
+  @callback create_tax_registration(MishkaPay.TaxRegistration.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:tax_setup`. One page of the seller's tax registrations; `:status` is `:active` (the
+  default), `:scheduled`, `:expired` or `:all`.
+  """
+  @callback list_tax_registrations(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_setup`. Ends a tax registration `at` a time (`nil`: now), and answers it."
+  @callback expire_tax_registration(
+              registration_id :: String.t(),
+              at :: DateTime.t() | nil,
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_setup`. Reads the site's tax settings."
+  @callback fetch_tax_settings(MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxSettings.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:tax_setup`. Changes the site's tax settings: only the fields set."
+  @callback update_tax_settings(MishkaPay.TaxSettings.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.TaxSettings.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:tax_id`. Removes one tax id from a customer."
   @callback delete_tax_id(
               customer_id :: String.t(),
@@ -939,6 +999,15 @@ defmodule MishkaPay.Provider do
                       delete_tax_id: 3,
                       calculate_tax: 2,
                       record_tax: 3,
+                      create_tax_rate: 2,
+                      fetch_tax_rate: 2,
+                      update_tax_rate: 2,
+                      list_tax_rates: 2,
+                      create_tax_registration: 2,
+                      list_tax_registrations: 2,
+                      expire_tax_registration: 3,
+                      fetch_tax_settings: 1,
+                      update_tax_settings: 2,
                       create_shipping_rate: 2,
                       list_shipping_rates: 2,
                       portal_session: 2,
@@ -1065,6 +1134,14 @@ defmodule MishkaPay.Provider do
     ],
     tax_id: [create_tax_id: 2, list_tax_ids: 2, delete_tax_id: 3],
     tax: [calculate_tax: 2, record_tax: 3],
+    tax_rate: [create_tax_rate: 2, fetch_tax_rate: 2, update_tax_rate: 2, list_tax_rates: 2],
+    tax_setup: [
+      create_tax_registration: 2,
+      list_tax_registrations: 2,
+      expire_tax_registration: 3,
+      fetch_tax_settings: 1,
+      update_tax_settings: 2
+    ],
     shipping: [create_shipping_rate: 2, list_shipping_rates: 2],
     portal: [
       portal_session: 2,

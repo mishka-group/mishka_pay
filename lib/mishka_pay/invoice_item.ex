@@ -17,8 +17,8 @@ defmodule MishkaPay.InvoiceItem do
     * `:customer_id`: whose bill it goes on.
     * `:invoice_id`: a draft bill to put it on; left out, it waits for the customer's next bill.
     * What it charges: a catalog price by `:price_id`, or a `:name` with an `:amount` (the price
-      of one); `:quantity` (1 unless given), `:tax_code` and `:tax_behavior` as on a
-      `MishkaPay.Price`.
+      of one); `:quantity` (1 unless given), `:tax_code`, `:tax_behavior` and `:tax_rate_ids`
+      (the seller's own `MishkaPay.TaxRate`s on it) as on a `MishkaPay.Price`.
     * `:reference`: the caller's own id for it; it makes the idempotency key, so the same reference
       never charges twice, and it comes back on it.
     * `:metadata`: extra pairs, string keys to string values.
@@ -54,6 +54,7 @@ defmodule MishkaPay.InvoiceItem do
       derives: "validate(enum=Atom[inclusive::exclusive])",
       validator: {MishkaPay.Price, :tax_behavior}
 
+    field :tax_rate_ids, list(), validator: {MishkaPay.TaxRate, :ids}
     field :total, Money.t(), validator: {MishkaPay.Money, :signed_field}
     field :period_start, DateTime.t(), derives: "validate(struct)"
     field :period_end, DateTime.t(), derives: "validate(struct)"
@@ -77,7 +78,8 @@ defmodule MishkaPay.InvoiceItem do
       amount: item.amount,
       quantity: item.quantity,
       tax_code: item.tax_code,
-      tax_behavior: item.tax_behavior
+      tax_behavior: item.tax_behavior,
+      tax_rate_ids: item.tax_rate_ids
     )
   end
 

@@ -402,9 +402,15 @@ defmodule MishkaPay.Providers.PayPal do
   end
 
   defp no_tax_behavior(items) do
-    case Enum.any?(items, &(not is_nil(&1.tax_behavior))) do
-      false -> :ok
-      true -> unsupported("checkout with a tax behavior")
+    cond do
+      Enum.any?(items, &(not is_nil(&1.tax_behavior))) ->
+        unsupported("checkout with a tax behavior")
+
+      Enum.any?(items, &set?(&1.tax_rate_ids)) ->
+        unsupported("checkout with tax rates")
+
+      true ->
+        :ok
     end
   end
 

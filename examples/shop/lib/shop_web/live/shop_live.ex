@@ -14,7 +14,8 @@ defmodule ShopWeb.ShopLive do
     * the catalog: the shop's products published to Stripe as products and prices, sold by price
       id, and every Stripe list read page by page;
     * payment links for catalog prices, with every limit a developer can choose, and one buyer's
-      address; invoices for one-time checkouts; the site's Stripe Tax setting;
+      address; invoices for one-time checkouts; the site's Stripe Tax setting; tax rates set by
+      hand, tax registrations and Stripe Tax's settings;
     * disputes: read from Stripe or by webhook, answered with evidence or accepted; every change
       reaches the page through Mishka Pay's own PubSub plugin (`Shop.Pay.Broadcast`); Radar's
       early fraud warnings and the reviews it holds, approved from the page;
@@ -518,6 +519,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.FilesComponent} id="files" tenant={@tenant} />
 
       <.live_component module={ShopWeb.TaxComponent} id="tax" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.TaxSetupComponent} id="tax-setup" tenant={@tenant} />
 
       <.live_component module={ShopWeb.UsageComponent} id="usage" tenant={@tenant} />
 
