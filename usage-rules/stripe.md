@@ -4,6 +4,11 @@
 `:subscription`, `:subscription_list`, `:webhook` and the rest. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
 `mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
 
+Develop and run live tests on a **Stripe Sandbox** (Dashboard → Sandboxes), never on live keys
+and not on the test mode of the main account: a Sandbox is an isolated account, and some flows
+only run there (Accounts v2 onboarding for a seller that takes transfers answers
+`connect_needs_sandbox` in test mode).
+
 ## Raw calls
 
 - `MishkaPay.request/1` calls any `api.stripe.com` path (`"/v1/tax/settings"`) with the
