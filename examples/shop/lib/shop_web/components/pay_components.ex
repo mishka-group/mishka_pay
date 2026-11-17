@@ -556,6 +556,10 @@ defmodule ShopWeb.PayComponents do
         Buying as <strong>{@buyer.name || @buyer.email}</strong>
         <code class="text-xs opacity-70">{@buyer.provider_id}</code>: Stripe fills their details
         and keeps the payment on their record.
+        <span :if={account_customer?(@buyer.provider_id)} data-testid="buyer-v2-note">
+          A customer made on Accounts v2 buys with Stripe as merchant of record off, unless you
+          choose otherwise: Managed Payments sells to no customer account.
+        </span>
       </span>
       <input type="hidden" name="customer_id" value={@buyer.provider_id} />
       <input type="hidden" name="buyer" value={@buyer.id} />
@@ -570,6 +574,10 @@ defmodule ShopWeb.PayComponents do
     </div>
     """
   end
+
+  @doc "Whether a Stripe customer id is an account with the customer configuration (Accounts v2)."
+  def account_customer?("acct_" <> _id), do: true
+  def account_customer?(_id), do: false
 
   @doc "Stripe's test cards, each with what it does."
   def test_cards(assigns) do

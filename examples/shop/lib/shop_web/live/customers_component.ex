@@ -1,8 +1,11 @@
 defmodule ShopWeb.CustomersComponent do
   @moduledoc """
   The customers part of the demo shop, on Mishka Pay's `:customer` kind
-  (`MishkaPay.Ash.Resource`): register a Stripe customer (`:register`), find customers on Stripe
-  by email (`MishkaPay.list_customers/3`) and keep one (`:sync`), and open one at a time: the
+  (`MishkaPay.Ash.Resource`): register a Stripe customer (`:register`) on Accounts v2 (an account
+  with the customer configuration, `acct_...`, the default) or as a v1 Customer (`cus_...`), find
+  customers on Stripe (the newest with `MishkaPay.list_customers/3`, by email with
+  `MishkaPay.search_customers/3`, since Accounts v2 lists take no email) and keep one (`:sync`),
+  and open one at a time: the
   stored row beside the customer read live from Stripe (`MishkaPay.fetch_customer/3`), an edit
   form (`:edit`), its customer portal (`:portal`), "Buy as this customer", which makes the
   next checkout pay as that customer, and Delete (`:remove`), which deletes the customer on Stripe
@@ -53,7 +56,10 @@ defmodule ShopWeb.CustomersComponent do
 
   # Stripe accepts a customer with no details at all; the shop needs an email to reach them.
   def handle_event("register", params, socket) do
-    args = Map.put(fields(params, ~w(email name phone reference)), :tenant, socket.assigns.tenant)
+    args =
+      params
+      |> fields(~w(email name phone reference))
+      |> Map.merge(%{tenant: socket.assigns.tenant, api: api(params["api"])})
 
     with {:ok, args} <- needs_email(args),
          {:ok, row} <-
@@ -275,6 +281,13 @@ defmodule ShopWeb.CustomersComponent do
             <input name="phone" type="tel" class="input input-sm" data-testid="new-customer-phone" />
           </label>
           <label class="fieldset">
+            <span class="fieldset-legend">Stripe API</span>
+            <select name="api" class="select select-sm" data-testid="new-customer-api">
+              <option value="v2" selected>Accounts v2 (recommended)</option>
+              <option value="v1">v1 Customer</option>
+            </select>
+          </label>
+          <label class="fieldset">
             <span class="fieldset-legend">Reference (your user id)</span>
             <input
               name="reference"
@@ -286,7 +299,10 @@ defmodule ShopWeb.CustomersComponent do
         </div>
         <p class="text-xs opacity-70">
           The same reference sent again within a day answers the same customer. With other
-          details Stripe refuses it: change a customer with Edit instead.
+          details Stripe refuses it: change a customer with Edit instead. Accounts v2 makes an
+          account with the customer configuration (<code>acct_...</code>), which every payment
+          call takes as <code>customer_account</code>; a v1 Customer (<code>cus_...</code>) is
+          still needed for usage billing and entitlements, where Stripe takes no account yet.
         </p>
         <div>
           <button
@@ -323,10 +339,11 @@ defmodule ShopWeb.CustomersComponent do
             <.icon name="hero-x-mark" class="size-4" />
           </button>
         </div>
-        <.hint>MishkaPay.list_customers/3</.hint>
+        <.hint>MishkaPay.list_customers/3, MishkaPay.search_customers/3</.hint>
         <p :if={@found == []} class="text-sm opacity-70" data-testid="found-empty">
-          Stripe has no customer with that email. Stripe's list leaves out customers made on a
-          test clock: open those from their subscription instead.
+          Stripe has no customer with that email. Its search finds a customer a minute or so after
+          it is made, and its list leaves out customers made on a test clock: open those from
+          their subscription instead.
         </p>
         <ul class="space-y-1">
           <li
@@ -448,6 +465,8 @@ defmodule ShopWeb.CustomersComponent do
                 <dd data-testid="customer-live-email">{live.email || "–"}</dd>
                 <dt class="opacity-70">Name</dt>
                 <dd data-testid="customer-live-name">{live.name || "–"}</dd>
+                <dt class="opacity-70">Stripe API</dt>
+                <dd data-testid="customer-live-api">{api_label(live.api)}</dd>
                 <dt class="opacity-70">Phone</dt>
                 <dd>{live.phone || "–"}</dd>
                 <dt class="opacity-70">Default card</dt>
@@ -667,9 +686,9 @@ defmodule ShopWeb.CustomersComponent do
 
   # One page of Stripe's customers, 10 at a time, added to those found before it.
   defp find_page(socket, cursor) do
-    opts = [limit: 10, after: cursor] ++ socket.assigns.found_filter
+    page = [limit: 10, after: cursor]
 
-    case MishkaPay.list_customers("stripe", socket.assigns.tenant, opts) do
+    case look_up(socket.assigns.tenant, socket.assigns.found_filter, page) do
       {:ok, %MishkaPay.Page{items: customers, next: next}} ->
         found = socket.assigns.found ++ customers
         assign(socket, found: found, found_next: next, saved: saved(found))
@@ -678,6 +697,16 @@ defmodule ShopWeb.CustomersComponent do
         say(socket, :error, MishkaPay.Ash.message(error))
     end
   end
+
+  # Stripe's Accounts v2 lists take no email: an email is Stripe's customer search, which finds
+  # customers made on either API; no email lists the newest on the site's customer API.
+  defp look_up(tenant, [email: _email] = filter, page),
+    do: MishkaPay.search_customers("stripe", tenant, page ++ filter)
+
+  defp look_up(tenant, [], page), do: MishkaPay.list_customers("stripe", tenant, page)
+
+  defp api("v1"), do: :v1
+  defp api(_recommended), do: :v2
 
   # Which of the customers found on Stripe the shop keeps already, in one read.
   defp saved(customers) do
@@ -734,6 +763,9 @@ defmodule ShopWeb.CustomersComponent do
 
   defp buyer?(customer, %{id: id}), do: customer.id == id
   defp buyer?(_customer, _no_buyer), do: false
+
+  defp api_label(:v2), do: "Accounts v2 (customer configuration)"
+  defp api_label(_v1), do: "v1 Customer"
 
   defp yes_no(nil), do: "no"
   defp yes_no(_card), do: "yes"

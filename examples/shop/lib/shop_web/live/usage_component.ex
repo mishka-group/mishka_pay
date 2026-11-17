@@ -391,7 +391,7 @@ defmodule ShopWeb.UsageComponent do
             <.meter_events meters={@meters} value={@report_form["event_name"]} />
             <.input_field
               name="customer_id"
-              label="Customer id"
+              label="v1 Customer id (Stripe takes no account here)"
               value={@report_form["customer_id"]}
               placeholder="cus_..."
               testid="usage-customer"
@@ -473,7 +473,7 @@ defmodule ShopWeb.UsageComponent do
             <.meter_ids meters={@meters} testid="summary-meter" />
             <.input_field
               name="customer_id"
-              label="Customer id"
+              label="v1 Customer id (Stripe takes no account here)"
               placeholder="cus_..."
               testid="summary-customer"
             />

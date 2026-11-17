@@ -60,15 +60,117 @@ defmodule ShopWeb.CustomersComponentTest do
     assert has_element?(view, "[data-testid=customer-delete]")
   end
 
-  defp seed_customer do
-    Ash.Seed.seed!(Shop.Pay.Customer, %{
-      provider: "stripe",
-      provider_id: "cus_ada",
-      tenant: "demo",
-      email: "ada@example.com",
-      name: "Ada",
-      metadata: %{},
-      synced_at: DateTime.utc_now()
+  @grace %{
+    "id" => "acct_grace",
+    "object" => "v2.core.account",
+    "applied_configurations" => ["customer"],
+    "closed" => false,
+    "contact_email" => "grace@example.com",
+    "display_name" => "Grace",
+    "created" => "2026-11-17T12:36:17.000Z",
+    "metadata" => %{}
+  }
+
+  test "New customer makes an Accounts v2 customer by default, and a v1 Customer when chosen", %{
+    conn: conn
+  } do
+    StripeRoutes.stub(%{
+      {"POST", "/v2/core/accounts"} => @grace,
+      {"POST", "/v1/customers"} => @ada
     })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=new-customer-toggle]") |> render_click()
+
+    view
+    |> form("[data-testid=new-customer-form]", email: "grace@example.com", name: "Grace")
+    |> render_submit()
+
+    assert_received {:stripe, "POST", "/v2/core/accounts", %{}}
+    assert has_element?(view, "[data-testid=customer-row][data-customer-id=acct_grace]")
+
+    view |> element("[data-testid=new-customer-toggle]") |> render_click()
+
+    view
+    |> form("[data-testid=new-customer-form]", email: "ada@example.com", api: "v1")
+    |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/customers", %{"email" => "ada@example.com"}}
+    assert has_element?(view, "[data-testid=customer-row][data-customer-id=cus_ada]")
+  end
+
+  test "Find on Stripe searches by email, which finds v2 customers by their account, and lists the newest without one",
+       %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/customers/search"} =>
+        StripeRoutes.list([Map.put(@ada, "customer_account", "acct_grace")]),
+      {"GET", "/v2/core/accounts"} => %{"data" => [@grace], "next_page_url" => nil}
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view
+    |> form("[data-testid=find-customer-form]", email: "ada@example.com")
+    |> render_submit()
+
+    assert_received {:stripe, "GET", "/v1/customers/search", %{"query" => query}}
+    assert query =~ "ada@example.com"
+    assert has_element?(view, "[data-testid=found-customer][data-customer-id=acct_grace]")
+
+    view |> form("[data-testid=find-customer-form]", email: "") |> render_submit()
+
+    assert_received {:stripe, "GET", "/v2/core/accounts",
+                     %{"applied_configurations" => %{"0" => "customer"}}}
+  end
+
+  test "buying as a v2 customer sends it as customer_account, with merchant of record off", %{
+    conn: conn
+  } do
+    StripeRoutes.stub(%{
+      {"GET", "/v2/core/accounts/acct_grace"} => @grace,
+      {"POST", "/v1/checkout/sessions"} => %{
+        "object" => "checkout.session",
+        "id" => "cs_test_grace",
+        "url" => "https://checkout.stripe.com/c/pay/cs_test_grace",
+        "status" => "open"
+      }
+    })
+
+    Ash.create!(
+      Shop.Catalog.Product,
+      %{slug: "hoodie", name: "Elixir hoodie", price: "39.00", interval: nil, position: 1},
+      action: :seed,
+      authorize?: false
+    )
+
+    row = seed_customer(%{provider_id: "acct_grace", email: "grace@example.com"})
+    {:ok, view, _html} = live(conn, ~p"/?buyer=#{row.id}")
+    assert has_element?(view, "[data-testid=buyer-v2-note]")
+
+    assert {:error, {:redirect, %{to: "https://checkout.stripe.com/c/pay/cs_test_grace"}}} =
+             view |> form("#buy") |> render_submit(%{"product" => "hoodie"})
+
+    assert_received {:stripe, "POST", "/v1/checkout/sessions", params}
+    assert params["customer_account"] == "acct_grace"
+    refute Map.has_key?(params, "customer")
+    assert params["managed_payments"] == %{"enabled" => "false"}
+  end
+
+  defp seed_customer(attrs \\ %{}) do
+    customer =
+      Map.merge(
+        %{
+          provider: "stripe",
+          provider_id: "cus_ada",
+          tenant: "demo",
+          email: "ada@example.com",
+          name: "Ada",
+          metadata: %{},
+          synced_at: DateTime.utc_now()
+        },
+        attrs
+      )
+
+    Ash.Seed.seed!(Shop.Pay.Customer, customer)
   end
 end
