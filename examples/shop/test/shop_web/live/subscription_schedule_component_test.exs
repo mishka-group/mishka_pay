@@ -120,6 +120,31 @@ defmodule ShopWeb.SubscriptionScheduleComponentTest do
     assert view |> element("[data-testid=schedule-status]") |> render() =~ "canceled"
   end
 
+  test "the plan picked stays picked when another field changes, and is the one sent",
+       %{conn: conn} do
+    plan("pro-monthly", "price_pro", 1)
+    team_plan()
+
+    StripeRoutes.stub(%{
+      {"GET", "/v1/subscriptions/sub_ada"} => subscription(nil),
+      {"POST", "/v1/subscription_schedules"} => schedule("active", [phase(@start, @end_)]),
+      {"POST", "/v1/subscription_schedules/sub_sched_1"} => schedule("active", two_phases())
+    })
+
+    view = open_subscription(conn)
+    view |> element("[data-testid=schedule-open]") |> render_click()
+    date = Date.utc_today() |> Date.add(10) |> Date.to_iso8601()
+
+    view |> form("[data-testid=schedule-form]", %{"price_id" => "price_team"}) |> render_change()
+    view |> form("[data-testid=schedule-form]", %{"date" => date}) |> render_change()
+    assert has_element?(view, "[data-testid=schedule-plan] option[value=price_team][selected]")
+
+    view |> form("[data-testid=schedule-form]") |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/subscription_schedules/sub_sched_1",
+                     %{"phases" => %{"1" => %{"items" => %{"0" => %{"price" => "price_team"}}}}}}
+  end
+
   test "a date gone by or no periods is refused before Stripe is asked", %{conn: conn} do
     team_plan()
     StripeRoutes.stub(%{{"GET", "/v1/subscriptions/sub_ada"} => subscription(nil)})
@@ -154,16 +179,18 @@ defmodule ShopWeb.SubscriptionScheduleComponentTest do
     view
   end
 
-  defp team_plan do
+  defp team_plan, do: plan("team-monthly", "price_team", 2)
+
+  defp plan(slug, price_id, position) do
     plan =
       Ash.create!(
         Shop.Catalog.Product,
-        %{slug: "team-monthly", name: "Team", price: "19.00", interval: :month, position: 2},
+        %{slug: slug, name: slug, price: "19.00", interval: :month, position: position},
         action: :seed,
         authorize?: false
       )
 
-    Ash.update!(plan, %{stripe_price_id: "price_team"}, action: :published, authorize?: false)
+    Ash.update!(plan, %{stripe_price_id: price_id}, action: :published, authorize?: false)
   end
 
   defp subscription(schedule_id) do

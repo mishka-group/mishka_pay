@@ -156,7 +156,11 @@ defmodule ShopWeb.SubscriptionScheduleComponent do
         <label :if={@form["how"] != "stop_after"} class="fieldset">
           <span class="fieldset-legend">Plan</span>
           <select name="price_id" class="select select-sm" data-testid="schedule-plan">
-            <option :for={plan <- @plans} value={plan.stripe_price_id}>
+            <option
+              :for={plan <- @plans}
+              value={plan.stripe_price_id}
+              selected={@form["price_id"] == plan.stripe_price_id}
+            >
               {plan.name} (${plan.price} / {plan.interval})
             </option>
           </select>
