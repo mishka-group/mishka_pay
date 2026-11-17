@@ -71,20 +71,20 @@ defmodule MishkaPay.ReplayTest do
     assert_received {:webhook_event, %MishkaPay.Event{id: "evt_3", payment_id: "pi_evt_3"}}
   end
 
-  test "by default only the events Mishka Pay acts on are asked for, at most 20 types a call" do
+  test "by default the window is read once, unfiltered, and only the events Mishka Pay acts on are delivered" do
     stripe()
 
-    assert {:ok, _replayed} =
+    assert {:ok, %{delivered: 2, failed: []}} =
              MishkaPay.replay_events("stripe", "site-a", since: DateTime.utc_now())
 
-    queries = for {:query, query} <- collect(), do: URI.query_decoder(query) |> Enum.to_list()
+    messages = collect()
+    queries = for {:query, query} <- messages, do: URI.decode_query(query)
 
-    asked =
-      for query <- queries, {"types[]", type} <- query, uniq: true, do: type
+    assert [%{"limit" => "100"}, %{"starting_after" => "evt_2"}] = queries
+    refute Enum.any?(queries, &Map.has_key?(&1, "types[]"))
 
-    assert Enum.sort(asked) == Stripe.handled_events() |> Map.keys() |> Enum.sort()
-
-    assert Enum.all?(queries, fn query -> Enum.count(query, &(elem(&1, 0) == "types[]")) <= 20 end)
+    assert ["evt_1", "evt_3"] =
+             for({:webhook_event, %MishkaPay.Event{id: id}} <- messages, do: id)
   end
 
   test "more than 20 types in one call is refused before any request" do
