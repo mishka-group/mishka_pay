@@ -355,7 +355,7 @@ defmodule MishkaPay.Providers.PayPalTest do
             fn -> MishkaPay.fetch_connected_account("paypal", "A1", "site-a") end,
             fn -> MishkaPay.update_connected_account(%{provider: "paypal", id: "A1"}) end,
             fn -> MishkaPay.list_connected_accounts("paypal", "site-a") end,
-            fn -> MishkaPay.reject_connected_account("paypal", "A1", "site-a") end,
+            fn -> MishkaPay.close_connected_account("paypal", "A1", "site-a") end,
             fn -> MishkaPay.account_link(link) end,
             fn -> MishkaPay.login_link("paypal", "A1", "site-a") end
           ] do

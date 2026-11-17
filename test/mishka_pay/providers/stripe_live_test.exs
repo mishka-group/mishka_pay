@@ -1230,6 +1230,73 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.fetch_subscription("stripe", subscription)
   end
 
+  test "subscriptions are made flexible with itemized proration discounts, or classic when asked",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "billing-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Billing mode plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    {:ok, %MishkaPay.Price{id: price}} =
+      MishkaPay.create_price(%{
+        provider: "stripe",
+        product_id: product,
+        amount: %{amount: "9.00", currency: "USD"},
+        interval: :month
+      })
+
+    for billing <- [%{}, %{billing_mode: :classic}, %{proration_discounts: :included}] do
+      assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+               MishkaPay.checkout(
+                 Map.merge(billing, %{
+                   provider: "stripe",
+                   mode: :subscription,
+                   items: [%{id: price}],
+                   success_url: "https://shop.test/welcome",
+                   cancel_url: "https://shop.test/pricing",
+                   merchant_of_record: false
+                 })
+               )
+    end
+
+    for {billing, read} <- [
+          {%{}, %{"type" => "flexible", "flexible" => %{"proration_discounts" => "itemized"}}},
+          {%{billing_mode: :classic}, %{"type" => "classic", "flexible" => nil}}
+        ] do
+      assert {:ok, %MishkaPay.SubscriptionSchedule{id: id, subscription_id: subscription}} =
+               MishkaPay.create_subscription_schedule(
+                 Map.merge(billing, %{
+                   provider: "stripe",
+                   customer_id: customer,
+                   end_behavior: :cancel,
+                   phases: [
+                     %{items: [%{id: price}], trial: true, iterations: 1, interval: :month}
+                   ]
+                 })
+               )
+
+      assert {:ok, %{"billing_mode" => schedule_mode}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/subscription_schedules/#{id}"})
+
+      assert {:ok, %{"billing_mode" => subscription_mode}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/subscriptions/#{subscription}"})
+
+      for mode <- [schedule_mode, subscription_mode],
+          do: assert(Map.take(mode, ["type", "flexible"]) == read)
+
+      assert {:ok, %MishkaPay.SubscriptionSchedule{status: :canceled}} =
+               MishkaPay.cancel_subscription_schedule("stripe", id)
+    end
+  end
+
   test "a credit note is previewed, made once per reference by line, listed and voided on an open bill, then made on a paid one",
        %{key: key} do
     run = run_id()
@@ -1554,6 +1621,81 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   defp archive(key, %MishkaPay.Product{id: id}),
     do: cleanup(key, &Stripe.update_product(%MishkaPay.Product{id: id, active: false}, &1))
+
+  test "a report sent through Stripe's meter event stream takes a session token first",
+       %{key: key} do
+    run = run_id()
+    event = "mishka_pay_stream_#{run}"
+
+    {:ok, %MishkaPay.Meter{id: meter_id}} =
+      MishkaPay.create_meter(%{provider: "stripe", name: "Stream #{run}", event_name: event})
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "stream-#{run}@example.com"})
+
+    on_exit(fn ->
+      cleanup(key, &Stripe.deactivate_meter(meter_id, &1))
+      cleanup(key, &delete_customer(customer_id, &1))
+    end)
+
+    usage = %{
+      provider: "stripe",
+      event_name: event,
+      customer_id: customer_id,
+      value: 2,
+      reference: "stream-#{run}",
+      stream: true
+    }
+
+    test = self()
+    handler = "stream-#{run}"
+
+    :telemetry.attach(
+      handler,
+      [:mishka_pay, :request, :stop],
+      fn _event, _measure, meta, _config -> send(test, {:sent, meta.path, meta.status}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _ = first}} =
+             MishkaPay.report_usage(usage)
+
+    assert_received {:sent, "/v2/billing/meter_event_session", 200}
+    assert_received {:sent, "/v2/billing/meter_event_stream", status} when status in 200..299
+
+    # The session's token is kept: the next report goes straight to the stream.
+    assert {:ok, %MishkaPay.Usage{id: second}} =
+             MishkaPay.report_usage(%{usage | reference: nil, value: "0.5"})
+
+    refute second == first
+    refute_received {:sent, "/v2/billing/meter_event_session", _status}
+    assert_received {:sent, "/v2/billing/meter_event_stream", _status}
+
+    # Stripe counts digits as Mishka Pay does: sixteen are refused, zeros that end a whole number
+    # too, and more than twelve after the point. Sent raw, past Mishka Pay's own check.
+    raw = fn value ->
+      MishkaPay.request(%{
+        provider: "stripe",
+        method: :post,
+        path: "/v1/billing/meter_events",
+        params: %{
+          "event_name" => event,
+          "payload" => %{"stripe_customer_id" => customer_id, "value" => value}
+        }
+      })
+    end
+
+    for value <- ["1234567890123456", "1000000000000000", "0.1234567890123"],
+        do: assert({:error, %Errors.Rejected{status: 400}} = raw.(value))
+
+    for value <- ["123456789012345", "123.123456789012", "0012345678901234.5"],
+        do: assert({:ok, %{"identifier" => _}} = raw.(value))
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :value}]}} =
+             MishkaPay.report_usage(%{usage | value: 1_234_567_890_123_456})
+  end
 
   test "a meter counts a customer's usage once per reference, a metered price bills it, and the meter is turned off",
        %{key: key} do
@@ -1962,6 +2104,41 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.cancel_payment_intent("stripe", held)
   end
 
+  test "a payment taken at once is Stripe's automatic_async, or its older automatic when asked, on an intent and a checkout, and reads back as automatic" do
+    for {capture, sent} <- [{:automatic, "automatic_async"}, {:automatic_sync, "automatic"}] do
+      assert {:ok, %MishkaPay.PaymentIntent{id: id, capture: :automatic}} =
+               MishkaPay.create_payment_intent(%{
+                 provider: "stripe",
+                 amount: %{amount: "7.00", currency: "USD"},
+                 capture: capture,
+                 payment_method_id: "pm_card_mastercard"
+               })
+
+      assert {:ok, %{"capture_method" => ^sent}} =
+               MishkaPay.request(%{provider: "stripe", path: "/v1/payment_intents/#{id}"})
+
+      assert {:ok, %MishkaPay.PaymentIntent{id: ^id, status: :succeeded, capture: :automatic}} =
+               MishkaPay.confirm_payment_intent("stripe", id, nil,
+                 return_url: "https://shop.test/paid"
+               )
+
+      assert {:ok, %Payment{id: ^id, status: :paid}} = MishkaPay.fetch_payment("stripe", id)
+
+      for invoice <- [false, true] do
+        assert {:ok, %Checkout{id: "cs_test_" <> _, status: :open}} =
+                 MishkaPay.checkout(%{
+                   provider: "stripe",
+                   items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+                   success_url: "https://shop.test/thanks",
+                   cancel_url: "https://shop.test/cart",
+                   capture: capture,
+                   invoice: invoice,
+                   merchant_of_record: false
+                 })
+      end
+    end
+  end
+
   test "a setup intent saves a test card on a customer without a charge; another is canceled",
        %{key: key} do
     run = run_id()
@@ -2157,37 +2334,319 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     refute Exception.message(error) =~ "sk_test"
   end
 
-  # Stripe makes connected accounts only for a platform that signed up for Connect in its
-  # Dashboard; a sandbox that has not is told so plainly, and that is all this test can check there.
-  test "an express account is made once per reference, read, changed, listed and onboarded by link" do
+  # Accounts v2 is Stripe's default for a platform. A sandbox that has not signed up for Connect
+  # is told so plainly, and that is all this test can check there.
+  test "an account is made on Accounts v2 once per reference, read with both APIs, changed, listed, linked to onboarding and closed" do
     run = run_id()
 
     attrs = %{
       provider: "stripe",
-      type: :express,
+      configurations: [:merchant],
       country: "US",
       email: "seller-#{run}@example.com",
-      capabilities: ["card_payments", "transfers"],
       reference: "site-#{run}"
     }
 
-    assert {:ok, %MishkaPay.Page{items: listed}} =
-             MishkaPay.list_connected_accounts("stripe", nil, limit: 5)
-
-    assert Enum.all?(listed, &match?(%MishkaPay.ConnectedAccount{id: "acct_" <> _}, &1))
-
     case MishkaPay.create_connected_account(attrs) do
-      {:ok, %MishkaPay.ConnectedAccount{id: "acct_" <> _ = id, type: :express} = account} ->
-        with_account(id, fn -> onboarded_by_link(account, attrs, run) end)
+      {:ok, %MishkaPay.ConnectedAccount{id: "acct_" <> _ = id} = account} ->
+        with_account(id, fn -> made_on_v2(account, attrs, run) end)
 
       {:error, %Errors.Rejected{code: "connect_not_set_up"} = error} ->
         assert Exception.message(error) =~ "signed up for Connect"
     end
   end
 
-  # Money can reach only a connected account that finished onboarding, which a test cannot do on
-  # its own; what runs live is reading the lists, and that an account or object that is not there
-  # is refused plainly, for a transfer and for a checkout made for a seller.
+  defp made_on_v2(%{id: id} = account, attrs, run) do
+    assert %{
+             api: :v2,
+             dashboard: :express,
+             configurations: [:merchant],
+             fees_collector: :application,
+             losses_collector: :application,
+             country: "US",
+             charges_enabled: false,
+             details_submitted: false,
+             closed: false,
+             created_at: %DateTime{}
+           } = account
+
+    assert account.reference == "site-#{run}"
+    assert "external_account" in account.requirements_due
+    assert account.capability_status["merchant.card_payments"] in [:restricted, :pending]
+
+    assert {:ok, %{id: ^id}} = MishkaPay.create_connected_account(attrs)
+    assert {:ok, %{id: ^id, api: :v2}} = MishkaPay.fetch_connected_account("stripe", id)
+
+    # Stripe's v1 API reads an account made on v2, as a v1 account with v1's capabilities.
+    assert {:ok, %{id: ^id, api: :v1, dashboard: :express, capabilities: [_ | _]}} =
+             MishkaPay.fetch_connected_account("stripe", id, nil, api: :v1)
+
+    name = "Shop #{run}"
+
+    assert {:ok, %MishkaPay.ConnectedAccount{id: ^id, business_name: ^name}} =
+             MishkaPay.update_connected_account(%{
+               provider: "stripe",
+               id: id,
+               business_name: name
+             })
+
+    assert {:ok, %MishkaPay.Page{items: listed} = page} =
+             MishkaPay.list_connected_accounts("stripe", nil,
+               limit: 1,
+               configurations: [:merchant]
+             )
+
+    assert Enum.all?(listed, &match?(%MishkaPay.ConnectedAccount{api: :v2, closed: false}, &1))
+
+    if page.has_more do
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_connected_accounts("stripe", nil, limit: 1, after: page.next)
+    end
+
+    link = %{
+      provider: "stripe",
+      account_id: id,
+      refresh_url: "https://shop.test/connect/again",
+      return_url: "https://shop.test/connect/done"
+    }
+
+    assert {:ok,
+            %MishkaPay.AccountLink{
+              url: "https://connect.stripe.com/" <> _,
+              expires_at: %DateTime{}
+            }} = MishkaPay.account_link(link)
+
+    # Stripe collects an Express seller's details itself, so only it may send them to update.
+    assert {:error, %Errors.Rejected{status: 400}} =
+             MishkaPay.account_link(Map.put(link, :type, :update))
+
+    # A login link needs an account that finished onboarding.
+    assert {:error, %Errors.Rejected{}} = MishkaPay.login_link("stripe", id)
+
+    assert {:ok, %MishkaPay.ConnectedAccount{id: ^id, closed: true}} =
+             MishkaPay.close_connected_account("stripe", id)
+
+    assert {:ok, %{closed: true}} = MishkaPay.fetch_connected_account("stripe", id)
+  end
+
+  # A merchant that also takes transfers is onboarded by link only in a Stripe sandbox; an
+  # account's test mode refuses the link plainly.
+  test "an account that sells and takes transfers is made on Accounts v2 and its onboarding link is made, or plainly refused in test mode" do
+    run = run_id()
+
+    case MishkaPay.create_connected_account(%{
+           provider: "stripe",
+           country: "US",
+           email: "seller-#{run}@example.com",
+           reference: "seller-#{run}"
+         }) do
+      {:ok, %{id: id, configurations: configurations}} ->
+        with_account(id, fn ->
+          assert Enum.sort(configurations) == [:merchant, :recipient]
+
+          case MishkaPay.account_link(%{
+                 provider: "stripe",
+                 account_id: id,
+                 refresh_url: "https://shop.test/connect/again",
+                 return_url: "https://shop.test/connect/done"
+               }) do
+            {:ok, %MishkaPay.AccountLink{url: "https://connect.stripe.com/" <> _}} ->
+              :ok
+
+            {:error, %Errors.Rejected{code: "connect_needs_sandbox"} = error} ->
+              assert Exception.message(error) =~ "sandbox"
+          end
+        end)
+
+      {:error, %Errors.Rejected{code: "connect_not_set_up"}} ->
+        :ok
+    end
+  end
+
+  # Stripe takes the seller's details from the platform when the seller has no dashboard: with
+  # Stripe's test identity (a 1901 birthday, SSN 000000000, the address that always matches) its
+  # transfers turn on at once. The account is made with a raw API v2 call, which sends JSON.
+  test "a seller onboarded with Stripe's test identity takes a transfer, sees it in its balance, and gives it back before it is closed" do
+    run = run_id()
+
+    assert {:ok, %{"default_currency" => currency}} =
+             MishkaPay.request(%{provider: "stripe", path: "/v1/account"})
+
+    case MishkaPay.request(%{
+           provider: "stripe",
+           method: :post,
+           path: "/v2/core/accounts",
+           params: test_seller(run),
+           reference: "test-seller-#{run}"
+         }) do
+      {:ok, %{"id" => "acct_" <> _ = id}} ->
+        with_account(id, fn -> paid_and_given_back(id, String.upcase(currency), run) end)
+
+      {:error, %Errors.Rejected{code: "connect_not_set_up"}} ->
+        :ok
+    end
+  end
+
+  # A charge the transfer is paid from (Stripe's `source_transaction`): the transfer then never
+  # depends on the sandbox's available balance, which earlier runs and refunds move.
+  defp charged(currency, run) do
+    assert {:ok, %MishkaPay.PaymentIntent{id: intent}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "2.00", currency: currency},
+               payment_method_id: "pm_card_mastercard",
+               reference: "fund-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.PaymentIntent{status: :succeeded}} =
+             MishkaPay.confirm_payment_intent("stripe", intent, nil,
+               return_url: "https://shop.test/paid"
+             )
+
+    assert {:ok, %{"latest_charge" => "ch_" <> _ = charge}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               method: :get,
+               path: "/v1/payment_intents/#{intent}"
+             })
+
+    charge
+  end
+
+  defp paid_and_given_back(id, currency, run) do
+    assert {:ok,
+            %MishkaPay.ConnectedAccount{
+              id: ^id,
+              dashboard: :none,
+              transfers_enabled: true,
+              requirements_due: due
+            }} = MishkaPay.fetch_connected_account("stripe", id)
+
+    refute "identity.individual.id_numbers.us_ssn" in due
+
+    charge = charged(currency, run)
+
+    assert {:ok, %MishkaPay.Transfer{id: "tr_" <> _ = transfer_id, destination: ^id}} =
+             MishkaPay.create_transfer(%{
+               provider: "stripe",
+               amount: %{amount: "1.00", currency: currency},
+               destination: id,
+               source_charge_id: charge,
+               reference: "transfer-#{run}"
+             })
+
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: System.fetch_env!("STRIPE_SECRET_KEY"), account_id: id},
+      "seller"
+    )
+
+    assert {:ok, %MishkaPay.Balance{} = balance} = MishkaPay.fetch_balance("stripe", "seller")
+
+    # Stripe pays the seller in its own currency, converted at its rate.
+    assert Enum.any?(balance.available ++ balance.pending, &Money.positive?/1)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_payouts("stripe", "seller", limit: 3)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Transfer{id: ^transfer_id} | _]}} =
+             MishkaPay.list_transfers("stripe", nil, destination: id)
+
+    assert {:ok, %MishkaPay.Checkout{url: "https://checkout.stripe.com/" <> _}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: currency}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false,
+               destination: id,
+               application_fee: %{amount: "2.00", currency: currency},
+               reference: "seller-sale-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.Transfer{reversed: true}} =
+             MishkaPay.reverse_transfer("stripe", transfer_id, nil, reference: "undo-#{run}")
+  end
+
+  # What a platform's own form would send for a US seller it onboards itself, in Stripe's test
+  # values only.
+  defp test_seller(run) do
+    %{
+      "contact_email" => "seller-#{run}@example.com",
+      "display_name" => "Test seller #{run}",
+      "dashboard" => "none",
+      "identity" => %{
+        "country" => "US",
+        "entity_type" => "individual",
+        "individual" => %{
+          "given_name" => "Jenny",
+          "surname" => "Rosen",
+          "email" => "seller-#{run}@example.com",
+          "phone" => "+10000000000",
+          "date_of_birth" => %{"day" => 1, "month" => 1, "year" => 1901},
+          "address" => %{
+            "line1" => "address_full_match",
+            "city" => "San Francisco",
+            "state" => "CA",
+            "postal_code" => "94103",
+            "country" => "US"
+          },
+          "id_numbers" => [%{"type" => "us_ssn", "value" => "000000000"}]
+        },
+        "attestations" => %{
+          "terms_of_service" => %{
+            "account" => %{
+              "date" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+              "ip" => "8.8.8.8"
+            }
+          }
+        }
+      },
+      "configuration" => %{
+        "merchant" => %{
+          "mcc" => "5734",
+          "capabilities" => %{"card_payments" => %{"requested" => true}}
+        },
+        "recipient" => %{
+          "capabilities" => %{
+            "stripe_balance" => %{"stripe_transfers" => %{"requested" => true}}
+          }
+        }
+      },
+      "defaults" => %{
+        "currency" => "usd",
+        "profile" => %{
+          "business_url" => "https://accessible.stripe.com",
+          "product_description" => "Test goods"
+        },
+        "responsibilities" => %{
+          "fees_collector" => "application",
+          "losses_collector" => "application"
+        }
+      }
+    }
+  end
+
+  # Stripe makes no new v1 accounts for a platform that turned Connect on lately, and says so.
+  test "an account made on Accounts v1 where Stripe allows only v2 is a plain refusal" do
+    run = run_id()
+
+    case MishkaPay.create_connected_account(%{
+           provider: "stripe",
+           api: :v1,
+           country: "US",
+           reference: "v1-#{run}"
+         }) do
+      {:error, %Errors.Rejected{code: "connect_v1_refused"} = error} ->
+        assert Exception.message(error) =~ "Accounts v2"
+
+      {:error, %Errors.Rejected{code: "connect_not_set_up"}} ->
+        :ok
+    end
+  end
+
+  # What runs live here is reading the lists, and that an account or object that is not there is
+  # refused plainly, for a transfer and for a checkout made for a seller.
   test "transfers, payouts and application fees are listed, and money for a seller that is not there is refused" do
     run = run_id()
 
@@ -2227,37 +2686,13 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              })
   end
 
-  # A test account is deleted when the test is done with it, whatever happened.
+  # A test account is closed when the test is done with it, whatever happened; one closed by the
+  # test already is left as it is.
   defp with_account(id, fun) do
     fun.()
   after
-    MishkaPay.request(%{provider: "stripe", method: :delete, path: "/v1/accounts/#{id}"})
-  end
-
-  defp onboarded_by_link(%{id: id} = account, attrs, run) do
-    assert account.reference == "site-#{run}"
-    assert account.charges_enabled == false
-    assert {:ok, %{id: ^id}} = MishkaPay.create_connected_account(attrs)
-
-    name = "Shop #{run}"
-
-    assert {:ok, %MishkaPay.ConnectedAccount{id: ^id, business_name: ^name}} =
-             MishkaPay.update_connected_account(%{
-               provider: "stripe",
-               id: id,
-               business_name: name
-             })
-
-    assert {:ok, %MishkaPay.AccountLink{url: "https://connect.stripe.com/" <> _}} =
-             MishkaPay.account_link(%{
-               provider: "stripe",
-               account_id: id,
-               refresh_url: "https://shop.test/connect/again",
-               return_url: "https://shop.test/connect/done"
-             })
-
-    # A login link needs an account that finished onboarding.
-    assert {:error, %Errors.Rejected{}} = MishkaPay.login_link("stripe", id)
+    with {:ok, %{closed: false}} <- MishkaPay.fetch_connected_account("stripe", id),
+         do: MishkaPay.close_connected_account("stripe", id)
   end
 
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"

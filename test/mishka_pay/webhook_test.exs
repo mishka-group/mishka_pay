@@ -130,6 +130,42 @@ defmodule MishkaPay.WebhookTest do
     assert_received {:webhook_event, %Event{tenant: "site-a", account: "acct_site_b"}}
   end
 
+  test "a thin API v2 event from an event destination is checked with its own secret and names its account" do
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_platform", webhook_secret: @secret, webhook_secrets: ["whsec_thin"]},
+      "site-a"
+    )
+
+    body =
+      JSON.encode!(%{
+        "id" => "evt_test_65thin",
+        "object" => "v2.core.event",
+        "type" => "v2.core.account[requirements].updated",
+        "livemode" => false,
+        "created" => "2026-11-17T11:31:10.316Z",
+        "context" => nil,
+        "related_object" => %{
+          "id" => "acct_site_b",
+          "type" => "v2.core.account",
+          "url" => "/v2/core/accounts/acct_site_b?include=requirements"
+        }
+      })
+
+    time = System.system_time(:second)
+    header = "t=#{time},v1=#{Stripe.signature(body, time, "whsec_thin")}"
+
+    assert post("/pay/webhooks/stripe/site-a", body, header).status == 200
+
+    assert_received {:webhook_event,
+                     %Event{
+                       tenant: "site-a",
+                       type: "v2.core.account[requirements].updated",
+                       object_id: "acct_site_b",
+                       account: "acct_site_b"
+                     }}
+  end
+
   test "a rolled secret still works while Stripe signs with both" do
     body = payload()
     time = System.system_time(:second)

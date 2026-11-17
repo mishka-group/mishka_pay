@@ -88,6 +88,7 @@ defmodule ShopWeb.CardFormTest do
              "amount" => "1200",
              "currency" => "usd",
              "setup_future_usage" => "off_session",
+             "capture_method" => "automatic_async",
              "automatic_payment_methods" => %{"enabled" => "true"}
            } = sent
 
@@ -163,6 +164,10 @@ defmodule ShopWeb.CardFormTest do
 
     assert_received {:stripe, "POST", "/v1/payment_intents",
                      %{"capture_method" => "manual", "amount" => "1500"}}
+
+    view |> form(pay, %{capture: "automatic_sync"}) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/payment_intents", %{"capture_method" => "automatic"}}
 
     view |> form(server) |> render_submit()
 

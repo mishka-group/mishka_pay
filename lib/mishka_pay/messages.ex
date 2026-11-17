@@ -81,6 +81,11 @@ defmodule MishkaPay.Messages do
           | :account_invalid
           | :capability_names
           | :connect_not_set_up
+          | :connect_v1_customer
+          | :connect_capability_v1
+          | :connect_capability_v2
+          | :connect_needs_sandbox
+          | :connect_v1_refused
           | :fee_percent
           | :fee_currency
           | :stripe_shipping_five
@@ -116,6 +121,9 @@ defmodule MishkaPay.Messages do
           | :usage_value
           | :usage_window
           | :stripe_usage_time
+          | :stripe_usage_digits
+          | :tax_calculation_failed
+          | :evidence_page_limit
           | :due_sent_only
           | :stripe_event_types
           | :search_needs
@@ -134,6 +142,8 @@ defmodule MishkaPay.Messages do
           | :phase_prices
           | :phase_length
           | :schedule_from_subscription
+          | :proration_discounts_flexible
+          | :billing_mode_when_made
           | :schedule_moves
           | :choices
           | :fields_three
@@ -456,7 +466,42 @@ defmodule MishkaPay.Messages do
     do:
       dgettext_noop(
         "mishka_pay",
-        "The capabilities field must be a list of names in lowercase letters, digits and underscores"
+        "The capabilities field must be a list of names in lowercase letters, digits and underscores, with dots between their parts"
+      )
+
+  defp msgid(:connect_v1_customer),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The configurations field cannot hold customer on Accounts v1: make the account with Accounts v2"
+      )
+
+  defp msgid(:connect_capability_v1),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field takes plain names on Accounts v1, such as transfers"
+      )
+
+  defp msgid(:connect_capability_v2),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field takes each name under its configuration on Accounts v2, such as merchant.card_payments or recipient.stripe_balance.stripe_transfers"
+      )
+
+  defp msgid(:connect_needs_sandbox),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes this onboarding link only in a sandbox: an account with transfers cannot be onboarded by link in test mode"
+      )
+
+  defp msgid(:connect_v1_refused),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes new connected accounts on this platform only with Accounts v2: leave connect_api at v2"
       )
 
   defp msgid(:connect_not_set_up),
@@ -798,6 +843,20 @@ defmodule MishkaPay.Messages do
         "A phase lasts a number of periods of one interval, or until an end date, one of them"
       )
 
+  defp msgid(:proration_discounts_flexible),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Proration discounts go only with the flexible billing mode: leave them out, or use billing_mode flexible"
+      )
+
+  defp msgid(:billing_mode_when_made),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The billing mode is set when a subscription is made: a running one keeps its own"
+      )
+
   defp msgid(:schedule_from_subscription),
     do:
       dgettext_noop(
@@ -833,6 +892,27 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:usage_window),
     do: dgettext_noop("mishka_pay", "The end of a usage window must come after its start")
+
+  defp msgid(:stripe_usage_digits),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe takes a usage value of at most %{digits} digits, %{places} of them after the decimal point: round it first"
+      )
+
+  defp msgid(:tax_calculation_failed),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The provider could not count the tax for this sale: try again, and ask the provider's support if it keeps failing"
+      )
+
+  defp msgid(:evidence_page_limit),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The evidence is longer than the card network takes for this dispute: shorten the text or send files with fewer pages"
+      )
 
   defp msgid(:stripe_usage_time),
     do:

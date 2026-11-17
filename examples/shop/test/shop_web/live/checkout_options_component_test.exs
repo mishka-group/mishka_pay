@@ -94,6 +94,30 @@ defmodule ShopWeb.CheckoutOptionsComponentTest do
     assert params["mode"] == "subscription"
     assert params["subscription_data"]["trial_period_days"] == "7"
     assert params["payment_method_collection"] == "if_required"
+
+    assert params["subscription_data"]["billing_mode"] == %{
+             "type" => "flexible",
+             "flexible" => %{"proration_discounts" => "itemized"}
+           }
+  end
+
+  test "a plan's billing mode and proration discounts go to Stripe as picked", %{conn: conn} do
+    StripeRoutes.stub(%{{"POST", "/v1/checkout/sessions"} => @session})
+
+    for {picked, sent} <- [
+          {%{"billing_mode" => "classic"}, %{"type" => "classic"}},
+          {%{"proration_discounts" => "included"},
+           %{"type" => "flexible", "flexible" => %{"proration_discounts" => "included"}}}
+        ] do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view
+      |> form("[data-testid=checkout-more-form]", Map.put(picked, "product", "team-monthly"))
+      |> render_submit()
+
+      assert_received {:stripe, "POST", "/v1/checkout/sessions", params}
+      assert params["subscription_data"]["billing_mode"] == sent
+    end
   end
 
   test "a card statement suffix with merchant of record on is refused in plain words",

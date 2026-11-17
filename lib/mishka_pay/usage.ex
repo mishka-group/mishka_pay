@@ -19,6 +19,11 @@ defmodule MishkaPay.Usage do
     * `:reference`: the caller's own id for this use, such as a request id. It makes the
       provider's id of the report and its idempotency key, so the same reference never counts
       twice.
+    * `:stream`: `true` sends the report through the provider's path for high volume (Stripe's
+      meter event stream, up to 10,000 reports a second in live mode). The provider checks
+      such a report after it answers, so a report it cannot count (an unknown customer or event
+      name) is not refused in the answer: it comes back later as the provider's error event.
+      `false` (the default) sends it the usual way, checked before the answer.
 
   What the provider fills in: `:id`, its own id of the report.
   """
@@ -45,6 +50,8 @@ defmodule MishkaPay.Usage do
 
     field :reference, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
+
+    field :stream, boolean(), default: false, derives: "validate(not_nil_value, boolean)"
 
     field :id, String.t(), derives: "validate(string)"
   end

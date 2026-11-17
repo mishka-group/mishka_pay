@@ -4,6 +4,11 @@
 `:subscription`, `:subscription_list`, `:webhook` and the rest. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
 `mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
 
+Develop and run live tests on a **Stripe Sandbox** (Dashboard → Sandboxes), never on live keys
+and not on the test mode of the main account: a Sandbox is an isolated account, and some flows
+only run there (Accounts v2 onboarding for a seller that takes transfers answers
+`connect_needs_sandbox` in test mode).
+
 ## Raw calls
 
 - `MishkaPay.request/1` calls any `api.stripe.com` path (`"/v1/tax/settings"`) with the
@@ -13,13 +18,18 @@
   `Stripe-Version` and `expand[]` for this call only; typed calls always use the pinned version.
 - A write's `:reference` with its method and path makes the idempotency key; without one, a
   write gets a fresh key that its retries reuse.
+- A `/v2/...` path is Stripe's API v2: a write's `params:` go as a JSON body (nest them as maps
+  and lists, `true` stays a boolean), a read's as a query with indexed lists (`include[0]=...`).
+  v2 has no `expand`; ask for more with `"include" => [...]` in `params:`. The site's
+  `account_id` goes in `Stripe-Context` there instead of `Stripe-Account`.
 
 ## Connect: a platform and its sites
 
 - A platform (Mishka Cloud, a marketplace) keeps one Stripe secret key and gives each site its
   own connected account (`acct_...`). The site's keys answer the platform's `secret_key` with
   the site's `account_id`; every Stripe request for that tenant then carries
-  `Stripe-Account: acct_...`, so its payments, customers and refunds live on the site's account.
+  `Stripe-Account: acct_...` (`Stripe-Context` on an API v2 path), so its payments, customers
+  and refunds live on the site's account.
   Keys without `account_id` are the platform itself.
 - The header comes only from the keys. No call, `RequestOptions` or `MishkaPay.request/1` can
   set it: a raw call has no header field. An `account_id` that is not `acct_` and plain is
@@ -34,24 +44,62 @@
   Connect endpoint at a site's URL when the platform has more than one connected account: it
   receives every account's events, refuses the others, and Stripe retries them until it turns
   the endpoint off.
-- `create_connected_account/1` is `POST /v1/accounts` with the platform's keys. Stripe's `type`
-  is deprecated on this API version: `:express` is sent as `controller` (Express dashboard, the
-  platform pays fees and answers for losses), `:standard` as a full dashboard, `:custom` as no
-  dashboard with the platform collecting requirements. Its `:reference` makes the idempotency key
-  and is kept in metadata. A platform that has not signed up for Connect in the Dashboard is
-  `Errors.Rejected` with code `"connect_not_set_up"`.
-- `account_link/1` is `POST /v1/account_links` (`account_onboarding` or `account_update`); its
-  URL runs out in minutes and works once, so make it per click and redirect at once. Both pages
-  are `https` (or `http` on `localhost`). Coming back to `return_url` does not mean the account
-  is ready: read it (`:details_submitted`, `:charges_enabled`, `:requirements_due`). `login_link/3`
-  works only for an Express account that finished onboarding.
-- `reject_connected_account/4` is for good; Stripe's reasons on this API version are `credit`,
-  `fraud_no_intent_to_fulfill`, `fraud_other`, `fraud_payment_method_casher`,
-  `fraud_payment_method_tester`, `terms_of_service` and `other` (the default). Account ids start
-  with `acct_`.
+- Two account APIs, one set of calls: `connect_api: :v2` (the default, Stripe's Accounts v2,
+  `/v2/core/accounts` and `/v2/core/account_links`) or `connect_api: :v1` (Accounts v1,
+  `/v1/accounts` and `/v1/account_links`) in the platform's keys, and `api:` on a call
+  (`MishkaPay.ConnectedAccount`, `MishkaPay.AccountLink`, `api:` on
+  `fetch_connected_account/4`, `list_connected_accounts/3`, `close_connected_account/4`) wins
+  over it. Both answer the same `MishkaPay.ConnectedAccount`, with `:api` saying which read it.
+  Keep v2 unless the platform needs what only v1 does: OAuth connections, Treasury, card
+  issuing, older or retired capabilities (`legacy_payments`). Stripe refuses
+  `POST /v1/accounts` for a platform that turned Connect on lately (`Errors.Rejected` code
+  `"connect_v1_refused"`); such a platform makes accounts only on v2.
+- Either API reads an account made with either: Stripe's v1 reads a v2 account as a v1 account
+  (its v1 capabilities, `controller`), and v2 manages accounts made on v1 (Stripe's
+  migration guide; not checked live, since a platform that may only use v2 has none).
+- `create_connected_account/1` with the platform's keys: `:configurations`
+  (`[:merchant, :recipient]` when left out: a merchant asks for card payments, a recipient for
+  transfers into its balance; `:customer` only on v2), `:dashboard` (`:express` when left out,
+  `:full`, `:none`), `:fees_collector` and `:losses_collector` (`:application` or `:stripe`;
+  left out, what the dashboard needs: Stripe takes an Express account only with both
+  `:application`), `:country`, `:email`, `:business_name` (v2 `display_name`) and
+  `:capabilities` for more (v2: `"merchant.klarna_payments"`, under its configuration; v1:
+  `"klarna_payments"`). On v1 the same choices go as `controller` and `capabilities`. Its
+  `:reference` makes the idempotency key and is kept in metadata. A platform that has not signed
+  up for Connect is `Errors.Rejected` with code `"connect_not_set_up"`.
+- A v2 read includes the configurations, requirements, defaults and identity:
+  `:charges_enabled` is the merchant's `card_payments`, `:payouts_enabled` a `stripe_balance.payouts`,
+  `:transfers_enabled` the recipient's `stripe_balance.stripe_transfers`, each `:active`;
+  `:capability_status` holds each by its dotted name (`"merchant.card_payments" => :restricted`);
+  `:requirements_due` is what Stripe waits for from the seller (due now or past due), and
+  `:details_submitted` is true once nothing at all waits on the seller. A v2 list answers only
+  each account's own fields (no states): read the one the seller looks at, when they look.
+  A v2 page holds at most 20.
+- `account_link/1` makes an `account_onboarding` or `account_update` link; its URL runs out in
+  minutes and works once, so make it per click and redirect at once. Both pages are `https` (or
+  `http` on `localhost`). `account_update` is only for an account whose details the platform
+  collects (`dashboard: :none`); Stripe refuses it for an Express account. Coming back to
+  `return_url` does not mean the account is ready: read it (`:requirements_due`,
+  `:charges_enabled`, `:transfers_enabled`). In an account's test mode (not a Stripe sandbox)
+  Stripe refuses an onboarding link for a v2 account that asked for transfers
+  (`Errors.Rejected` code `"connect_needs_sandbox"`); a merchant-only account gets one there.
+- `login_link/3` is Stripe's `/v1/accounts/:id/login_links` for either API (v2 has no login
+  link); it works only for an Express account that finished onboarding.
+- `close_connected_account/4` is for good. On v2 it reads the account first and sends every
+  configuration it has (Stripe closes none otherwise); the account still reads, `closed: true`.
+  On v1 it is a reject with `reason:` `credit`, `fraud_no_intent_to_fulfill`, `fraud_other`,
+  `fraud_payment_method_casher`, `fraud_payment_method_tester`, `terms_of_service` or `other`
+  (the default). Account ids start with `acct_`.
 - Stripe sends `account.updated` (onboarding moved on, a capability turned on or off) and
   `account.application.deauthorized` (a Standard account left the platform) to the platform's
-  Connect endpoint; `event.account` names the account.
+  Connect endpoint as snapshot events; `event.account` names the account. Accounts v2 also sends
+  thin events (`MishkaPay.Providers.Stripe.thin_events/0`: `v2.core.account.created`,
+  `.updated`, `.closed`, `v2.core.account[requirements].updated`,
+  `v2.core.account[configuration.merchant].capability_status_updated` and the rest) only to an
+  event destination with the thin payload (Workbench, Webhooks; a `/v1/webhook_endpoints`
+  endpoint cannot take them). Point it at the platform's webhook URL and add its signing secret
+  to the platform tenant's `webhook_secrets`; each becomes an Event whose `:object_id` and
+  `:account` are the account. A thin event carries no state: read the account.
 
 ## Connect: money between accounts
 
@@ -63,6 +111,10 @@
   `application_fee_percent:` is `subscription_data[application_fee_percent]`; both go to the
   platform. Mishka Pay makes PaymentIntents only through a checkout, so these are the only
   places it sends them.
+- Transfers, payouts, application fees, a checkout's `destination:` and `on_behalf_of:`, and
+  a site's `account_id` all take a v2 account's id as they take a v1 one (checked live). Money
+  reaches a v2 account only once its recipient's `stripe_balance.stripe_transfers` is active
+  (`:transfers_enabled`); before that Stripe answers code `"insufficient_capabilities_for_transfer"`.
 - `create_transfer/1` is `POST /v1/transfers` from the platform's balance: `:reference` is
   required, makes the idempotency key and is kept in metadata; `:source_charge_id` (`ch_...`)
   is `source_transaction`, so the transfer waits for that sale's money. A destination that is
@@ -109,6 +161,12 @@
 - Stripe Managed Payments works with Checkout on a hosted page or an embedded page. Stripe lists
   "payment flows that use Elements with the Checkout Sessions API" and Payment Intents
   integrations as not supported. A Mishka Pay checkout is always a Checkout Session.
+- `capture: :automatic` is `capture_method=automatic_async` (Stripe's default, recommended over
+  `automatic` because it answers sooner), on a checkout's PaymentIntent and on
+  `create_payment_intent/1`; left out, nothing is sent and Stripe's default applies.
+  `capture: :automatic_sync` sends Stripe's older `automatic`, for a site that wants the answer
+  only once the money is taken. Read back, `automatic` and `automatic_async` are both
+  `:automatic` (taken at once).
 - `capture: :manual` is `payment_intent_data[capture_method]=manual`. The PaymentIntent waits in
   `requires_capture`, read as `:authorized`. `capture_payment/4` is
   `POST /v1/payment_intents/:id/capture` with `amount_to_capture` in Stripe's units; Stripe lets
@@ -235,6 +293,11 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Dispute evidence is PDF, JPEG or PNG, up to 5 MB, and its first bytes must match its
   `content_type`; anything else is `Errors.Invalid` before any request. Stripe keeps it 9 months.
 - Stripe takes all of a dispute's files together up to 4.5 MB (and 19 pages for Mastercard).
+- `update_dispute/1` evidence past the card network's page limit (Stripe estimates the pages of
+  the text and files together, and the limit differs by dispute) is `Errors.Rejected` with code
+  `"dispute_evidence_page_limit_exceeded"` and a plain message, whether `submit` is set or not.
+  Mishka Pay cannot count the pages before the request (Stripe's estimate is its own, and it asks
+  integrations not to read the limit from its words): shorten the text or send fewer pages.
 - A file id works in one request only: upload again for another dispute.
 - `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
   `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
@@ -290,6 +353,23 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - `search_subscriptions/3` is Stripe's search (`GET /v1/subscriptions/search`, `status` and
   `metadata` fields); its index lags up to a minute, and `:next` is Stripe's `next_page`.
 
+## Billing mode
+
+- Every subscription Mishka Pay makes (a subscription checkout's `subscription_data`, a new
+  schedule) sends `billing_mode[type]`: `flexible` unless the checkout, the schedule or the site's
+  keys say `:classic`. In the flexible mode it sends `billing_mode[flexible][proration_discounts]`,
+  `itemized` unless they say `:included`. Both are what Stripe recommends; the pinned version's
+  own default is `flexible` too, so nothing changes when the option is left out.
+- A schedule made from a subscription (`from_subscription`) sends no billing mode: Stripe refuses
+  one there, and the schedule keeps the subscription's.
+- Payment links take no billing mode: Stripe gives their subscriptions the API version's default
+  (`flexible`) or the Dashboard's default for links made there.
+- A subscription made `classic` (before the flexible default, or in the Dashboard) moves to
+  flexible with Stripe's migrate call, for good (it never moves back): `MishkaPay.request(%{provider:
+  "stripe", tenant: site.id, method: :post, path: "/v1/subscriptions/sub_.../migrate", params:
+  %{"billing_mode" => %{"type" => "flexible"}}})`. Mishka Pay has no typed call for it, since
+  every subscription it makes is flexible unless asked otherwise.
+
 ## Subscription changes
 
 - A preview is `POST /v1/invoices/create_preview`; its id starts with `upcoming_in_` and it is
@@ -311,7 +391,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reference makes the idempotency key, and Stripe wants it unique across all transactions. A
   calculation can be recorded for 90 days (`:expires_at`).
 - An account without Stripe Tax turned on answers `Errors.Rejected` with code
-  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
+  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`; a tax Stripe could
+  not count (its own failure; Stripe says to contact its support if it keeps happening),
+  `"failed_tax_calculation"`, never `Errors.Declined` even when paying a bill answers 402. An account with
   it on but with no registration where the buyer is counts a tax of zero.
 - Stripe Tax must be turned on (head office, registrations) before `automatic_tax` counts
   anything: `update_tax_settings/1` sets the head office and defaults, `create_tax_registration/1`
@@ -410,6 +492,25 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
   is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
   corrects usage reported by mistake.
+- Stripe takes a value of at most 15 digits, at most 12 of them after the decimal point (its
+  counting is in doubles). Leading zeros are not counted, and a `Decimal` is sent without the
+  zeros that end its fraction (`1.50` as `1.5`); zeros that end a whole number are counted
+  (`1000000000000000` is 16 digits). Anything longer is `Errors.Invalid` on `:value` before any
+  request, streamed or not.
+- `stream: true` on a report sends it through Stripe's meter event stream (API v2), for high
+  volume: up to 10,000 reports a second in live mode (a sandbox takes it too, at the sandbox's
+  own limits). Mishka Pay first makes a meter event session (`POST
+  /v2/billing/meter_event_session` with the secret key) and keeps its token in
+  `MishkaPay.Helpers.TokenCache` until a minute before it runs out (Stripe's tokens last 15
+  minutes), then posts the report as JSON to
+  `https://meter-events.stripe.com/v2/billing/meter_event_stream` with that token. A token Stripe
+  no longer takes (401) is dropped and the report sent once more with a new one. A site acting
+  for a connected account sends it as `Stripe-Context` (API v2's `Stripe-Account`).
+- A streamed report is checked by Stripe after it answers: a wrong customer or event name is not
+  an error in the answer but a `v1.billing.meter.error_report_triggered` thin event later. Its
+  `:id` is its identifier (the reference's, or one Mishka Pay makes), so `cancel_usage/1` takes
+  it like any other. Without `stream:` a report goes to `POST /v1/billing/meter_events`, which
+  checks it before answering.
 - `cancel_usage/1` is a meter event adjustment (`POST /v1/billing/meter_event_adjustments`,
   `type: cancel`) of the report's identifier (the `MishkaPay.Usage`'s `:id`), within 24 hours of
   the report; its idempotency key comes from the event name and identifier, so it cancels once.

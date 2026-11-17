@@ -25,6 +25,10 @@ defmodule MishkaPay.Providers.Stripe do
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
       payment, and it makes the idempotency key, so the same reference never opens two sessions.
     * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
+    * `capture: :automatic`, on a checkout or a PaymentIntent, is Stripe's `automatic_async`
+      (its default and recommended way), `:automatic_sync` its older `automatic`; `:manual`
+      holds the money. Both `automatic` and
+      `automatic_async` read back as `:automatic`.
     * `fetch_payment/2` reads a PaymentIntent with its latest charge, the charge's refunds and the
       customer, in one request: the buyer, the card, the receipt, why it failed and every refund.
     * `fetch_subscription/2`, `cancel_subscription/3`, `resume_subscription/2` and
@@ -33,7 +37,10 @@ defmodule MishkaPay.Providers.Stripe do
       Invoices. A checkout in `mode: :subscription` starts one, with its trial and the reference
       on the subscription. `list_subscriptions/2` lists them by customer, price or status (Stripe
       leaves canceled ones out unless asked for them or for `:all`), and `search_subscriptions/2`
-      finds them with Stripe's search by status, reference or metadata.
+      finds them with Stripe's search by status, reference or metadata. Every subscription it
+      makes (a subscription checkout, a new schedule) sends Stripe's `billing_mode`: `flexible`
+      with `itemized` proration discounts, Stripe's recommended ones, unless the checkout, the
+      schedule or the tenant's keys ask for `classic` or `included`.
     * `create_subscription_schedule/2`, `fetch_subscription_schedule/2`,
       `list_subscription_schedules/2`, `update_subscription_schedule/2`,
       `release_subscription_schedule/2` and `cancel_subscription_schedule/3` use Subscription
@@ -105,7 +112,10 @@ defmodule MishkaPay.Providers.Stripe do
       report's reference makes its `identifier`; Stripe takes reports from the last 35 days and
       up to 5 minutes ahead, and counts summaries from and to whole minutes. A cancel is a meter
       event adjustment (`type: cancel`) of one identifier, within 24 hours of the report; the
-      identifier makes its idempotency key.
+      identifier makes its idempotency key. A report with `stream: true` goes through the API v2
+      meter event stream instead: a meter event session's token, kept in
+      `MishkaPay.Helpers.TokenCache` until shortly before it runs out, then the report as JSON to
+      `meter-events.stripe.com`, which Stripe checks after it answers.
     * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
       (`feat_...`) on products, and the active entitlements of a customer.
     * `fetch_fraud_warning/2` and `list_fraud_warnings/2` read Radar's early fraud warnings
@@ -117,14 +127,23 @@ defmodule MishkaPay.Providers.Stripe do
       balance transactions (`txn_...`), by payout (`po_...`) or type.
     * `adjust_customer_balance/2` and `list_customer_balance/2` keep a customer's credit balance
       (`cbtxn_...`): below zero is credit.
-    * `create_connected_account/2`, `fetch_connected_account/2`, `update_connected_account/2`,
-      `list_connected_accounts/2` and `reject_connected_account/3` keep Connect accounts
-      (`acct_...`): an `:express`, `:standard` or `:custom` account is made with the matching
-      `controller` (Stripe's `type` is deprecated), and its reference makes the idempotency key
-      and is kept in its metadata. `account_link/2` makes an `account_onboarding` or
-      `account_update` Account Link, and `login_link/2` an Express dashboard login link. Stripe
-      sends `account.updated` and `account.application.deauthorized` about them. A platform that
-      has not signed up for Connect is refused with code `"connect_not_set_up"`.
+    * `create_connected_account/2`, `fetch_connected_account/3`, `update_connected_account/2`,
+      `list_connected_accounts/2` and `close_connected_account/3` keep Connect accounts
+      (`acct_...`) with Accounts v2 (`/v2/core/accounts`, the default) or Accounts v1
+      (`/v1/accounts`), as the call's `:api` or the tenant's `:connect_api` says; both answer the
+      same `MishkaPay.ConnectedAccount`. On v2 an account is made with its configurations
+      (a merchant asks for card payments, a recipient for transfers into its balance), its
+      dashboard and who collects fees and losses, and read with its configurations, requirements,
+      defaults and identity (`include`); on v1 the same choices are its `controller` and
+      capabilities. Its reference makes the idempotency key and is kept in its metadata. A v2
+      close sends every configuration the account has, read first; a v1 close is a reject.
+      `account_link/2` makes an `account_onboarding` or `account_update` link
+      (`/v2/core/account_links` or `/v1/account_links`), and `login_link/2` an Express dashboard
+      login link, on v1 only (v2 has none; it takes an account made with either). Stripe sends
+      `account.updated` and `account.application.deauthorized` as snapshot events, and API v2's
+      `v2.core.account.*` as thin events (`thin_events/0`). A platform that has not signed up for
+      Connect is refused with code `"connect_not_set_up"`, and an account made on v1 where Stripe
+      allows only v2 with `"connect_v1_refused"`.
     * A checkout's `:application_fee`, `:destination` and `:on_behalf_of` go in its
       `payment_intent_data` (`application_fee_amount`, `transfer_data[destination]`,
       `on_behalf_of`), and `:application_fee_percent` with them in `subscription_data`; ids are
@@ -139,7 +158,9 @@ defmodule MishkaPay.Providers.Stripe do
     * `raw_request/2` calls any path of `api.stripe.com` with the tenant's key, the pinned
       version or the call's own `api_version` (`Stripe-Version`) and its `expand[]`, and answers
       Stripe's JSON as it is; a write's reference, with its method and path, makes the
-      idempotency key.
+      idempotency key. A `/v2/` path is sent as API v2 takes it: a write's params as JSON, a
+      read's as a query with indexed lists; v2 has no `expand[]` and reads more with `include`
+      in the params.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
       `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, or any of its
@@ -149,7 +170,8 @@ defmodule MishkaPay.Providers.Stripe do
       same mode (live or test) as the tenant's keys.
 
   A tenant whose keys name a connected account (`:account_id`, `acct_...`) acts as that account:
-  every request carries it in the `Stripe-Account` header, and only from the keys. Such a tenant
+  every request carries it in the `Stripe-Account` header (`Stripe-Context` on an API v2 path),
+  and only from the keys. Such a tenant
   takes only webhook messages about its own account (Stripe's `account` on the event); one about
   the platform or another connected account is refused like a bad signature. Keys without one
   are the platform's own, and take its connected accounts' events, each with its `:account`.
@@ -171,7 +193,9 @@ defmodule MishkaPay.Providers.Stripe do
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
   another address, such as Stripe's own mock server in tests. Uploads go to `files_url` when it is
-  set, else to `base_url` when that is set, else to `https://files.stripe.com`.
+  set, else to `base_url` when that is set, else to `https://files.stripe.com`; streamed usage
+  reports (`stream: true`) to `meter_events_url` the same way, else to
+  `https://meter-events.stripe.com`.
   """
 
   use MishkaPay.Provider,
@@ -240,6 +264,7 @@ defmodule MishkaPay.Providers.Stripe do
     SubscriptionSchedule
   }
 
+  alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -250,6 +275,8 @@ defmodule MishkaPay.Providers.Stripe do
   @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
+  @meter_events_url "https://meter-events.stripe.com"
+  @meter_event_stream "/v2/billing/meter_event_stream"
 
   # What Stripe takes for each purpose of a file: its most bytes and its types, with the first
   # bytes of each type (docs.stripe.com/file-upload).
@@ -379,6 +406,34 @@ defmodule MishkaPay.Providers.Stripe do
   @spec handled_events() :: %{String.t() => [atom()]}
   def handled_events, do: @handled
 
+  @thin %{
+    "v2.core.account.created" => [:account],
+    "v2.core.account.updated" => [:account],
+    "v2.core.account.closed" => [:account],
+    "v2.core.account[requirements].updated" => [:account],
+    "v2.core.account[future_requirements].updated" => [:account],
+    "v2.core.account[identity].updated" => [:account],
+    "v2.core.account[defaults].updated" => [:account],
+    "v2.core.account[configuration.merchant].updated" => [:account],
+    "v2.core.account[configuration.merchant].capability_status_updated" => [:account],
+    "v2.core.account[configuration.recipient].updated" => [:account],
+    "v2.core.account[configuration.recipient].capability_status_updated" => [:account],
+    "v2.core.account[configuration.customer].updated" => [:account],
+    "v2.core.account[configuration.customer].capability_status_updated" => [:account]
+  }
+
+  @doc """
+  The thin events Mishka Pay maps, each with what it is about: API v2's connected account events
+  (`v2.core.account.*`), which Stripe sends only to an event destination with the thin payload,
+  never to a `/v1/webhook_endpoints` endpoint. Point that destination at the platform's webhook
+  URL and add its signing secret to the tenant's `:webhook_secrets`: `verify_webhook/3` checks
+  it as it checks any message, and each answers an Event whose `:object_id` and `:account` are
+  the account (read it with `MishkaPay.fetch_connected_account/4`). Stripe sends no state in
+  them; the read is the truth.
+  """
+  @spec thin_events() :: %{String.t() => [atom()]}
+  def thin_events, do: @thin
+
   @doc "The Stripe API version every request is pinned to."
   @spec version() :: String.t()
   def version, do: @version
@@ -435,6 +490,7 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- suffix_fits(checkout, keys),
          :ok <- expiry(checkout.expires_at),
          :ok <- held(checkout, keys),
+         :ok <- billing_fits(checkout, keys),
          :ok <- shipping_rates(checkout.shipping_rates),
          :ok <- for_seller(checkout),
          {:ok, session} <-
@@ -456,6 +512,18 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp held(_checkout, _keys), do: :ok
+
+  # Proration discounts go only with the flexible billing mode, the tenant's own mode included.
+  defp billing_fits(%{proration_discounts: discounts} = choice, keys)
+       when not is_nil(discounts),
+       do: discounts_fit(Mapper.billing_type(choice, keys))
+
+  defp billing_fits(_choice, _keys), do: :ok
+
+  defp discounts_fit(:flexible), do: :ok
+
+  defp discounts_fit(:classic),
+    do: invalid(:proration_discounts, Messages.text(:proration_discounts_flexible))
 
   # A sale for a seller names Connect accounts, and takes its fee in the items' own currency, in
   # amounts Stripe can count.
@@ -682,11 +750,12 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- maybe_id(schedule.subscription_id, "sub_", :subscription_id),
          :ok <- maybe_id(schedule.customer_id, "cus_", :customer_id),
          :ok <- schedule_fits(schedule),
+         :ok <- billing_fits(schedule, keys),
          {:ok, answer} <-
            request(
              :post,
              "/v1/subscription_schedules",
-             Mapper.subscription_schedule_params(schedule),
+             Mapper.subscription_schedule_params(schedule, keys),
              keys,
              key:
                ProviderKit.idempotency_key(
@@ -2133,7 +2202,34 @@ defmodule MishkaPay.Providers.Stripe do
 
     with :ok <- stripe_id(usage.customer_id, "cus_", :customer_id),
          :ok <- usage_time(usage.at),
-         {:ok, answer} <-
+         :ok <- usage_digits(usage.value) do
+      send_usage(usage, identifier, keys)
+    end
+  end
+
+  # Stripe refuses a value of more than 15 digits, or more than 12 after the decimal point, which
+  # its counting (in doubles) cannot keep exactly; leading zeros are not counted.
+  @usage_digits 15
+  @usage_places 12
+
+  defp usage_digits(value) do
+    case Mapper.usage_size(value) do
+      {digits, places} when digits <= @usage_digits and places <= @usage_places ->
+        :ok
+
+      _too_long ->
+        invalid(
+          :value,
+          Messages.text(:stripe_usage_digits, digits: @usage_digits, places: @usage_places)
+        )
+    end
+  end
+
+  defp send_usage(%MishkaPay.Usage{stream: true} = usage, identifier, keys),
+    do: stream_usage(usage, identifier || new_identifier(), keys, 1)
+
+  defp send_usage(usage, identifier, keys) do
+    with {:ok, answer} <-
            request(
              :post,
              "/v1/billing/meter_events",
@@ -2144,6 +2240,62 @@ defmodule MishkaPay.Providers.Stripe do
       {:ok, Mapper.usage(answer, usage)}
     end
   end
+
+  defp new_identifier,
+    do: "mishka_pay-usage-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+
+  # Stripe's meter event stream (API v2): a session token, kept until shortly before it runs out,
+  # then the report as JSON to `meter-events.stripe.com`, signed by that token alone (it already
+  # names the account). Stripe checks it after it answers, so the answer has no identifier: the
+  # report's own is its id, made here when there is no reference. A token Stripe no longer takes
+  # (401) is dropped and the report sent once more with a new one.
+  defp stream_usage(usage, identifier, keys, tries_left) do
+    with {:ok, token} <- meter_session(keys) do
+      case request(
+             :post,
+             @meter_event_stream,
+             %{"events" => [Mapper.usage_event(usage, identifier)]},
+             %{secret_key: token},
+             key: identifier
+           ) do
+        {:ok, _accepted} ->
+          {:ok, %{usage | id: identifier}}
+
+        {:error, %Errors.Rejected{status: 401}} when tries_left > 0 ->
+          TokenCache.drop(meter_session_key(keys))
+          stream_usage(usage, identifier, keys, tries_left - 1)
+
+        {:error, _refused} = error ->
+          error
+      end
+    end
+  end
+
+  # One session per secret key and connected account; the key itself is never kept, only its hash.
+  defp meter_session(keys) do
+    TokenCache.get(meter_session_key(keys), fn ->
+      with {:ok, session} <- request(:post, "/v2/billing/meter_event_session", %{}, keys) do
+        session_token(session)
+      end
+    end)
+  end
+
+  defp meter_session_key(keys),
+    do:
+      {:stripe_meter_session, :crypto.hash(:sha256, keys.secret_key), Map.get(keys, :account_id)}
+
+  defp session_token(%{"authentication_token" => token, "expires_at" => expires_at})
+       when is_binary(token) and is_binary(expires_at) do
+    case DateTime.from_iso8601(expires_at) do
+      {:ok, at, _offset} -> {:ok, token, max(DateTime.diff(at, DateTime.utc_now()), 1)}
+      {:error, _unreadable} -> session_unreadable()
+    end
+  end
+
+  defp session_token(_other), do: session_unreadable()
+
+  defp session_unreadable,
+    do: {:error, Errors.Rejected.exception(provider: "stripe", code: "meter_session_unreadable")}
 
   # Stripe takes usage from the last 35 days, and up to 5 minutes ahead for clocks that drift.
   defp usage_time(nil), do: :ok
@@ -2258,9 +2410,15 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def create_connected_account(%MishkaPay.ConnectedAccount{} = account, keys) do
-    with :ok <- metadata(account.metadata),
+    with {:ok, api} <- connect_api(account.api, keys),
+         :ok <- metadata(account.metadata),
+         :ok <- account_fits(account, api),
          {:ok, answer} <-
-           request(:post, "/v1/accounts", Mapper.connected_account_params(account), keys,
+           request(
+             :post,
+             accounts_path(api),
+             Mapper.connected_account_params(account, api),
+             keys,
              key:
                ProviderKit.idempotency_key("connected-account", account.tenant, account.reference)
            ) do
@@ -2268,42 +2426,87 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # A v2 read asks for what a v1 read answers anyway: the configurations, requirements, defaults
+  # and identity.
   @impl MishkaPay.Provider
-  def fetch_connected_account(account_id, keys) do
-    with :ok <- stripe_id(account_id, "acct_", :account_id),
-         {:ok, answer} <- request(:get, "/v1/accounts/#{account_id}", [], keys) do
+  def fetch_connected_account(account_id, opts, keys) do
+    with {:ok, api} <- connect_api(opts[:api], keys),
+         :ok <- stripe_id(account_id, "acct_", :account_id),
+         {:ok, answer} <-
+           request(:get, accounts_path(api) <> "/" <> account_id, read_params(api), keys) do
       Mapper.connected_account(answer)
     end
   end
 
-  # Only what is given changes; the type and country are set once, when the account is made.
+  # Only what is given changes; the dashboard, the country and who collects fees and losses are
+  # set once, when the account is made.
   @impl MishkaPay.Provider
   def update_connected_account(%MishkaPay.ConnectedAccount{id: id} = account, keys) do
-    with :ok <- stripe_id(id, "acct_", :id),
+    with {:ok, api} <- connect_api(account.api, keys),
+         :ok <- stripe_id(id, "acct_", :id),
          :ok <- metadata(account.metadata),
+         :ok <- account_fits(account, api),
          {:ok, answer} <-
            request(
              :post,
-             "/v1/accounts/#{id}",
-             Mapper.connected_account_update_params(account),
+             accounts_path(api) <> "/" <> id,
+             Mapper.connected_account_update_params(account, api),
              keys
            ) do
       Mapper.connected_account(answer)
     end
   end
 
+  # API v2 pages by a token in `next_page_url` and filters by the configurations every account
+  # has; it lists closed accounts only when asked.
   @impl MishkaPay.Provider
-  def list_connected_accounts(opts, keys),
+  def list_connected_accounts(opts, keys) do
+    with {:ok, api} <- connect_api(opts[:api], keys),
+         :ok <- listed_configurations(opts[:configurations]) do
+      accounts_page(api, opts, keys)
+    end
+  end
+
+  defp accounts_page(:v2, opts, keys) do
+    filters = %{
+      "applied_configurations" =>
+        opts[:configurations] && Enum.map(opts[:configurations], &to_string/1),
+      "closed" => opts[:closed]
+    }
+
+    v2_page("/v2/core/accounts", filters, opts, keys, &Mapper.connected_account/1)
+  end
+
+  defp accounts_page(:v1, opts, keys),
     do: page("/v1/accounts", [], opts, keys, &Mapper.connected_account/1)
 
+  @v2_capability ~r/\A(merchant|recipient|customer)\.[a-z0-9_.]+\z/
   @reject_reasons ~w(credit fraud_no_intent_to_fulfill fraud_other fraud_payment_method_casher fraud_payment_method_tester other terms_of_service)
 
+  # API v2 closes an account only with every configuration it has, so it is read first. Accounts
+  # v1 has no close: the account is turned down (rejected) for good, with a reason.
   @impl MishkaPay.Provider
-  def reject_connected_account(account_id, opts, keys) do
+  def close_connected_account(account_id, opts, keys) do
+    with {:ok, api} <- connect_api(opts[:api], keys),
+         :ok <- stripe_id(account_id, "acct_", :account_id) do
+      close(api, account_id, opts, keys)
+    end
+  end
+
+  defp close(:v2, account_id, _opts, keys) do
+    path = "/v2/core/accounts/" <> account_id
+
+    with {:ok, %{"applied_configurations" => configurations}} <- request(:get, path, [], keys),
+         {:ok, answer} <-
+           request(:post, path <> "/close", %{"applied_configurations" => configurations}, keys) do
+      Mapper.connected_account(answer)
+    end
+  end
+
+  defp close(:v1, account_id, opts, keys) do
     reason = opts |> Keyword.get(:reason, "other") |> to_string()
 
-    with :ok <- stripe_id(account_id, "acct_", :account_id),
-         :ok <- reject_reason(reason),
+    with :ok <- reject_reason(reason),
          {:ok, answer} <-
            request(:post, "/v1/accounts/#{account_id}/reject", %{"reason" => reason}, keys) do
       Mapper.connected_account(answer)
@@ -2325,10 +2528,66 @@ defmodule MishkaPay.Providers.Stripe do
     do: login_link(account_id, keys)
 
   def account_link(%MishkaPay.AccountLink{} = link, keys) do
-    with :ok <- stripe_id(link.account_id, "acct_", :account_id),
+    with {:ok, api} <- connect_api(link.api, keys),
+         :ok <- stripe_id(link.account_id, "acct_", :account_id),
          {:ok, answer} <-
-           request(:post, "/v1/account_links", Mapper.account_link_params(link), keys) do
+           request(:post, links_path(api), Mapper.account_link_params(link, api), keys) do
       Mapper.account_link(answer, link)
+    end
+  end
+
+  # The call's own choice, else the tenant's setting, else Stripe's recommended Accounts v2.
+  defp connect_api(nil, keys), do: connect_api(Map.get(keys, :connect_api) || :v2, keys)
+  defp connect_api(api, _keys) when api in [:v2, :v1], do: {:ok, api}
+  defp connect_api("v2", _keys), do: {:ok, :v2}
+  defp connect_api("v1", _keys), do: {:ok, :v1}
+
+  defp connect_api(_other, _keys),
+    do: invalid(:api, Messages.text(:choices, field: :api, choices: "v2, v1"))
+
+  defp accounts_path(:v2), do: "/v2/core/accounts"
+  defp accounts_path(:v1), do: "/v1/accounts"
+
+  defp links_path(:v2), do: "/v2/core/account_links"
+  defp links_path(:v1), do: "/v1/account_links"
+
+  defp read_params(:v2), do: %{"include" => Mapper.account_includes()}
+  defp read_params(:v1), do: []
+
+  # Accounts v1 has no customer configuration and names a capability plainly; on v2 a capability
+  # is its configuration and its path there.
+  defp account_fits(account, :v1) do
+    with :ok <-
+           refused_if(
+             :customer in List.wrap(account.configurations),
+             :configurations,
+             :connect_v1_customer
+           ) do
+      refused_if(
+        Enum.any?(List.wrap(account.capabilities), &String.contains?(&1, ".")),
+        :capabilities,
+        :connect_capability_v1
+      )
+    end
+  end
+
+  defp account_fits(account, :v2) do
+    refused_if(
+      not Enum.all?(List.wrap(account.capabilities), &Regex.match?(@v2_capability, &1)),
+      :capabilities,
+      :connect_capability_v2
+    )
+  end
+
+  defp refused_if(true, field, message), do: invalid(field, Messages.text(message))
+  defp refused_if(false, _field, _message), do: :ok
+
+  defp listed_configurations(nil), do: :ok
+
+  defp listed_configurations(names) do
+    case MishkaPay.ConnectedAccount.configurations(:configurations, names) do
+      {:ok, _field, _names} -> :ok
+      {:error, field, message} -> invalid(field, message)
     end
   end
 
@@ -2496,6 +2755,33 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # One page of an API v2 list, each item mapped; the cursor of the next page is the query of
+  # Stripe's `next_page_url`, which a later page sends back as it is.
+  defp v2_page(path, filters, opts, keys, map) do
+    params = v2_page_params(opts[:after], filters, opts[:limit])
+
+    with {:ok, %{"data" => data} = answer} <- request(:get, path, params, keys),
+         {:ok, items} <- data |> Enum.map(map) |> all_ok() do
+      next = page_token(answer["next_page_url"])
+      page = struct(Page, items: items, has_more: not is_nil(next), next: next)
+      {:ok, page}
+    end
+  end
+
+  # The first page sends `limit` (at most 20, API v2's own limit) and the filters set. A later
+  # page sends the cursor's parameters as Stripe gave them: its `page` token with the limit and
+  # filters it was made for (Stripe refuses the token with any others, or alone).
+  defp v2_page_params(nil, filters, limit) do
+    params = Map.put(filters, "limit", limit && min(limit, 20))
+    Map.reject(params, fn {_name, value} -> is_nil(value) end)
+  end
+
+  defp v2_page_params(cursor, _filters, _limit), do: URI.decode_query(cursor)
+
+  defp page_token(url) when is_binary(url), do: URI.parse(url).query
+
+  defp page_token(_last_page), do: nil
+
   # Stripe's dispute ids start with `du_` now and `dp_` on older disputes.
   defp dispute_id("du_" <> _ = id), do: stripe_id(id, "du_", :dispute_id)
   defp dispute_id(id), do: stripe_id(id, "dp_", :dispute_id)
@@ -2547,8 +2833,9 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- signed(payload, timestamp, signatures, secrets),
          {:ok, %{} = event} <- decode(payload),
          :ok <- same_mode(event, keys),
-         :ok <- same_account(event, keys) do
-      Mapper.event(event)
+         {:ok, mapped} <- Mapper.event(event),
+         :ok <- same_account(mapped, keys) do
+      {:ok, mapped}
     end
   end
 
@@ -2650,7 +2937,7 @@ defmodule MishkaPay.Providers.Stripe do
   # platform's own keys (no `:account_id`) take its connected accounts' events too, each naming
   # its `:account`, for the host to tell which of its sites it is about.
   defp same_account(event, keys) do
-    case {Map.get(keys, :account_id), event["account"]} do
+    case {Map.get(keys, :account_id), event.account} do
       {nil, _any} -> :ok
       {account, account} -> :ok
       _another -> bad(:account)
@@ -2664,46 +2951,77 @@ defmodule MishkaPay.Providers.Stripe do
   # `upload: true` sends `params` as multipart parts to Stripe's files host; `request_options:` (a
   # `MishkaPay.RequestOptions`) another API version and the objects to expand. The tenant's
   # connected account (`:account_id` in its keys) goes in `Stripe-Account` on every request, so
-  # each call is made as that account; nothing else sets the header.
+  # each call is made as that account; nothing else sets the header. A `/v2/` path is Stripe's
+  # API v2: a write's params go as a JSON body, a read's as a query with indexed lists
+  # (`include[0]`), and the account goes in `Stripe-Context`, the header v2 takes; the usage stream
+  # goes to the meter events host, and an empty answer from it is an empty map.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
     options = opts[:request_options] || %RequestOptions{}
     account_id = Map.get(keys, :account_id)
+    api = api_of(path, opts[:upload] == true)
 
     with :ok <- maybe_id(account_id, "acct_", :account_id) do
       %{
         provider: "stripe",
         method: method,
-        base_url: base_url(opts[:upload] == true),
+        base_url: base_url(api, path),
         path: path,
         auth: {:bearer, keys.secret_key},
-        headers: headers(options, account_id),
+        headers: headers(options, account_id, api),
         idempotency_header: "idempotency-key",
         idempotency_key: opts[:key],
         retry_header: "stripe-should-retry",
         limit_header: "stripe-rate-limited-reason"
       }
-      |> put_body(method, expanded(params, options.expand), opts[:upload] == true)
+      |> put_body(method, expanded(params, options.expand, api), api)
       |> Client.request()
       |> answer()
     end
   end
 
-  defp headers(options, nil), do: %{"stripe-version" => options.api_version || @version}
+  defp api_of(_path, true), do: :upload
+  defp api_of("/v2/" <> _rest, false), do: :v2
+  defp api_of(_path, false), do: :v1
 
-  defp headers(options, account_id),
-    do: options |> headers(nil) |> Map.put("stripe-account", account_id)
+  defp headers(options, nil, _api), do: %{"stripe-version" => options.api_version || @version}
 
-  # Stripe takes `expand[]` in a read's query and in a write's form alike.
-  defp expanded(params, nil), do: params
-  defp expanded(params, paths), do: form(params) ++ Enum.map(paths, &{"expand[]", &1})
+  defp headers(options, account_id, :v2),
+    do: options |> headers(nil, :v2) |> Map.put("stripe-context", account_id)
 
-  defp put_body(spec, _method, parts, true), do: Map.put(spec, :multipart, parts)
-  defp put_body(spec, :get, params, false), do: Map.put(spec, :params, form(params))
-  defp put_body(spec, _write, params, false), do: Map.put(spec, :form, form(params))
+  defp headers(options, account_id, api),
+    do: options |> headers(nil, api) |> Map.put("stripe-account", account_id)
+
+  # Stripe takes `expand[]` in a read's query and in a write's form alike; API v2 has no expand,
+  # and reads more with `include` in its own params.
+  defp expanded(params, nil, _api), do: params
+  defp expanded(params, _paths, :v2), do: params
+  defp expanded(params, paths, _api), do: form(params) ++ Enum.map(paths, &{"expand[]", &1})
+
+  defp put_body(spec, _method, parts, :upload), do: Map.put(spec, :multipart, parts)
+  defp put_body(spec, :get, params, _api), do: Map.put(spec, :params, form(params))
+  defp put_body(spec, _write, params, :v2), do: Map.put(spec, :json_text, json_body(params))
+  defp put_body(spec, _write, params, :v1), do: Map.put(spec, :form, form(params))
+
+  defp json_body(params) when params in [[], nil], do: "{}"
+  defp json_body(params) when is_map(params), do: JSON.encode!(params)
+  defp json_body(params) when is_list(params), do: params |> Map.new() |> JSON.encode!()
 
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
+
+  # The meter event stream may accept a report with no body at all.
+  defp answer({:ok, %Req.Response{status: status, body: body}})
+       when status in 200..299 and body in ["", nil],
+       do: {:ok, %{}}
+
+  # A tax Stripe could not count can come with a 402 (paying a bill), but no bank declined it.
+  defp answer(
+         {:ok,
+          %Req.Response{status: 402, body: %{"error" => %{"code" => "failed_tax_calculation"}}} =
+            response}
+       ),
+       do: rejected(response)
 
   defp answer({:ok, %Req.Response{status: 402, body: %{"error" => error}} = response}) do
     {:error,
@@ -2716,27 +3034,37 @@ defmodule MishkaPay.Providers.Stripe do
      )}
   end
 
-  defp answer({:ok, %Req.Response{status: status, body: body} = response}) do
+  defp answer({:ok, %Req.Response{} = response}), do: rejected(response)
+
+  defp answer({:error, _unreachable} = error), do: error
+
+  defp rejected(%Req.Response{status: status, body: body} = response) do
     error = error_of(body)
+
+    limit_reason =
+      response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
 
     {:error,
      Errors.Rejected.exception(
        provider: "stripe",
        status: status,
        code: code_of(error),
-       param: field_of(error["param"] || param_in(error["message"])),
+       param: field_of(error["param"] || invalid_field(error) || param_in(error["message"])),
        message: error["message"],
        request_id: request_id(response),
        doc_url: error["doc_url"],
-       rate_limit_reason:
-         response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
+       rate_limit_reason: limit_reason
      )}
   end
 
-  defp answer({:error, _unreachable} = error), do: error
-
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}
+
+  # API v2 names the fields it refused in `invalid_fields`, not in `param`.
+  defp invalid_field(%{"invalid_fields" => [%{"field" => field} | _]}) when is_binary(field),
+    do: field
+
+  defp invalid_field(_error), do: nil
 
   # Stripe names every request in its `Request-Id` header (`req_...`): its support and the
   # Dashboard's request log find a failed one by it.
@@ -2808,6 +3136,20 @@ defmodule MishkaPay.Providers.Stripe do
        when code in ["customer_tax_location_invalid", "invalid_tax_location"],
        do: "tax_location_invalid"
 
+  # API v2's words for a platform that has not signed up for Connect, and for an id it does not
+  # have; its `invalid_fields` says more only in its words.
+  defp code_of(%{"code" => code})
+       when code in [
+              "platform_registration_required",
+              "non_connect_platform_accounts_v2_access_blocked"
+            ],
+       do: "connect_not_set_up"
+
+  defp code_of(%{"code" => "not_found"}), do: "resource_missing"
+
+  defp code_of(%{"code" => "invalid_fields", "message" => message}) when is_binary(message),
+    do: worded(message)
+
   defp code_of(%{"code" => code}) when is_binary(code), do: code
 
   # Stripe's words for a refusal it gives no code, first match wins: shipping where Managed
@@ -2826,13 +3168,17 @@ defmodule MishkaPay.Providers.Stripe do
     {"feature in the portal configuration is disabled", "portal_feature_off"},
     {"customer does not match the subscription's customer", "subscription_of_another"},
     {"PaymentIntents created by invoices", "intent_of_invoice"},
-    {"PaymentIntents created by Checkout", "intent_of_checkout"}
+    {"PaymentIntents created by Checkout", "intent_of_checkout"},
+    {"Please switch to an account created in a sandbox", "connect_needs_sandbox"},
+    {"no longer recommends Accounts v1", "connect_v1_refused"}
   ]
 
-  defp code_of(%{"message" => message}) when is_binary(message),
-    do: Enum.find_value(@worded, fn {words, code} -> String.contains?(message, words) && code end)
+  defp code_of(%{"message" => message}) when is_binary(message), do: worded(message)
 
   defp code_of(_no_code), do: nil
+
+  defp worded(message),
+    do: Enum.find_value(@worded, fn {words, code} -> String.contains?(message, words) && code end)
 
   # Stripe takes a checkout's expiry between 30 minutes and 24 hours from now.
   defp expiry(nil), do: :ok
@@ -2961,15 +3307,17 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp three_decimal_ok?(_item), do: true
 
-  # The API's address, or the files host's for an upload: its own setting, else the API's.
-  defp base_url(upload?) do
+  # The API's address, the files host's for an upload or the meter events host's for the usage
+  # stream: the host's own setting, else `base_url`, else Stripe's.
+  defp base_url(api, path) do
     config = Application.get_env(:mishka_pay, __MODULE__, [])
-
-    case upload? do
-      true -> config[:files_url] || Keyword.get(config, :base_url, @files_url)
-      false -> Keyword.get(config, :base_url, @base_url)
-    end
+    {setting, default} = host(api, path)
+    config[setting] || Keyword.get(config, :base_url, default)
   end
+
+  defp host(:upload, _path), do: {:files_url, @files_url}
+  defp host(:v2, @meter_event_stream), do: {:meter_events_url, @meter_events_url}
+  defp host(_api, _path), do: {:base_url, @base_url}
 
   @doc """
   Stripe's form encoding of nested params: `%{"line_items" => [%{"quantity" => 1}]}` becomes

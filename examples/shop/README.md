@@ -42,7 +42,11 @@ without leaning on text or layout.
 
 ## Run it
 
-You need Postgres and a Stripe sandbox secret key (Stripe dashboard → Developers → API keys).
+You need Postgres and the secret key of a **Stripe Sandbox**: in the Stripe Dashboard open the
+account menu → **Sandboxes** → **Create sandbox**, switch to it, then Developers → API keys.
+Develop on a Sandbox, not on your account's test mode: a Sandbox is its own isolated account, and
+some flows (Accounts v2 onboarding for sellers that take transfers) only run there. Never put a
+live key here.
 
 Put the key in `examples/shop/.env` (it is in `.gitignore`, so it never reaches GitHub):
 

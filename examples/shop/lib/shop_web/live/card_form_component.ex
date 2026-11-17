@@ -247,6 +247,12 @@ defmodule ShopWeb.CardFormComponent do
                 <option value="automatic" selected={@payment_form["capture"] == "automatic"}>
                   at once
                 </option>
+                <option
+                  value="automatic_sync"
+                  selected={@payment_form["capture"] == "automatic_sync"}
+                >
+                  at once, the older way (Stripe's automatic)
+                </option>
                 <option value="manual" selected={@payment_form["capture"] == "manual"}>
                   hold it
                 </option>

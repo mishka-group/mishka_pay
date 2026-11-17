@@ -108,7 +108,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "metadata" => Map.merge(checkout.metadata || %{}, reference)
     }
     |> Map.merge(ui_params(checkout))
-    |> Map.merge(mode_data(checkout, reference))
+    |> Map.merge(mode_data(checkout, reference, settings))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(options(checkout))
     |> Map.merge(shipping(checkout))
@@ -255,40 +255,81 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
-  defp mode_data(%Checkout{mode: :subscription, trial_days: days} = checkout, reference),
-    do: %{
-      "subscription_data" =>
-        %{
-          "metadata" => reference,
-          "trial_period_days" => days,
-          "description" => checkout.description,
-          "application_fee_percent" =>
-            checkout.application_fee_percent &&
-              Decimal.to_string(checkout.application_fee_percent, :normal)
-        }
-        |> Map.merge(seller(checkout))
-        |> reject_nil()
-    }
+  defp mode_data(
+         %Checkout{mode: :subscription, trial_days: days} = checkout,
+         reference,
+         settings
+       ),
+       do: %{
+         "subscription_data" =>
+           %{
+             "metadata" => reference,
+             "billing_mode" => billing_mode(checkout, settings),
+             "trial_period_days" => days,
+             "description" => checkout.description,
+             "application_fee_percent" =>
+               checkout.application_fee_percent &&
+                 Decimal.to_string(checkout.application_fee_percent, :normal)
+           }
+           |> Map.merge(seller(checkout))
+           |> reject_nil()
+       }
 
-  defp mode_data(%Checkout{mode: :setup} = checkout, reference),
+  defp mode_data(%Checkout{mode: :setup} = checkout, reference, _settings),
     do: %{
       "setup_intent_data" =>
         reject_nil(%{"metadata" => reference, "description" => checkout.description})
     }
 
-  defp mode_data(checkout, reference),
+  defp mode_data(checkout, reference, _settings),
     do: %{
       "payment_intent_data" =>
         %{
           "metadata" => reference,
           "description" => checkout.description,
           "statement_descriptor_suffix" => checkout.statement_suffix,
-          "capture_method" => checkout.capture && Atom.to_string(checkout.capture),
+          "capture_method" => capture_method(checkout.capture),
           "application_fee_amount" => minor_of(checkout.application_fee)
         }
         |> Map.merge(seller(checkout))
         |> reject_nil()
     }
+
+  @doc """
+  Stripe's `billing_mode` of a subscription made from `choice` (a checkout or a new schedule):
+  its own `:billing_mode`, else the tenant's (`settings`), else `flexible`, Stripe's recommended
+  mode; in the flexible mode, its `:proration_discounts`, else the tenant's, else `itemized`, the
+  way Stripe recommends.
+  """
+  @spec billing_mode(map(), map()) :: map()
+  def billing_mode(choice, settings) do
+    discounts =
+      Map.get(choice, :proration_discounts) || Map.get(settings, :proration_discounts) ||
+        :itemized
+
+    choice |> billing_type(settings) |> billing_mode_of(discounts)
+  end
+
+  @doc """
+  The billing mode a subscription made from `choice` gets: its own `:billing_mode`, else the
+  tenant's (`settings`), else `:flexible`.
+  """
+  @spec billing_type(map(), map()) :: :flexible | :classic
+  def billing_type(choice, settings),
+    do: Map.get(choice, :billing_mode) || Map.get(settings, :billing_mode) || :flexible
+
+  defp billing_mode_of(:classic, _discounts), do: %{"type" => "classic"}
+
+  defp billing_mode_of(:flexible, discounts),
+    do: %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
+
+  # Stripe takes the money at once with `automatic_async`, its default and recommended way (it
+  # answers sooner than `automatic`, still there for a site that asks for it); `manual` holds
+  # it. Left out, Stripe's default applies.
+  defp capture_method(nil), do: nil
+  defp capture_method(:automatic), do: "automatic_async"
+  defp capture_method(:automatic_sync), do: "automatic"
+  defp capture_method(:manual), do: "manual"
 
   # The seller a platform's sale is for: where the money goes, and who sells it.
   defp seller(checkout),
@@ -887,7 +928,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "currency" => intent.amount && lower_currency(intent.amount),
       "customer" => intent.customer_id,
       "payment_method" => intent.payment_method_id,
-      "capture_method" => intent.capture && Atom.to_string(intent.capture),
+      "capture_method" => capture_method(intent.capture),
       "setup_future_usage" =>
         intent.setup_future_usage && Atom.to_string(intent.setup_future_usage),
       "automatic_payment_methods" => automatic_methods(intent),
@@ -948,7 +989,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       amount_received: money(intent["amount_received"], currency),
       customer_id: id_of(intent["customer"]),
       payment_method_id: id_of(intent["payment_method"]),
-      capture: (intent["capture_method"] == "manual" && :manual) || :automatic,
+      capture: capture_of(intent["capture_method"]),
       setup_future_usage: Map.get(@future_usages, intent["setup_future_usage"]),
       automatic_payment_methods: get_in(intent, ["automatic_payment_methods", "enabled"]),
       description: intent["description"],
@@ -963,6 +1004,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.PaymentIntent.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # `automatic` and `automatic_async` both take the money at once; only `manual` holds it.
+  defp capture_of("manual"), do: :manual
+  defp capture_of(_automatic), do: :automatic
 
   @doc "A Stripe SetupIntent as a `MishkaPay.SetupIntent`, for a page with Stripe Elements."
   @spec setup_intent(map()) :: {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
@@ -1354,17 +1399,21 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @doc """
   Params of `POST /v1/subscription_schedules`: `from_subscription` alone (Stripe takes nothing
-  else with it, metadata neither), or the customer, its start (now unless given), the phases and
-  what happens after them, with the reference in its metadata.
+  else with it, metadata and billing mode neither), or the customer, its start (now unless
+  given), the phases and what happens after them, its billing mode (`billing_mode/2`, with the
+  tenant's `settings`), with the reference in its metadata.
   """
-  @spec subscription_schedule_params(SubscriptionSchedule.t()) :: map()
-  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id})
+  @spec subscription_schedule_params(SubscriptionSchedule.t(), map()) :: map()
+  def subscription_schedule_params(schedule, settings \\ %{})
+
+  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id}, _settings)
       when is_binary(id),
       do: %{"from_subscription" => id}
 
-  def subscription_schedule_params(%SubscriptionSchedule{} = schedule) do
+  def subscription_schedule_params(%SubscriptionSchedule{} = schedule, settings) do
     reject_nil(%{
       "customer" => schedule.customer_id,
+      "billing_mode" => billing_mode(schedule, settings),
       "start_date" => unix(schedule.start_at) || "now",
       "end_behavior" => schedule.end_behavior && Atom.to_string(schedule.end_behavior),
       "phases" => Enum.map(schedule.phases, &phase_params/1),
@@ -1740,11 +1789,31 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc """
-  A Stripe event (`object: "event"`) as a `MishkaPay.Event`, with what it is about. A saved
+  A Stripe event as a `MishkaPay.Event`, with what it is about: a snapshot event (`object:
+  "event"`), or a thin one (`object: "v2.core.event"`, as an event destination sends API v2's
+  events), whose related object is what it is about and whose `context`, else the account it is
+  about, is its `:account`. A saved
   payment method's or a setup's event is about the customer it names (a detached payment method
   names it in `previous_attributes`), since that customer is what changes.
   """
   @spec event(map()) :: {:ok, Event.t()} | {:error, Splode.Error.t()}
+  def event(%{"object" => "v2.core.event"} = event) do
+    related = event["related_object"] || %{}
+
+    %{
+      provider: "stripe",
+      id: event["id"],
+      type: event["type"],
+      object_id: related["id"],
+      object_type: related["type"],
+      livemode: event["livemode"],
+      account: event["context"] || account_of(related),
+      created_at: time(event["created"])
+    }
+    |> Event.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
   def event(event) do
     object = object_of(event)
 
@@ -1765,6 +1834,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Event.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # A thin event about a connected account names it only as its related object.
+  defp account_of(%{"type" => "v2.core.account", "id" => id}), do: id
+  defp account_of(_other), do: nil
 
   # A PaymentIntent is the payment; a session, charge, refund or dispute points at its own.
   defp payment_of(%{"object" => "payment_intent", "id" => id}) when is_binary(id), do: id
@@ -2333,7 +2406,39 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
-  defp usage_value(%Decimal{} = value), do: Decimal.to_string(value, :normal)
+  @doc """
+  One event of `POST /v2/billing/meter_event_stream` (JSON): the customer and the value in its
+  payload, its `identifier`, and when it happened as an ISO 8601 time.
+  """
+  @spec usage_event(MishkaPay.Usage.t(), String.t()) :: map()
+  def usage_event(usage, identifier) do
+    reject_nil(%{
+      "event_name" => usage.event_name,
+      "identifier" => identifier,
+      "payload" => %{
+        "stripe_customer_id" => usage.customer_id,
+        "value" => usage_value(usage.value)
+      },
+      "timestamp" => usage.at && DateTime.to_iso8601(usage.at)
+    })
+  end
+
+  @doc """
+  How long a usage value is as Stripe reads it: `{digits, places}`, its digits without leading
+  zeros and those after the decimal point, of the value as it is sent (trailing zeros after the
+  point dropped).
+  """
+  @spec usage_size(integer() | Decimal.t()) :: {non_neg_integer(), non_neg_integer()}
+  def usage_size(value) do
+    [whole | fraction] = value |> usage_value() |> String.trim_leading("-") |> String.split(".")
+    places = fraction |> Enum.join() |> String.length()
+    {String.length(String.trim_leading(whole, "0")) + places, places}
+  end
+
+  # A decimal goes without the zeros that end its fraction: `1.50` is sent as `1.5`.
+  defp usage_value(%Decimal{} = value),
+    do: value |> Decimal.normalize() |> Decimal.to_string(:normal)
+
   defp usage_value(value), do: Integer.to_string(value)
 
   @doc "The usage with Stripe's answer: its `identifier` as the report's id."
@@ -2519,94 +2624,322 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
-  # What each kind of connected account is at Stripe, as its `controller`: the dashboard the
-  # seller gets, who pays Stripe's fees, who answers for losses and who collects the seller's
-  # details. Stripe's own `type` is deprecated in favour of these.
-  @controllers %{
-    express: %{
-      "stripe_dashboard" => %{"type" => "express"},
-      "fees" => %{"payer" => "application"},
-      "losses" => %{"payments" => "application"}
-    },
-    standard: %{"stripe_dashboard" => %{"type" => "full"}},
-    custom: %{
-      "stripe_dashboard" => %{"type" => "none"},
-      "fees" => %{"payer" => "application"},
-      "losses" => %{"payments" => "application"},
-      "requirement_collection" => "application"
-    }
+  # What each configuration asks for when an account is made: Accounts v2 nests it under its
+  # configuration, Accounts v1 names the same capability plainly.
+  @asked %{
+    merchant: {["card_payments"], "card_payments"},
+    recipient: {["stripe_balance", "stripe_transfers"], "transfers"},
+    customer: {[], nil}
   }
+  @everything ~w(configuration.merchant configuration.recipient configuration.customer requirements defaults identity)
+
+  @doc "What a v2 account read includes: its configurations, requirements, defaults and identity."
+  @spec account_includes() :: [String.t()]
+  def account_includes, do: @everything
 
   @doc """
-  Params of `POST /v1/accounts`: the account's `controller` for its `:type`, its country, email,
-  business name, the capabilities it asks for, and the reference in its metadata.
+  Params of making a connected account: `POST /v2/core/accounts` (`:v2`), with its dashboard,
+  configurations and who collects fees and losses; or `POST /v1/accounts` (`:v1`), with the
+  matching `controller` and capabilities. Either keeps the reference in its metadata.
   """
-  @spec connected_account_params(MishkaPay.ConnectedAccount.t()) :: map()
-  def connected_account_params(account) do
-    account
-    |> connected_account_update_params()
-    |> Map.merge(
-      reject_nil(%{"controller" => @controllers[account.type], "country" => account.country})
-    )
+  @spec connected_account_params(MishkaPay.ConnectedAccount.t(), :v2 | :v1) :: map()
+  def connected_account_params(account, api) do
+    made = %{
+      account
+      | dashboard: account.dashboard || :express,
+        configurations: account.configurations || [:merchant, :recipient]
+    }
+
+    made
+    |> connected_account_update_params(api)
+    |> Map.merge(account_shape(made, api))
   end
 
-  @doc "Params of `POST /v1/accounts/:id`: only the details given."
-  @spec connected_account_update_params(MishkaPay.ConnectedAccount.t()) :: map()
-  def connected_account_update_params(account) do
+  defp account_shape(account, :v2) do
+    reject_nil(%{
+      "dashboard" => Atom.to_string(account.dashboard),
+      "identity" => account.country && %{"country" => account.country},
+      "defaults" => %{
+        "responsibilities" => %{
+          "fees_collector" => Atom.to_string(collector(account, :fees_collector)),
+          "losses_collector" => Atom.to_string(collector(account, :losses_collector))
+        }
+      }
+    })
+  end
+
+  defp account_shape(account, :v1) do
+    controller =
+      reject_nil(%{
+        "stripe_dashboard" => %{"type" => Atom.to_string(account.dashboard)},
+        "fees" => keyed("payer", v1_collector(account, :fees_collector, "account")),
+        "losses" => keyed("payments", v1_collector(account, :losses_collector, "stripe")),
+        "requirement_collection" => requirement_collection(account.dashboard)
+      })
+
+    reject_nil(%{"controller" => controller, "country" => account.country})
+  end
+
+  # An account with no dashboard of its own has the platform collect its details.
+  defp requirement_collection(:none), do: "application"
+  defp requirement_collection(_dashboard), do: nil
+
+  # Stripe's own default for each dashboard: the platform answers for an Express account and an
+  # account with no dashboard, the seller with Stripe for a full one.
+  defp collector(%{dashboard: :full} = account, field), do: Map.get(account, field) || :stripe
+  defp collector(account, field), do: Map.get(account, field) || :application
+
+  # Who collects, as v1's controller says it: the platform always; the seller with Stripe only
+  # when asked for, since that is Stripe's own default for a full dashboard.
+  defp v1_collector(account, field, seller_word),
+    do: v1_word(Map.get(account, field), collector(account, field), seller_word)
+
+  defp v1_word(_given, :application, _seller_word), do: "application"
+  defp v1_word(:stripe, :stripe, seller_word), do: seller_word
+  defp v1_word(nil, :stripe, _seller_word), do: nil
+
+  defp keyed(_key, nil), do: nil
+  defp keyed(key, value), do: %{key => value}
+
+  @doc """
+  Params of changing a connected account (`POST /v2/core/accounts/:id` or `POST
+  /v1/accounts/:id`): only the details given, and the configurations and capabilities given
+  added to the account's.
+  """
+  @spec connected_account_update_params(MishkaPay.ConnectedAccount.t(), :v2 | :v1) :: map()
+  def connected_account_update_params(account, :v2) do
+    reject_nil(%{
+      "contact_email" => account.email,
+      "display_name" => account.business_name,
+      "configuration" => v2_configuration(account),
+      "metadata" => with_reference(account.metadata, account.reference),
+      "include" => @everything
+    })
+  end
+
+  def connected_account_update_params(account, :v1) do
     reject_nil(%{
       "email" => account.email,
       "business_profile" => account.business_name && %{"name" => account.business_name},
-      "capabilities" =>
-        account.capabilities && Map.new(account.capabilities, &{&1, %{"requested" => true}}),
+      "capabilities" => v1_capabilities(account),
       "metadata" => with_reference(account.metadata, account.reference)
     })
   end
 
-  @dashboards %{"express" => :express, "full" => :standard, "none" => :custom}
-  @capability_states %{"active" => :active, "inactive" => :inactive, "pending" => :pending}
+  defp v2_configuration(%{configurations: nil, capabilities: nil}), do: nil
+
+  defp v2_configuration(account) do
+    asked =
+      account.configurations
+      |> List.wrap()
+      |> Enum.reduce(%{}, fn name, acc ->
+        {path, _v1} = @asked[name]
+        requested(acc, [Atom.to_string(name) | path])
+      end)
+
+    account.capabilities
+    |> List.wrap()
+    |> Enum.reduce(asked, &requested(&2, String.split(&1, ".")))
+    |> Map.new(fn {name, capabilities} -> {name, configuration_of(capabilities)} end)
+  end
+
+  # A configuration with nothing asked of it is applied as it is.
+  defp requested(acc, [name]), do: Map.put_new(acc, name, %{})
+
+  defp requested(acc, [name | path]),
+    do:
+      update_in(
+        acc,
+        [Access.key(name, %{})],
+        &put_in(&1, Enum.map(path, fn key -> Access.key(key, %{}) end), %{"requested" => true})
+      )
+
+  defp configuration_of(capabilities) when map_size(capabilities) == 0, do: %{}
+  defp configuration_of(capabilities), do: %{"capabilities" => capabilities}
+
+  defp v1_capabilities(%{configurations: nil, capabilities: nil}), do: nil
+
+  defp v1_capabilities(account) do
+    names =
+      Enum.flat_map(List.wrap(account.configurations), fn name ->
+        {_path, v1} = @asked[name]
+        List.wrap(v1)
+      end) ++ List.wrap(account.capabilities)
+
+    Map.new(names, &{&1, %{"requested" => true}})
+  end
+
+  @capability_states ~w(active pending restricted rejected unsupported inactive)
+  @v1_dashboards %{"express" => :express, "standard" => :full, "custom" => :none}
 
   @doc """
-  A Stripe Account as a `MishkaPay.ConnectedAccount`: its kind (Stripe's `type`, else its
-  dashboard), whether it takes payments and payouts, and what Stripe still needs.
+  A Stripe connected account as a `MishkaPay.ConnectedAccount`, read with either API: a
+  `v2.core.account` with its configurations' capabilities and the requirements the seller must
+  meet, or a v1 `account` with its controller and capabilities.
   """
   @spec connected_account(map()) ::
           {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
-  def connected_account(account) do
-    metadata = account["metadata"] || %{}
-    states = account["capabilities"] || %{}
+  def connected_account(%{"object" => "v2.core.account"} = account) do
+    states = v2_states(account["configuration"] || %{})
+    requirements = account["requirements"]
+    responsibilities = get_in(account, ["defaults", "responsibilities"]) || %{}
 
-    %{
-      provider: "stripe",
-      id: account["id"],
-      type:
-        Map.get(@dashboards, get_in(account, ["controller", "stripe_dashboard", "type"])) ||
-          known(account["type"], ~w(express standard custom)),
+    account
+    |> account_common()
+    |> Map.merge(%{
+      api: :v2,
+      dashboard: known(account["dashboard"], ~w(express full none)),
+      configurations:
+        Enum.map(
+          account["applied_configurations"] || [],
+          &known(&1, ~w(merchant recipient customer))
+        ),
+      fees_collector: known(responsibilities["fees_collector"], ~w(application stripe)),
+      losses_collector: known(responsibilities["losses_collector"], ~w(application stripe)),
+      country: get_in(account, ["identity", "country"]),
+      email: account["contact_email"],
+      business_name: account["display_name"],
+      capabilities: Map.keys(states),
+      capability_status:
+        Map.new(states, fn {name, state} -> {name, known(state["status"], @capability_states)} end),
+      charges_enabled: active?(states, ["merchant.card_payments"]),
+      payouts_enabled:
+        active?(states, ["merchant.stripe_balance.payouts", "recipient.stripe_balance.payouts"]),
+      transfers_enabled: active?(states, ["recipient.stripe_balance.stripe_transfers"]),
+      details_submitted:
+        is_map(requirements) and
+          due(requirements, ~w(currently_due past_due eventually_due)) == [],
+      requirements_due: due(requirements, ~w(currently_due past_due)),
+      disabled_reason: held_back(states),
+      default_currency: get_in(account, ["defaults", "currency"]),
+      closed: account["closed"] == true,
+      created_at: time(account["created"])
+    })
+    |> built_account()
+  end
+
+  def connected_account(account) do
+    states = account["capabilities"] || %{}
+    controller = account["controller"] || %{}
+    disabled = get_in(account, ["requirements", "disabled_reason"])
+
+    account
+    |> account_common()
+    |> Map.merge(%{
+      api: :v1,
+      dashboard:
+        known(get_in(controller, ["stripe_dashboard", "type"]), ~w(express full none)) ||
+          @v1_dashboards[account["type"]],
+      configurations:
+        for(
+          {name, capability} <- [merchant: "card_payments", recipient: "transfers"],
+          is_map_key(states, capability),
+          do: name
+        ),
+      fees_collector: v1_payer(get_in(controller, ["fees", "payer"])),
+      losses_collector: known(get_in(controller, ["losses", "payments"]), ~w(application stripe)),
       country: account["country"],
       email: account["email"],
       business_name: get_in(account, ["business_profile", "name"]),
       capabilities: Map.keys(states),
       capability_status:
-        Map.new(states, fn {name, state} -> {name, @capability_states[state]} end),
+        Map.new(states, fn {name, state} -> {name, known(state, @capability_states)} end),
       charges_enabled: account["charges_enabled"] == true,
       payouts_enabled: account["payouts_enabled"] == true,
+      transfers_enabled: states["transfers"] == "active",
       details_submitted: account["details_submitted"] == true,
       requirements_due: get_in(account, ["requirements", "currently_due"]) || [],
-      disabled_reason: get_in(account, ["requirements", "disabled_reason"]),
+      disabled_reason: disabled,
       default_currency: account["default_currency"],
-      reference: metadata[@reference],
-      metadata: Map.delete(metadata, @reference),
+      closed: is_binary(disabled) and String.starts_with?(disabled, "rejected."),
       created_at: time(account["created"])
+    })
+    |> built_account()
+  end
+
+  defp account_common(account) do
+    metadata = account["metadata"] || %{}
+
+    %{
+      provider: "stripe",
+      id: account["id"],
+      reference: metadata[@reference],
+      metadata: Map.delete(metadata, @reference)
     }
-    |> Map.reject(fn {key, value} -> key == :type and is_nil(value) end)
+  end
+
+  defp built_account(attrs) do
+    attrs
+    |> reject_nil()
     |> MishkaPay.ConnectedAccount.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
+  # Accounts v1 says who pays Stripe's fees: the connected account itself (with Stripe), or the
+  # platform under one of its names.
+  defp v1_payer("account"), do: :stripe
+  defp v1_payer("application" <> _kind), do: :application
+  defp v1_payer(_none), do: nil
+
+  # Each capability of each configuration, by its dotted name (`"merchant.card_payments"`,
+  # `"recipient.stripe_balance.stripe_transfers"`); one Stripe never asked for is `null`.
+  defp v2_states(configuration) do
+    for {name, %{"capabilities" => %{} = capabilities}} <- configuration,
+        state <- leaves(capabilities, [name]),
+        into: %{},
+        do: state
+  end
+
+  defp leaves(%{"status" => _status} = state, path), do: [{Enum.join(path, "."), state}]
+
+  defp leaves(%{} = nested, path),
+    do: Enum.flat_map(nested, fn {key, value} -> leaves(value, path ++ [key]) end)
+
+  defp leaves(_null, _path), do: []
+
+  defp active?(states, names), do: Enum.any?(names, &(get_in(states, [&1, "status"]) == "active"))
+
+  # What the seller still has to give: the entries awaiting them, by how soon they are due.
+  defp due(%{"entries" => entries}, deadlines) when is_list(entries) do
+    for %{"awaiting_action_from" => "user", "description" => what} = entry <- entries,
+        get_in(entry, ["minimum_deadline", "status"]) in deadlines,
+        do: what
+  end
+
+  defp due(_none, _deadlines), do: []
+
+  # Why a capability is held back, as Stripe words it (`requirements_past_due`, `rejected_fraud`).
+  defp held_back(states) do
+    Enum.find_value(states, fn
+      {_name, %{"status" => status, "status_details" => [%{"code" => code} | _]}}
+      when status in ~w(restricted rejected unsupported) ->
+        code
+
+      _active_or_pending ->
+        nil
+    end)
+  end
+
   @link_types %{onboarding: "account_onboarding", update: "account_update"}
 
-  @doc "Params of `POST /v1/account_links`: the account, its kind of link and the two pages."
-  @spec account_link_params(MishkaPay.AccountLink.t()) :: map()
-  def account_link_params(link) do
+  @doc """
+  Params of an account link: `POST /v2/core/account_links` (`:v2`), its use case with the two
+  pages; or `POST /v1/account_links` (`:v1`).
+  """
+  @spec account_link_params(MishkaPay.AccountLink.t(), :v2 | :v1) :: map()
+  def account_link_params(link, :v2) do
+    type = @link_types[link.type]
+
+    %{
+      "account" => link.account_id,
+      "use_case" => %{
+        "type" => type,
+        type => %{"refresh_url" => link.refresh_url, "return_url" => link.return_url}
+      }
+    }
+  end
+
+  def account_link_params(link, :v1) do
     %{
       "account" => link.account_id,
       "type" => @link_types[link.type],
@@ -2619,13 +2952,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec account_link(map(), MishkaPay.AccountLink.t()) ::
           {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
   def account_link(answer, link) do
-    {:ok,
-     %{
-       link
-       | url: answer["url"],
-         expires_at: time(answer["expires_at"]),
-         created_at: time(answer["created"])
-     }}
+    made = %{
+      link
+      | url: answer["url"],
+        expires_at: time(answer["expires_at"]),
+        created_at: time(answer["created"])
+    }
+
+    {:ok, made}
   end
 
   @doc """
@@ -2738,6 +3072,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     case DateTime.from_unix(seconds) do
       {:ok, time} -> time
       {:error, _out_of_range} -> nil
+    end
+  end
+
+  # API v2 answers times in RFC 3339 (`"2026-11-17T11:27:06.000Z"`).
+  defp time(text) when is_binary(text) do
+    case DateTime.from_iso8601(text) do
+      {:ok, time, _offset} -> DateTime.truncate(time, :second)
+      {:error, _not_a_time} -> nil
     end
   end
 
