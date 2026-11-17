@@ -128,6 +128,7 @@ defmodule MishkaPay.Messages do
           | :due_sent_only
           | :stripe_event_types
           | :stripe_event_object
+          | :usage_stream_live
           | :search_needs
           | :subscription_search_needs
           | :subscription_status
@@ -896,6 +897,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
+
+  defp msgid(:usage_stream_live),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe counts high-volume usage in live mode only: in a sandbox or test mode, report it without stream"
+      )
 
   defp msgid(:stripe_event_object),
     do:

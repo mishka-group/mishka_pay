@@ -125,7 +125,9 @@ defmodule ShopWeb.UsageTest do
     refute has_element?(view, "[data-testid=usage-cancel]")
   end
 
-  test "a high-volume report goes through Stripe's meter event stream", %{conn: conn} do
+  test "a high-volume report on sandbox keys says Stripe's stream is live mode only", %{
+    conn: conn
+  } do
     {:ok, view, _html} = live(conn, "/")
 
     view
@@ -138,15 +140,9 @@ defmodule ShopWeb.UsageTest do
     })
     |> render_submit()
 
-    assert_received {:streamed,
-                     %{
-                       "event_name" => "api_call",
-                       "identifier" => "mishka_pay-usage-" <> _,
-                       "payload" => %{"stripe_customer_id" => "cus_1", "value" => "4"}
-                     }}
-
+    refute_received {:streamed, _payload}
     refute_received {:reported, _payload}
-    assert has_element?(view, "[data-testid=usage-reported]", "cus_1")
+    assert has_element?(view, "[data-testid=usage-report-error]", "live mode only")
   end
 
   test "reports usage, reads the summary, and makes a metered price", %{conn: conn} do

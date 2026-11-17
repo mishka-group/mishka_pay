@@ -2395,6 +2395,14 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # Stripe's meter event stream keeps events in live mode only: a sandbox or test-mode key gets an
+  # answer but nothing is counted, so such a report is refused before it is sent.
+  defp send_usage(%MishkaPay.Usage{stream: true}, _identifier, %{secret_key: "sk_test_" <> _}),
+    do: invalid(:stream, Messages.text(:usage_stream_live))
+
+  defp send_usage(%MishkaPay.Usage{stream: true}, _identifier, %{secret_key: "rk_test_" <> _}),
+    do: invalid(:stream, Messages.text(:usage_stream_live))
+
   defp send_usage(%MishkaPay.Usage{stream: true} = usage, identifier, keys),
     do: stream_usage(usage, identifier || new_identifier(), keys, 1)
 
