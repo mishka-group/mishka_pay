@@ -78,7 +78,7 @@ defmodule ShopWeb.ShopLive do
      |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
-     |> assign(pay_with: "stripe")
+     |> assign(lookup: nil)
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -210,16 +210,13 @@ defmodule ShopWeb.ShopLive do
     end
   end
 
-  # The provider picked under "Pay with": the cards and the options follow it.
-  def handle_event("pay_with", %{"provider" => provider}, socket),
-    do: {:noreply, assign(socket, pay_with: provider_choice(provider))}
-
   def handle_event("sync", %{"payment_id" => payment_id}, socket) do
     with {:ok, payment_id} <- payment_id(payment_id),
          {:ok, payment} <- sync(payment_id) do
       {:noreply,
        socket
        |> put_payment(payment)
+       |> assign(lookup: nil)
        |> assign_last()
        |> select(payment.id)
        |> flash(
@@ -229,7 +226,10 @@ defmodule ShopWeb.ShopLive do
     else
       {:error, error} ->
         {:noreply,
-         socket |> close_other(payment_id) |> flash(:error, MishkaPay.Ash.message(error))}
+         socket
+         |> close_other(payment_id)
+         |> assign(lookup: payment_id)
+         |> flash(:error, MishkaPay.Ash.message(error))}
     end
   end
 
@@ -414,14 +414,13 @@ defmodule ShopWeb.ShopLive do
 
       <section data-testid="buy">
         <.section_title icon="hero-shopping-cart" title="Buy something" />
-        <form id="buy" phx-submit="buy" class="space-y-4">
+        <form id="buy" phx-submit="buy" class="group/buy space-y-4">
           <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="one-time-products">
             <.product
               :for={product <- @products}
               :if={!Shop.Catalog.plan?(product)}
               product={product}
               open?={@setting.open}
-              provider={@pay_with}
             />
           </div>
           <h3 class="font-medium flex items-center gap-2">
@@ -434,7 +433,6 @@ defmodule ShopWeb.ShopLive do
               :if={Shop.Catalog.plan?(product)}
               product={product}
               open?={@setting.open}
-              provider={@pay_with}
             />
           </div>
           <.buyer_bar :if={@buyer} buyer={@buyer} />
@@ -442,7 +440,6 @@ defmodule ShopWeb.ShopLive do
             max_quantity={@max_quantity}
             paypal?={@paypal?}
             buyer?={!!@buyer}
-            provider={@pay_with}
           />
         </form>
         <.test_cards />
@@ -456,7 +453,8 @@ defmodule ShopWeb.ShopLive do
           <form phx-submit="sync" class="join" data-testid="read-payment-form">
             <input
               name="payment_id"
-              placeholder="pi_... from the sandbox"
+              value={@lookup}
+              placeholder="pi_... or a PayPal order id"
               class="input input-sm join-item"
               data-testid="read-payment-input"
             />
@@ -586,10 +584,9 @@ defmodule ShopWeb.ShopLive do
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
       customer: buyer(params),
-      merchant_of_record: on_off(params["merchant_of_record"]),
       metadata: metadata(params["meta_key"], params["meta_value"])
     }
-    |> Map.merge(options(params))
+    |> Map.merge(options(provider, params))
   end
 
   # A product published to Stripe's catalog sells its Stripe price by id with Stripe; one not
@@ -669,8 +666,12 @@ defmodule ShopWeb.ShopLive do
   defp discount_given(_params), do: :ok
 
   # The checkout options, each only when chosen; Mishka Pay refuses a wrong mix with a reason.
-  defp options(params) do
+  # Stripe's options; the form hides them under PayPal, and anything left in them is not sent.
+  defp options("paypal", _params), do: %{}
+
+  defp options("stripe", params) do
     %{
+      merchant_of_record: on_off(params["merchant_of_record"]),
       discounts: discounts(params["discount_mode"], blank_nil(params["discount_id"])),
       allow_promotion_codes: (params["discount_mode"] == "typed" && true) || nil,
       automatic_tax: on_off(params["automatic_tax"]),

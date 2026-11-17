@@ -182,7 +182,7 @@ defmodule ShopWeb.SubscriptionsComponent do
               </td>
               <td class="text-sm">
                 <div>{sub.customer_name || "–"}</div>
-                <div class="text-xs opacity-60">{sub.customer_email}</div>
+                <div class="text-xs opacity-60 break-all">{sub.customer_email}</div>
               </td>
               <td class="text-sm">{price(sub)}</td>
               <td>
@@ -264,7 +264,7 @@ defmodule ShopWeb.SubscriptionsComponent do
               <dt class="opacity-70">Buyer</dt>
               <dd>
                 {@selected.customer_name || "–"}
-                <span class="block text-xs opacity-70">{@selected.customer_email}</span>
+                <span class="block text-xs opacity-70 break-all">{@selected.customer_email}</span>
               </dd>
               <dt class="opacity-70">{if active?(@selected), do: "Period ends", else: "Ended"}</dt>
               <dd class="text-xs" data-testid="sub-stored-period-end">
@@ -329,7 +329,9 @@ defmodule ShopWeb.SubscriptionsComponent do
                 <dt class="opacity-70">Buyer</dt>
                 <dd>
                   {live.subscription.customer_name || "–"}
-                  <span class="block text-xs opacity-70">{live.subscription.customer_email}</span>
+                  <span class="block text-xs opacity-70 break-all">
+                    {live.subscription.customer_email}
+                  </span>
                 </dd>
               </dl>
               <div class="mt-3" data-testid="sub-invoices">
