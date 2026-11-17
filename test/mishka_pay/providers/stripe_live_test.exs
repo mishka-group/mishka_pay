@@ -1894,6 +1894,113 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
   end
 
+  # Mastercard: this sandbox's Radar block list holds the test Visa card (a refund as fraudulent
+  # puts a card there), so a Visa charge is blocked.
+  test "a payment intent is made once, changed, confirmed on the server with a test card and read as a payment; a held one is let go",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "intent-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    intent = %{
+      provider: "stripe",
+      amount: %{amount: "12.00", currency: "USD"},
+      customer_id: customer,
+      setup_future_usage: :off_session,
+      reference: "intent-#{run}",
+      owner: "user-#{run}"
+    }
+
+    assert {:ok,
+            %MishkaPay.PaymentIntent{
+              id: "pi_" <> _ = id,
+              status: :requires_payment_method,
+              client_secret: "pi_" <> _
+            }} = MishkaPay.create_payment_intent(intent)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^id}} = MishkaPay.create_payment_intent(intent)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^id, amount: amount}} =
+             MishkaPay.update_payment_intent(%{
+               provider: "stripe",
+               id: id,
+               amount: %{amount: "15.00", currency: "USD"}
+             })
+
+    assert Money.equal?(amount, Money.new(:USD, "15.00"))
+
+    assert {:ok,
+            %MishkaPay.PaymentIntent{id: ^id, status: :succeeded, payment_method_id: "pm_" <> _}} =
+             MishkaPay.confirm_payment_intent("stripe", id, nil,
+               payment_method_id: "pm_card_mastercard",
+               return_url: "https://shop.test/paid"
+             )
+
+    reference = "intent-#{run}"
+    owner = "user-#{run}"
+
+    assert {:ok, %Payment{id: ^id, status: :paid, reference: ^reference, owner: ^owner}} =
+             MishkaPay.fetch_payment("stripe", id)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: held, capture: :manual}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "5.00", currency: "USD"},
+               capture: :manual,
+               payment_method_id: "pm_card_mastercard"
+             })
+
+    assert {:ok, %MishkaPay.PaymentIntent{status: :requires_capture}} =
+             MishkaPay.confirm_payment_intent("stripe", held, nil,
+               return_url: "https://shop.test/paid"
+             )
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^held, status: :canceled}} =
+             MishkaPay.cancel_payment_intent("stripe", held)
+  end
+
+  test "a setup intent saves a test card on a customer without a charge; another is canceled",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "setup-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    assert {:ok,
+            %MishkaPay.SetupIntent{
+              id: "seti_" <> _ = id,
+              status: :requires_payment_method,
+              client_secret: "seti_" <> _,
+              reference: "card-" <> _
+            }} =
+             MishkaPay.create_setup_intent(%{
+               provider: "stripe",
+               customer_id: customer,
+               usage: :off_session,
+               reference: "card-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.SetupIntent{id: ^id, status: :succeeded, payment_method_id: method}} =
+             MishkaPay.confirm_setup_intent("stripe", id, nil,
+               payment_method_id: "pm_card_mastercard",
+               return_url: "https://shop.test/saved"
+             )
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: ^method}]}} =
+             MishkaPay.list_payment_methods("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.SetupIntent{id: other}} =
+             MishkaPay.create_setup_intent(%{provider: "stripe", customer_id: customer})
+
+    assert {:ok, %MishkaPay.SetupIntent{id: ^other, status: :canceled}} =
+             MishkaPay.cancel_setup_intent("stripe", other)
+  end
+
   test "a tax rate is made once, put on a checkout's line and a pending charge, and archived; a registration is added and ended; the settings are read and set as they were",
        %{key: key} do
     run = run_id()

@@ -862,6 +862,127 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp address(_none), do: nil
 
   @doc """
+  Params of `POST /v1/payment_intents` and `POST /v1/payment_intents/:id`: the fields set, the
+  amount in Stripe's units with its currency, and the reference and owner in the metadata.
+  """
+  @spec payment_intent_params(MishkaPay.PaymentIntent.t()) :: map()
+  def payment_intent_params(%MishkaPay.PaymentIntent{} = intent) do
+    reject_nil(%{
+      "amount" => intent.amount && minor(intent.amount),
+      "currency" => intent.amount && lower_currency(intent.amount),
+      "customer" => intent.customer_id,
+      "payment_method" => intent.payment_method_id,
+      "capture_method" => intent.capture && Atom.to_string(intent.capture),
+      "setup_future_usage" =>
+        intent.setup_future_usage && Atom.to_string(intent.setup_future_usage),
+      "automatic_payment_methods" => automatic_methods(intent),
+      "description" => intent.description,
+      "metadata" =>
+        intent.metadata
+        |> with_reference(intent.reference)
+        |> with_owner(intent.owner)
+    })
+  end
+
+  @doc "Params of `POST /v1/setup_intents`: the fields set, and the reference in the metadata."
+  @spec setup_intent_params(MishkaPay.SetupIntent.t()) :: map()
+  def setup_intent_params(%MishkaPay.SetupIntent{} = intent) do
+    reject_nil(%{
+      "customer" => intent.customer_id,
+      "payment_method" => intent.payment_method_id,
+      "usage" => intent.usage && Atom.to_string(intent.usage),
+      "automatic_payment_methods" => automatic_methods(intent),
+      "description" => intent.description,
+      "metadata" => with_reference(intent.metadata, intent.reference)
+    })
+  end
+
+  # A new intent offers the dashboard's payment methods unless told cards only; a change leaves
+  # them as they are.
+  defp automatic_methods(%{id: nil, automatic_payment_methods: false}),
+    do: %{"enabled" => false}
+
+  defp automatic_methods(%{id: nil}), do: %{"enabled" => true}
+  defp automatic_methods(_change), do: nil
+
+  defp with_owner(metadata, nil), do: metadata
+  defp with_owner(metadata, owner), do: Map.put(metadata || %{}, @owner, owner)
+
+  @doc "Params of an intent's `confirm`: the payment method and the page to come back to."
+  @spec confirm_params(keyword()) :: map()
+  def confirm_params(opts),
+    do:
+      reject_nil(%{
+        "payment_method" => opts[:payment_method_id],
+        "return_url" => opts[:return_url]
+      })
+
+  @future_usages %{"on_session" => :on_session, "off_session" => :off_session}
+  @payment_intent_statuses Map.new(MishkaPay.PaymentIntent.statuses(), &{Atom.to_string(&1), &1})
+  @setup_intent_statuses Map.new(MishkaPay.SetupIntent.statuses(), &{Atom.to_string(&1), &1})
+
+  @doc "A Stripe PaymentIntent as a `MishkaPay.PaymentIntent`, for a page with Stripe Elements."
+  @spec payment_intent(map()) :: {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+  def payment_intent(intent) do
+    currency = intent["currency"]
+
+    %{
+      provider: "stripe",
+      id: intent["id"],
+      amount: money(intent["amount"], currency),
+      amount_received: money(intent["amount_received"], currency),
+      customer_id: id_of(intent["customer"]),
+      payment_method_id: id_of(intent["payment_method"]),
+      capture: (intent["capture_method"] == "manual" && :manual) || :automatic,
+      setup_future_usage: Map.get(@future_usages, intent["setup_future_usage"]),
+      automatic_payment_methods: get_in(intent, ["automatic_payment_methods", "enabled"]),
+      description: intent["description"],
+      reference: get_in(intent, ["metadata", @reference]),
+      owner: get_in(intent, ["metadata", @owner]),
+      metadata: Map.drop(intent["metadata"] || %{}, [@reference, @owner]),
+      client_secret: intent["client_secret"],
+      status: Map.get(@payment_intent_statuses, intent["status"])
+    }
+    |> Map.merge(intent_failure(intent["last_payment_error"], intent["created"]))
+    |> reject_nil()
+    |> MishkaPay.PaymentIntent.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc "A Stripe SetupIntent as a `MishkaPay.SetupIntent`, for a page with Stripe Elements."
+  @spec setup_intent(map()) :: {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+  def setup_intent(intent) do
+    %{
+      provider: "stripe",
+      id: intent["id"],
+      customer_id: id_of(intent["customer"]),
+      payment_method_id: id_of(intent["payment_method"]),
+      usage: Map.get(@future_usages, intent["usage"]),
+      automatic_payment_methods: get_in(intent, ["automatic_payment_methods", "enabled"]),
+      description: intent["description"],
+      reference: get_in(intent, ["metadata", @reference]),
+      metadata: Map.delete(intent["metadata"] || %{}, @reference),
+      client_secret: intent["client_secret"],
+      status: Map.get(@setup_intent_statuses, intent["status"])
+    }
+    |> Map.merge(intent_failure(intent["last_setup_error"], intent["created"]))
+    |> reject_nil()
+    |> MishkaPay.SetupIntent.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # Why the last try failed: the decline code when the card's bank gave one.
+  defp intent_failure(error, created) do
+    error = error || %{}
+
+    %{
+      failure_code: error["decline_code"] || error["code"],
+      failure_message: error["message"],
+      created_at: time(created)
+    }
+  end
+
+  @doc """
   Params of `POST /v1/tax_rates` and `POST /v1/tax_rates/:id`: the fields set, with the reference
   in the metadata. A change never sets the percentage or whether it is inclusive.
   """

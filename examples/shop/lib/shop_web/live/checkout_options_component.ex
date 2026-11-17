@@ -14,7 +14,8 @@ defmodule ShopWeb.CheckoutOptionsComponent do
 
   use ShopWeb, :live_component
 
-  import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
+  import ShopWeb.PayComponents,
+    only: [section_title: 1, hint: 1, stripe_form: 1, publishable_key: 2]
 
   @impl true
   def mount(socket), do: {:ok, assign(socket, embedded: nil, read: nil)}
@@ -288,49 +289,14 @@ defmodule ShopWeb.CheckoutOptionsComponent do
           </button>
         </div>
         <.hint>ui_mode: :embedded, Stripe.js createEmbeddedCheckoutPage</.hint>
-        <div
+        <.stripe_form
           id={"embedded-checkout-#{@embedded.id}"}
-          phx-hook=".EmbeddedCheckout"
-          phx-update="ignore"
-          data-client-secret={@embedded.client_secret}
-          data-publishable-key={@embedded.publishable_key}
+          mode="embedded_checkout"
+          client_secret={@embedded.client_secret}
+          publishable_key={@embedded.publishable_key}
           data-testid="embedded-checkout"
-        >
-        </div>
+        />
       </div>
-
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".EmbeddedCheckout">
-        // A hook, not LiveView.JS: Stripe's embedded checkout is an iframe that only Stripe.js can
-        // mount, with the checkout's client secret. The script loads once per page.
-        let stripeJs
-        const loadStripe = () => stripeJs ||= new Promise((resolve, reject) => {
-          if (window.Stripe) return resolve(window.Stripe)
-          const script = document.createElement("script")
-          script.src = "https://js.stripe.com/endive/stripe.js"
-          script.onload = () => resolve(window.Stripe)
-          script.onerror = () => { stripeJs = null; reject(new Error("Stripe.js did not load")) }
-          document.head.appendChild(script)
-        })
-
-        export default {
-          async mounted() {
-            const {clientSecret, publishableKey} = this.el.dataset
-            try {
-              const Stripe = await loadStripe()
-              const stripe = Stripe(publishableKey)
-              const fetchClientSecret = async () => clientSecret
-              const create = stripe.createEmbeddedCheckoutPage || stripe.initEmbeddedCheckout
-              this.checkout = await create.call(stripe, {fetchClientSecret})
-              if (this.el.isConnected) this.checkout.mount(this.el)
-            } catch (error) {
-              this.el.textContent = "Stripe's form could not load: " + error.message
-            }
-          },
-          destroyed() {
-            if (this.checkout && this.checkout.destroy) this.checkout.destroy()
-          }
-        }
-      </script>
 
       <div class="space-y-3" data-testid="checkout-readback">
         <form
@@ -537,16 +503,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
   end
 
   # An embedded checkout needs the site's publishable key for Stripe.js.
-  defp keys("embedded", tenant) do
-    case MishkaPay.Credentials.fetch("stripe", tenant) do
-      {:ok, %{publishable_key: key}} when is_binary(key) ->
-        {:ok, key}
-
-      _no_key ->
-        {:error,
-         "An embedded checkout needs the site's publishable key: put STRIPE_PUBLISHABLE_KEY=pk_test_... in examples/shop/.env."}
-    end
-  end
+  defp keys("embedded", tenant), do: publishable_key(tenant, "An embedded checkout")
 
   defp keys(_hosted, _tenant), do: {:ok, nil}
 

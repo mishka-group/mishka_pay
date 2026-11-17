@@ -50,6 +50,9 @@ defmodule MishkaPay do
     * checkouts and payments: `:checkout`, `:checkout_read`, `:checkout_expire`, `:payment`,
       `:payment_list`, `:payment_capture`, `:payment_cancel`, `:refund`, `:refund_read`,
       `:refund_list`;
+    * the site's own card form: `:payment_intent_create`, `:payment_intent`,
+      `:payment_intent_update`, `:payment_intent_confirm`, `:payment_intent_cancel`,
+      `:setup_intent_create`, `:setup_intent`, `:setup_intent_confirm`, `:setup_intent_cancel`;
     * subscriptions: `:subscription`, `:subscription_cancel`, `:subscription_resume`,
       `:subscription_change`, `:subscription_preview`, `:subscription_pause`,
       `:subscription_unpause`, `:subscription_list`, `:subscription_search`, `:invoices`,
@@ -186,6 +189,158 @@ defmodule MishkaPay do
   def cancel_payment(provider, payment_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payment_id) do
     capable(:capture, :payment_cancel, provider, tenant, & &1.cancel_payment(payment_id, &2))
+  end
+
+  @doc """
+  Makes a payment intent from `attrs` (see `MishkaPay.PaymentIntent`): an `:amount`, and the
+  `:customer_id`, `:payment_method_id`, `:capture`, `:setup_future_usage` and `:reference` it
+  needs. Hand its `:client_secret` to that buyer's page only, where the provider's card form
+  (Stripe Elements) confirms it; then read it again before giving access.
+  """
+  @spec create_payment_intent(map()) ::
+          {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+  def create_payment_intent(attrs) when is_map(attrs) do
+    made(
+      :payment_intent_create,
+      :intent,
+      attrs,
+      MishkaPay.PaymentIntent,
+      [:provider, :amount],
+      :create_payment_intent
+    )
+  end
+
+  @doc "Reads payment intent `payment_intent_id` from `provider`, with its status."
+  @spec fetch_payment_intent(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+  def fetch_payment_intent(provider, payment_intent_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_intent_id) do
+    capable(
+      :intent,
+      :payment_intent,
+      provider,
+      tenant,
+      & &1.fetch_payment_intent(payment_intent_id, &2)
+    )
+  end
+
+  @doc """
+  Changes payment intent `attrs.id` before it is paid: only the fields given (`:amount`,
+  `:customer_id`, `:payment_method_id`, `:capture`, `:setup_future_usage`, `:description`,
+  `:metadata`).
+  """
+  @spec update_payment_intent(map()) ::
+          {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+  def update_payment_intent(attrs) when is_map(attrs) do
+    made(
+      :payment_intent_update,
+      :intent,
+      attrs,
+      MishkaPay.PaymentIntent,
+      [:provider, :id],
+      :update_payment_intent
+    )
+  end
+
+  @doc """
+  Confirms payment intent `payment_intent_id` on the server: `payment_method_id:` a saved payment
+  method, and `return_url:` where a payment method's own page (3D Secure, a bank) sends the
+  buyer back (`https`, or `http` on `localhost`). A page with the card form confirms in the
+  browser instead.
+  """
+  @spec confirm_payment_intent(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+  def confirm_payment_intent(provider, payment_intent_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(payment_intent_id) do
+    capable(:intent, :payment_intent_confirm, provider, tenant, fn module, keys ->
+      with {:ok, opts} <- confirm_opts(opts),
+           do: module.confirm_payment_intent(payment_intent_id, opts, keys)
+    end)
+  end
+
+  @doc """
+  Cancels payment intent `payment_intent_id` before it is paid, or lets the money a held one
+  (`:requires_capture`) keeps go back. Answers it `:canceled`.
+  """
+  @spec cancel_payment_intent(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+  def cancel_payment_intent(provider, payment_intent_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(payment_intent_id) do
+    capable(
+      :intent,
+      :payment_intent_cancel,
+      provider,
+      tenant,
+      & &1.cancel_payment_intent(payment_intent_id, &2)
+    )
+  end
+
+  @doc """
+  Makes a setup intent from `attrs` (see `MishkaPay.SetupIntent`): it saves a payment method on
+  `:customer_id` with the provider's card form on the site's own page, and charges nothing. Hand
+  its `:client_secret` to that buyer's page only.
+  """
+  @spec create_setup_intent(map()) ::
+          {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+  def create_setup_intent(attrs) when is_map(attrs) do
+    made(
+      :setup_intent_create,
+      :intent,
+      attrs,
+      MishkaPay.SetupIntent,
+      [:provider],
+      :create_setup_intent
+    )
+  end
+
+  @doc "Reads setup intent `setup_intent_id` from `provider`, with its status."
+  @spec fetch_setup_intent(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+  def fetch_setup_intent(provider, setup_intent_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(setup_intent_id) do
+    capable(
+      :intent,
+      :setup_intent,
+      provider,
+      tenant,
+      & &1.fetch_setup_intent(setup_intent_id, &2)
+    )
+  end
+
+  @doc """
+  Confirms setup intent `setup_intent_id` on the server, with `payment_method_id:` and
+  `return_url:` as `confirm_payment_intent/4`.
+  """
+  @spec confirm_setup_intent(String.t(), String.t(), term(), keyword()) ::
+          {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+  def confirm_setup_intent(provider, setup_intent_id, tenant \\ nil, opts \\ [])
+      when is_binary(provider) and is_binary(setup_intent_id) do
+    capable(:intent, :setup_intent_confirm, provider, tenant, fn module, keys ->
+      with {:ok, opts} <- confirm_opts(opts),
+           do: module.confirm_setup_intent(setup_intent_id, opts, keys)
+    end)
+  end
+
+  @doc "Cancels setup intent `setup_intent_id`, which has not succeeded. Answers it `:canceled`."
+  @spec cancel_setup_intent(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+  def cancel_setup_intent(provider, setup_intent_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(setup_intent_id) do
+    capable(
+      :intent,
+      :setup_intent_cancel,
+      provider,
+      tenant,
+      & &1.cancel_setup_intent(setup_intent_id, &2)
+    )
+  end
+
+  # A confirm's return URL follows the rule of a checkout's pages.
+  defp confirm_opts(opts) do
+    case MishkaPay.Checkout.return_url(:return_url, opts[:return_url]) do
+      {:ok, :return_url, _url} -> {:ok, Keyword.take(opts, [:payment_method_id, :return_url])}
+      {:error, field, message} -> ProviderKit.invalid(field, message)
+    end
   end
 
   # The part to take: money above zero, or nil for all of it.

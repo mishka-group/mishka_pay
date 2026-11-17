@@ -739,6 +739,27 @@ defmodule MishkaPayTest do
                MishkaPay.reactivate_meter("acme", "m1", "site-a")
     end
 
+    test "a provider without its own card form refuses intents, after the intent is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :intent}} =
+               MishkaPay.create_payment_intent(%{
+                 provider: "acme",
+                 amount: %{amount: "10", currency: "USD"}
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.create_payment_intent(%{provider: "acme"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :setup_future_usage}]}} =
+               MishkaPay.create_payment_intent(%{
+                 provider: "acme",
+                 amount: %{amount: "10", currency: "USD"},
+                 setup_future_usage: :sometimes
+               })
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :intent}} =
+               MishkaPay.confirm_setup_intent("acme", "s1", "site-a")
+    end
+
     test "a provider without tax rates or a tax setup refuses them, after the rate is checked" do
       rate = %{provider: "acme", display_name: "VAT", percentage: "19", inclusive: true}
 

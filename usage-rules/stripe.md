@@ -55,6 +55,31 @@
   request. An account whose default is Managed Payments is refused by Stripe:
   `Errors.Rejected` with code `"capture_invoice"`. Send `merchant_of_record: false` with it.
 
+## Stripe Elements: payment and setup intents
+
+- `create_payment_intent/1` is `POST /v1/payment_intents`, `create_setup_intent/1`
+  `POST /v1/setup_intents`, both with `automatic_payment_methods[enabled]` (the Dashboard's
+  payment methods; `automatic_payment_methods: false` is cards only). Their `:reference` makes
+  the idempotency key and is kept in the metadata (`:owner` too), so a paid intent reads back
+  through `fetch_payment/3` with its reference and owner, and its `payment_intent.*` webhooks sync
+  the Ash payment row like a checkout's.
+- The page loads `https://js.stripe.com/<version>/stripe.js`, makes
+  `stripe.elements({clientSecret})`, mounts `elements.create("payment")`, and calls
+  `stripe.confirmPayment({elements, redirect: "if_required", confirmParams: {return_url}})` (or
+  `confirmSetup`). The publishable key is the tenant's `publishable_key`.
+- `confirm_payment_intent/4` and `confirm_setup_intent/4` confirm on the server with a saved
+  payment method (`pm_...`); with the Dashboard's payment methods on, Stripe wants a
+  `return_url:` too. In tests use Stripe's test payment methods (`pm_card_visa`,
+  `pm_card_mastercard`); never send a card number.
+- `capture: :manual` holds the money: `:requires_capture` after the confirm, then
+  `capture_payment/4`, or `cancel_payment_intent/3` to let it go.
+- `update_payment_intent/1` sends only what it names; a changed `:amount` sends its currency
+  too. A paid or canceled intent cannot change (`Errors.Rejected`).
+- A declined card on a server confirm is `Errors.Declined` with the bank's reason; read in the
+  browser, the intent's `:failure_code` and `:failure_message` say why the last try failed.
+- Stripe lists Payment Intents integrations as not supported by Managed Payments: an intent is
+  never sold with Stripe as the merchant of record.
+
 ## Managed Payments (merchant of record)
 
 - With `merchant_of_record: true` (the checkout's own field, else the tenant's keys setting, else
@@ -76,7 +101,7 @@
 
 ## Ids and what is refused before any request
 
-- Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
+- Ids are checked by prefix: payments `pi_`, setup intents `seti_`, checkouts `cs_`, subscriptions `sub_`, customers
   `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, tax rates `txr_`, tax registrations `taxreg_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, early fraud warnings `issfr_`, reviews `prv_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only

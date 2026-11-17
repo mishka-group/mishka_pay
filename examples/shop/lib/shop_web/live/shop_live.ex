@@ -23,7 +23,8 @@ defmodule ShopWeb.ShopLive do
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
     * members and access by subscription, refunds and held payments, more checkout options
-      (embedded too), saved cards and portal links, one-off bills, customer search and bill
+      (embedded too), a card form of the shop's own (Stripe Elements: a payment intent, or a
+      setup intent that saves a card), saved cards and portal links, one-off bills, customer search and bill
       previews, each in its own component;
     * reading a checkout or a payment back by its id, and a raw call to any Stripe API path;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
@@ -537,6 +538,8 @@ defmodule ShopWeb.ShopLive do
       <.live_component module={ShopWeb.PaymentToolsComponent} id="payment-tools" tenant={@tenant} />
 
       <.live_component module={ShopWeb.CheckoutOptionsComponent} id="checkout-more" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.CardFormComponent} id="card-form" tenant={@tenant} />
 
       <.live_component module={ShopWeb.SavedCardsComponent} id="saved-cards" tenant={@tenant} />
 

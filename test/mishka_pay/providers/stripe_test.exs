@@ -2179,6 +2179,160 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, "POST", "/v1/reviews/prv_123/approve", ""}
     end
 
+    test "a payment intent is made, read, changed, confirmed and canceled as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      intent = %{
+        provider: "stripe",
+        tenant: "site-a",
+        amount: %{amount: "19.99", currency: "EUR"},
+        customer_id: "cus_123",
+        capture: :manual,
+        setup_future_usage: :off_session,
+        description: "Ebook",
+        reference: "order-9",
+        owner: "user-1"
+      }
+
+      assert {:ok, %MishkaPay.PaymentIntent{id: "pi_" <> _, client_secret: secret}} =
+               MishkaPay.create_payment_intent(intent)
+
+      assert secret =~ "_secret_"
+      assert_received {:stripe_sent, "POST", "/v1/payment_intents", sent, key}
+
+      assert sent == %{
+               "amount" => "1999",
+               "currency" => "eur",
+               "customer" => "cus_123",
+               "capture_method" => "manual",
+               "setup_future_usage" => "off_session",
+               "automatic_payment_methods[enabled]" => "true",
+               "description" => "Ebook",
+               "metadata[mishka_pay_reference]" => "order-9",
+               "metadata[mishka_pay_owner]" => "user-1"
+             }
+
+      assert key =~ "payment-intent"
+
+      assert {:ok, %MishkaPay.PaymentIntent{id: "pi_123", status: status}} =
+               MishkaPay.fetch_payment_intent("stripe", "pi_123", "site-a")
+
+      assert status in MishkaPay.PaymentIntent.statuses()
+
+      assert {:ok, %MishkaPay.PaymentIntent{}} =
+               MishkaPay.update_payment_intent(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 id: "pi_123",
+                 amount: %{amount: "25", currency: "EUR"}
+               })
+
+      assert_received {:stripe_sent, "GET", "/v1/payment_intents/pi_123", _query, _key}
+
+      assert_received {:stripe_sent, "POST", "/v1/payment_intents/pi_123",
+                       %{"amount" => "2500", "currency" => "eur"} = change, _key}
+
+      assert map_size(change) == 2
+
+      assert {:ok, %MishkaPay.PaymentIntent{}} =
+               MishkaPay.confirm_payment_intent("stripe", "pi_123", "site-a",
+                 payment_method_id: "pm_card_visa",
+                 return_url: "https://shop.test/paid"
+               )
+
+      assert_received {:stripe_sent, "POST", "/v1/payment_intents/pi_123/confirm",
+                       %{
+                         "payment_method" => "pm_card_visa",
+                         "return_url" => "https://shop.test/paid"
+                       }, _key}
+
+      assert {:ok, %MishkaPay.PaymentIntent{}} =
+               MishkaPay.cancel_payment_intent("stripe", "pi_123", "site-a")
+
+      assert_received {:stripe_sent, "POST", "/v1/payment_intents/pi_123/cancel", _params, _key}
+
+      assert {:ok, %Payment{id: "pi_123"}} = MishkaPay.fetch_payment("stripe", "pi_123", "site-a")
+    end
+
+    test "a setup intent is made, read, confirmed and canceled as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.SetupIntent{id: "seti_" <> _, client_secret: secret}} =
+               MishkaPay.create_setup_intent(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 customer_id: "cus_123",
+                 usage: "on_session",
+                 automatic_payment_methods: false,
+                 reference: "card-1"
+               })
+
+      assert secret =~ "_secret_"
+
+      assert_received {:stripe_sent, "POST", "/v1/setup_intents",
+                       %{
+                         "customer" => "cus_123",
+                         "usage" => "on_session",
+                         "automatic_payment_methods[enabled]" => "false",
+                         "metadata[mishka_pay_reference]" => "card-1"
+                       }, key}
+
+      assert key =~ "setup-intent"
+
+      assert {:ok, %MishkaPay.SetupIntent{id: "seti_123"}} =
+               MishkaPay.fetch_setup_intent("stripe", "seti_123", "site-a")
+
+      assert {:ok, %MishkaPay.SetupIntent{}} =
+               MishkaPay.confirm_setup_intent("stripe", "seti_123", "site-a",
+                 payment_method_id: "pm_card_visa"
+               )
+
+      assert_received {:stripe_sent, "POST", "/v1/setup_intents/seti_123/confirm",
+                       %{"payment_method" => "pm_card_visa"} = confirm, _key}
+
+      assert map_size(confirm) == 1
+
+      assert {:ok, %MishkaPay.SetupIntent{}} =
+               MishkaPay.cancel_setup_intent("stripe", "seti_123", "site-a")
+    end
+
+    test "an intent that cannot be right is refused before any request" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+      euro = %{amount: "10", currency: "EUR"}
+
+      for {result, field} <- [
+            {MishkaPay.fetch_payment_intent("stripe", "pi_1/../../charges"), :payment_intent_id},
+            {MishkaPay.fetch_payment_intent("stripe", "seti_1"), :payment_intent_id},
+            {MishkaPay.update_payment_intent(%{provider: "stripe", id: "cs_1", amount: euro}),
+             :id},
+            {MishkaPay.confirm_payment_intent("stripe", "pi_1", nil, payment_method_id: "tok_1"),
+             :payment_method_id},
+            {MishkaPay.confirm_payment_intent("stripe", "pi_1", nil,
+               return_url: "http://shop.test/paid"
+             ), :return_url},
+            {MishkaPay.cancel_payment_intent("stripe", "pi_1?x=1"), :payment_intent_id},
+            {MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: euro,
+               customer_id: "x"
+             }), :customer_id},
+            {MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "10.5", currency: "ISK"}
+             }), :amount},
+            {MishkaPay.fetch_setup_intent("stripe", "pi_1"), :setup_intent_id},
+            {MishkaPay.confirm_setup_intent("stripe", "seti_1", nil, return_url: "javascript:x"),
+             :return_url},
+            {MishkaPay.cancel_setup_intent("stripe", "seti_1/../x"), :setup_intent_id},
+            {MishkaPay.create_setup_intent(%{provider: "stripe", payment_method_id: "src_1"}),
+             :payment_method_id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} = result
+      end
+    end
+
     test "tax rates are made, read, archived and listed as Stripe's spec accepts" do
       test = self()
       MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
@@ -3825,6 +3979,82 @@ defmodule MishkaPay.Providers.StripeTest do
            ] = mapped.lines
 
     assert line == Money.new(:USD, "10.00")
+  end
+
+  test "a payment and a setup intent map from Stripe's answers, with why the last try failed" do
+    assert {:ok,
+            %MishkaPay.PaymentIntent{
+              id: "pi_1",
+              amount: amount,
+              amount_received: received,
+              capture: :manual,
+              setup_future_usage: :off_session,
+              status: :requires_payment_method,
+              client_secret: "pi_1_secret_x",
+              failure_code: "insufficient_funds",
+              failure_message: "Your card has insufficient funds.",
+              reference: "order-9",
+              owner: "user-1",
+              metadata: %{"team" => "ops"},
+              customer_id: "cus_1",
+              payment_method_id: nil
+            }} =
+             Stripe.Mapper.payment_intent(%{
+               "object" => "payment_intent",
+               "id" => "pi_1",
+               "amount" => 1999,
+               "amount_received" => 0,
+               "currency" => "eur",
+               "capture_method" => "manual",
+               "setup_future_usage" => "off_session",
+               "status" => "requires_payment_method",
+               "client_secret" => "pi_1_secret_x",
+               "customer" => %{"id" => "cus_1", "object" => "customer"},
+               "last_payment_error" => %{
+                 "code" => "card_declined",
+                 "decline_code" => "insufficient_funds",
+                 "message" => "Your card has insufficient funds."
+               },
+               "metadata" => %{
+                 "mishka_pay_reference" => "order-9",
+                 "mishka_pay_owner" => "user-1",
+                 "team" => "ops"
+               },
+               "created" => 1_794_825_000
+             })
+
+    assert Money.equal?(amount, Money.new(:EUR, "19.99"))
+    assert Money.equal?(received, Money.new(:EUR, 0))
+
+    assert {:ok, %MishkaPay.PaymentIntent{capture: :automatic, status: :succeeded}} =
+             Stripe.Mapper.payment_intent(%{
+               "id" => "pi_2",
+               "amount" => 500,
+               "currency" => "usd",
+               "capture_method" => "automatic_async",
+               "status" => "succeeded"
+             })
+
+    assert {:ok,
+            %MishkaPay.SetupIntent{
+              id: "seti_1",
+              usage: :off_session,
+              status: :succeeded,
+              payment_method_id: "pm_1"
+            }} =
+             Stripe.Mapper.setup_intent(%{
+               "object" => "setup_intent",
+               "id" => "seti_1",
+               "usage" => "off_session",
+               "status" => "succeeded",
+               "payment_method" => "pm_1"
+             })
+
+    assert Stripe.Mapper.payment_intent_params(%MishkaPay.PaymentIntent{
+             provider: "stripe",
+             id: "pi_1",
+             description: "New"
+           }) == %{"description" => "New"}
   end
 
   test "a tax rate, a registration and the tax settings map from Stripe's answers" do

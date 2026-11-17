@@ -33,6 +33,95 @@ defmodule ShopWeb.PayComponents do
   end
 
   @doc """
+  Stripe's own form inside the page, mounted by Stripe.js with a client secret and the site's
+  publishable key: an embedded Checkout (`mode="embedded_checkout"`), or the Payment Element of a
+  payment intent (`"payment"`) or a setup intent (`"setup"`). The form is an iframe only Stripe.js
+  can mount, hence the one hook. A Payment Element is confirmed by a `stripe:confirm` event on
+  its element (`JS.dispatch("stripe:confirm", to: "#" <> id)`), and then tells the part that
+  shows it with a `stripe_confirmed` event (`%{"mode" => mode, "error" => message | nil}`).
+  """
+  attr :id, :string, required: true
+  attr :mode, :string, values: ~w(embedded_checkout payment setup), required: true
+  attr :client_secret, :string, required: true
+  attr :publishable_key, :string, required: true
+  attr :rest, :global
+
+  def stripe_form(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      phx-hook=".StripeForm"
+      phx-update="ignore"
+      data-mode={@mode}
+      data-client-secret={@client_secret}
+      data-publishable-key={@publishable_key}
+      {@rest}
+    >
+    </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".StripeForm">
+      // A hook, not LiveView.JS: Stripe's forms are iframes that only Stripe.js can mount and
+      // confirm, with the client secret. The script loads once per page.
+      let stripeJs
+      const loadStripe = () => stripeJs ||= new Promise((resolve, reject) => {
+        if (window.Stripe) return resolve(window.Stripe)
+        const script = document.createElement("script")
+        script.src = "https://js.stripe.com/endive/stripe.js"
+        script.onload = () => resolve(window.Stripe)
+        script.onerror = () => { stripeJs = null; reject(new Error("Stripe.js did not load")) }
+        document.head.appendChild(script)
+      })
+
+      export default {
+        async mounted() {
+          const {mode, clientSecret, publishableKey} = this.el.dataset
+          try {
+            const stripe = (await loadStripe())(publishableKey)
+            if (mode === "embedded_checkout") {
+              const create = stripe.createEmbeddedCheckoutPage || stripe.initEmbeddedCheckout
+              this.form = await create.call(stripe, {fetchClientSecret: async () => clientSecret})
+            } else {
+              const elements = stripe.elements({clientSecret})
+              this.form = elements.create("payment")
+              this.el.addEventListener("stripe:confirm", () => this.confirm(stripe, elements, mode))
+            }
+            if (this.el.isConnected) this.form.mount(this.el)
+          } catch (error) {
+            this.el.textContent = "Stripe's form could not load: " + error.message
+          }
+        },
+        async confirm(stripe, elements, mode) {
+          const confirm = mode === "setup" ? stripe.confirmSetup : stripe.confirmPayment
+          const {error} = await confirm.call(stripe, {
+            elements,
+            redirect: "if_required",
+            confirmParams: {return_url: window.location.href}
+          })
+          this.pushEventTo(this.el, "stripe_confirmed", {mode, error: error ? error.message : null})
+        },
+        destroyed() {
+          if (this.form && this.form.destroy) this.form.destroy()
+        }
+      }
+    </script>
+    """
+  end
+
+  @doc """
+  The site's publishable key that Stripe.js needs for `what` (`"An embedded checkout"`), or a
+  sentence that says how to add one.
+  """
+  def publishable_key(tenant, what) do
+    case MishkaPay.Credentials.fetch("stripe", tenant) do
+      {:ok, %{publishable_key: key}} when is_binary(key) ->
+        {:ok, key}
+
+      _no_key ->
+        {:error,
+         "#{what} needs the site's publishable key: put STRIPE_PUBLISHABLE_KEY=pk_test_... in examples/shop/.env."}
+    end
+  end
+
+  @doc """
   For the site's staff, beside an error's plain words: the provider's id of the request that
   failed (`:request_id` of `MishkaPay.Errors.Rejected` or `Declined`, found with
   `MishkaPay.Ash.provider_error/1`) and its page about the error. A buyer never sees it.

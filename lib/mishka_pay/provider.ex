@@ -48,6 +48,9 @@ defmodule MishkaPay.Provider do
     * `:capture`: `capture_payment/3`, `cancel_payment/2` (`checkout/2` also takes
       `capture: :manual`);
     * `:expire`: `expire_checkout/2`;
+    * `:intent`: `create_payment_intent/2`, `fetch_payment_intent/2`, `update_payment_intent/2`,
+      `confirm_payment_intent/3`, `cancel_payment_intent/2`, `create_setup_intent/2`,
+      `fetch_setup_intent/2`, `confirm_setup_intent/3`, `cancel_setup_intent/2`;
     * `:payment_list`: `list_payments/2`;
     * `:refund`: `refund/2`;
     * `:refund_read`: `fetch_refund/2`, `list_refunds/2`;
@@ -119,6 +122,7 @@ defmodule MishkaPay.Provider do
     :embedded_checkout,
     :capture,
     :expire,
+    :intent,
     :payment_list,
     :refund,
     :refund_read,
@@ -162,6 +166,10 @@ defmodule MishkaPay.Provider do
     * `:capture`: holds the money on a card at checkout (`capture: :manual`), then takes it, all
       or part, or lets it go.
     * `:expire`: ends an open checkout before the buyer pays, so its stock is free again.
+    * `:intent`: takes a payment, or saves a payment method, with its own card form inside the
+      site's page (Stripe Elements), without a checkout page: the server makes the intent, the
+      buyer's browser confirms it with its client secret, and the server reads, changes, confirms
+      or cancels it.
     * `:payment_list`: lists past payments page by page.
     * `:refund`: gives money back on a payment.
     * `:refund_read`: reads a refund again, and lists refunds page by page.
@@ -222,6 +230,7 @@ defmodule MishkaPay.Provider do
           | :embedded_checkout
           | :capture
           | :expire
+          | :intent
           | :refund
           | :refund_read
           | :subscription
@@ -595,6 +604,57 @@ defmodule MishkaPay.Provider do
   @doc "With `:shipping`. One page of shipping rates, newest first; only `:active` ones when given."
   @callback list_shipping_rates(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:intent`. Makes a payment intent for the site's own card form, and answers it with its
+  `:id` and `:client_secret`.
+  """
+  @callback create_payment_intent(MishkaPay.PaymentIntent.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:intent`. Reads one payment intent, with its status."
+  @callback fetch_payment_intent(payment_intent_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:intent`. Changes payment intent `:id` before it is paid: only the fields set."
+  @callback update_payment_intent(MishkaPay.PaymentIntent.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:intent`. Confirms a payment intent on the server, with `:payment_method_id` and the
+  `:return_url` a payment method's own page sends the buyer back to.
+  """
+  @callback confirm_payment_intent(
+              payment_intent_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:intent`. Cancels a payment intent that is not paid, or lets a held one go."
+  @callback cancel_payment_intent(payment_intent_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.PaymentIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:intent`. Makes a setup intent that saves a payment method with the site's own form, and
+  answers it with its `:id` and `:client_secret`.
+  """
+  @callback create_setup_intent(MishkaPay.SetupIntent.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:intent`. Reads one setup intent, with its status."
+  @callback fetch_setup_intent(setup_intent_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:intent`. Confirms a setup intent on the server, as `confirm_payment_intent/3`."
+  @callback confirm_setup_intent(
+              setup_intent_id :: String.t(),
+              opts :: keyword(),
+              MishkaPay.Credentials.t()
+            ) :: {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:intent`. Cancels a setup intent that has not succeeded."
+  @callback cancel_setup_intent(setup_intent_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.SetupIntent.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:tax_rate`. Makes a tax rate, and answers it with its `:id`."
   @callback create_tax_rate(MishkaPay.TaxRate.t(), MishkaPay.Credentials.t()) ::
@@ -999,6 +1059,15 @@ defmodule MishkaPay.Provider do
                       delete_tax_id: 3,
                       calculate_tax: 2,
                       record_tax: 3,
+                      create_payment_intent: 2,
+                      fetch_payment_intent: 2,
+                      update_payment_intent: 2,
+                      confirm_payment_intent: 3,
+                      cancel_payment_intent: 2,
+                      create_setup_intent: 2,
+                      fetch_setup_intent: 2,
+                      confirm_setup_intent: 3,
+                      cancel_setup_intent: 2,
                       create_tax_rate: 2,
                       fetch_tax_rate: 2,
                       update_tax_rate: 2,
@@ -1074,6 +1143,17 @@ defmodule MishkaPay.Provider do
   @operations %{
     checkout: [checkout: 2, fetch_checkout: 2, fetch_payment: 2],
     expire: [expire_checkout: 2],
+    intent: [
+      create_payment_intent: 2,
+      fetch_payment_intent: 2,
+      update_payment_intent: 2,
+      confirm_payment_intent: 3,
+      cancel_payment_intent: 2,
+      create_setup_intent: 2,
+      fetch_setup_intent: 2,
+      confirm_setup_intent: 3,
+      cancel_setup_intent: 2
+    ],
     payment_list: [list_payments: 2],
     refund: [refund: 2],
     capture: [capture_payment: 3, cancel_payment: 2],

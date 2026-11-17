@@ -270,6 +270,29 @@ defmodule MishkaPay.Providers.PayPalTest do
       refute_received {:paypal, _method, _path, _headers, _body}
     end
 
+    test "PayPal has no card form of its own: every intent call is refused before any request" do
+      for call <- [
+            fn ->
+              MishkaPay.create_payment_intent(%{
+                provider: "paypal",
+                amount: %{amount: "10", currency: "USD"}
+              })
+            end,
+            fn -> MishkaPay.fetch_payment_intent("paypal", "O1", "site-a") end,
+            fn -> MishkaPay.update_payment_intent(%{provider: "paypal", id: "O1"}) end,
+            fn -> MishkaPay.confirm_payment_intent("paypal", "O1", "site-a") end,
+            fn -> MishkaPay.cancel_payment_intent("paypal", "O1", "site-a") end,
+            fn -> MishkaPay.create_setup_intent(%{provider: "paypal"}) end,
+            fn -> MishkaPay.fetch_setup_intent("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.confirm_setup_intent("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.cancel_setup_intent("paypal", "S1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :intent}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
     test "PayPal has no tax rates, registrations or settings: each is refused before any request" do
       for {call, capability} <- [
             {fn ->

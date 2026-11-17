@@ -96,6 +96,8 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.fetch_payment(provider, payment_id, tenant)` | `%MishkaPay.Payment{}` with status, buyer, card, refunds |
 | `MishkaPay.checkout(%{ui_mode: :embedded, return_url: url, ...})` | `%MishkaPay.Checkout{client_secret: secret}`: the provider's form inside the site's page |
 | `MishkaPay.capture_payment(provider, payment_id, tenant, amount: money)`, `cancel_payment/3` | the `%MishkaPay.Payment{}` after: a held (`:authorized`) payment taken, all or part, or let go |
+| `MishkaPay.create_payment_intent(attrs)` (`MishkaPay.PaymentIntent`: `:amount`, `:customer_id`, `:payment_method_id`, `:capture`, `:setup_future_usage`, `:automatic_payment_methods`, `:reference`, `:owner`), `fetch_payment_intent/3`, `update_payment_intent/1`, `confirm_payment_intent(p, id, tenant, payment_method_id: pm, return_url: url)`, `cancel_payment_intent/3` | `%MishkaPay.PaymentIntent{client_secret: secret}`: a payment on the site's own card form (Stripe Elements); paid, `fetch_payment/3` reads it by the same id; the provider needs `:intent` |
+| `MishkaPay.create_setup_intent(attrs)` (`MishkaPay.SetupIntent`: `:customer_id`, `:usage`, `:payment_method_id`, `:reference`), `fetch_setup_intent/3`, `confirm_setup_intent/4`, `cancel_setup_intent/3` | `%MishkaPay.SetupIntent{client_secret: secret}`: a card saved on the site's own form, no charge |
 | `MishkaPay.refund(attrs)` | `%MishkaPay.Refund{}` |
 | `MishkaPay.fetch_refund(provider, refund_id, tenant)`, `list_refunds(provider, tenant, payment_id: id)` | `%MishkaPay.Refund{}` read again; a `MishkaPay.Page` of them |
 | `MishkaPay.fetch_subscription(provider, id, tenant)` | `%MishkaPay.Subscription{}` |
@@ -204,6 +206,13 @@ redirect(conn, external: checkout.url)
   payment reads `:authorized` until `capture_payment/4` takes it (all, or `amount:`) or
   `cancel_payment/3` lets it go. A hold ends by itself after some days (Stripe: 7). The provider
   needs `:capture`.
+- **The site's own card form:** `create_payment_intent/1` (or `create_setup_intent/1` to save a
+  card) on the server, then the provider's script on the page (Stripe.js Payment Element) mounts
+  the form with the intent's `:client_secret` and the site's `publishable_key`, and confirms it in
+  the browser. Give the secret to that buyer's page only. Read the intent (or `fetch_payment/3`)
+  again on the server before giving access. `confirm_payment_intent/4` confirms on the server
+  with a saved `payment_method_id:`. Never send card numbers through the server. The provider
+  needs `:intent`.
 - A checkout's `customer:` names the buyer by `id` (a customer made with `create_customer/1`) or by
   `email`, never both.
 

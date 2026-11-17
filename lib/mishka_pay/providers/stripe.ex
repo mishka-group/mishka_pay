@@ -66,6 +66,12 @@ defmodule MishkaPay.Providers.Stripe do
       (`POST /v1/tax/calculations`), and `record_tax/3` records it as a Tax Transaction
       (`create_from_calculation`) under the caller's reference, which makes its idempotency key.
       An account without Stripe Tax turned on is refused with code `"tax_not_set_up"`.
+    * `create_payment_intent/2`, `fetch_payment_intent/2`, `update_payment_intent/2`,
+      `confirm_payment_intent/3` and `cancel_payment_intent/2` keep PaymentIntents (`pi_...`) for
+      a page with Stripe Elements; `create_setup_intent/2`, `fetch_setup_intent/2`,
+      `confirm_setup_intent/3` and `cancel_setup_intent/2` keep SetupIntents (`seti_...`). The
+      reference makes the idempotency key and is kept in the metadata, so `fetch_payment/2`
+      reads a paid one with its reference like a checkout's.
     * `create_tax_rate/2`, `fetch_tax_rate/2`, `update_tax_rate/2` and `list_tax_rates/2` keep
       Tax Rates (`txr_...`) set by hand; a rate's reference makes the idempotency key and is kept
       in its metadata. A checkout's line takes them as `tax_rates`, an invoice item too, and a
@@ -157,6 +163,7 @@ defmodule MishkaPay.Providers.Stripe do
       :fraud,
       :file,
       :expire,
+      :intent,
       :refund,
       :refund_read,
       :subscription,
@@ -1108,6 +1115,119 @@ defmodule MishkaPay.Providers.Stripe do
       Mapper.tax_transaction(answer, calculation_id)
     end
   end
+
+  # A payment intent for Stripe Elements; its reference makes the idempotency key, so a retry never
+  # makes two.
+  @impl MishkaPay.Provider
+  def create_payment_intent(%MishkaPay.PaymentIntent{} = intent, keys) do
+    with :ok <- intent_fits(intent),
+         {:ok, answer} <-
+           request(:post, "/v1/payment_intents", Mapper.payment_intent_params(intent), keys,
+             key: ProviderKit.idempotency_key("payment-intent", intent.tenant, intent.reference)
+           ) do
+      Mapper.payment_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payment_intent(payment_intent_id, keys) do
+    with :ok <- stripe_id(payment_intent_id, "pi_", :payment_intent_id),
+         {:ok, answer} <- request(:get, "/v1/payment_intents/#{payment_intent_id}", [], keys) do
+      Mapper.payment_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def update_payment_intent(%MishkaPay.PaymentIntent{id: id} = intent, keys) do
+    with :ok <- stripe_id(id, "pi_", :id),
+         :ok <- intent_fits(intent),
+         {:ok, answer} <-
+           request(:post, "/v1/payment_intents/#{id}", Mapper.payment_intent_params(intent), keys) do
+      Mapper.payment_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def confirm_payment_intent(payment_intent_id, opts, keys) do
+    with :ok <- stripe_id(payment_intent_id, "pi_", :payment_intent_id),
+         :ok <- maybe_payment_method(opts[:payment_method_id]),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/payment_intents/#{payment_intent_id}/confirm",
+             Mapper.confirm_params(opts),
+             keys
+           ) do
+      Mapper.payment_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def cancel_payment_intent(payment_intent_id, keys) do
+    with :ok <- stripe_id(payment_intent_id, "pi_", :payment_intent_id),
+         {:ok, answer} <-
+           request(:post, "/v1/payment_intents/#{payment_intent_id}/cancel", %{}, keys,
+             key: ProviderKit.idempotency_key("payment-cancel", keys.tenant, payment_intent_id)
+           ) do
+      Mapper.payment_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def create_setup_intent(%MishkaPay.SetupIntent{} = intent, keys) do
+    with :ok <- intent_fits(intent),
+         {:ok, answer} <-
+           request(:post, "/v1/setup_intents", Mapper.setup_intent_params(intent), keys,
+             key: ProviderKit.idempotency_key("setup-intent", intent.tenant, intent.reference)
+           ) do
+      Mapper.setup_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_setup_intent(setup_intent_id, keys) do
+    with :ok <- stripe_id(setup_intent_id, "seti_", :setup_intent_id),
+         {:ok, answer} <- request(:get, "/v1/setup_intents/#{setup_intent_id}", [], keys) do
+      Mapper.setup_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def confirm_setup_intent(setup_intent_id, opts, keys) do
+    with :ok <- stripe_id(setup_intent_id, "seti_", :setup_intent_id),
+         :ok <- maybe_payment_method(opts[:payment_method_id]),
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/setup_intents/#{setup_intent_id}/confirm",
+             Mapper.confirm_params(opts),
+             keys
+           ) do
+      Mapper.setup_intent(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def cancel_setup_intent(setup_intent_id, keys) do
+    with :ok <- stripe_id(setup_intent_id, "seti_", :setup_intent_id),
+         {:ok, answer} <-
+           request(:post, "/v1/setup_intents/#{setup_intent_id}/cancel", %{}, keys) do
+      Mapper.setup_intent(answer)
+    end
+  end
+
+  # The customer and payment method an intent names, its amount in a currency Stripe takes, and
+  # metadata within Stripe's limits.
+  defp intent_fits(intent) do
+    with :ok <- maybe_id(intent.customer_id, "cus_", :customer_id),
+         :ok <- maybe_payment_method(intent.payment_method_id),
+         :ok <- currencies([Map.take(intent, [:amount])]) do
+      metadata(intent.metadata)
+    end
+  end
+
+  defp maybe_payment_method(nil), do: :ok
+  defp maybe_payment_method(id), do: payment_method_id(id)
 
   @impl MishkaPay.Provider
   def create_tax_rate(%MishkaPay.TaxRate{} = rate, keys) do
