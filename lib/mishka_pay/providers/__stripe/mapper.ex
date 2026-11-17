@@ -303,18 +303,25 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   """
   @spec billing_mode(map(), map()) :: map()
   def billing_mode(choice, settings) do
-    case Map.get(choice, :billing_mode) || Map.get(settings, :billing_mode) || :flexible do
-      :classic ->
-        %{"type" => "classic"}
+    discounts =
+      Map.get(choice, :proration_discounts) || Map.get(settings, :proration_discounts) ||
+        :itemized
 
-      :flexible ->
-        discounts =
-          Map.get(choice, :proration_discounts) || Map.get(settings, :proration_discounts) ||
-            :itemized
-
-        %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
-    end
+    choice |> billing_type(settings) |> billing_mode_of(discounts)
   end
+
+  @doc """
+  The billing mode a subscription made from `choice` gets: its own `:billing_mode`, else the
+  tenant's (`settings`), else `:flexible`.
+  """
+  @spec billing_type(map(), map()) :: :flexible | :classic
+  def billing_type(choice, settings),
+    do: Map.get(choice, :billing_mode) || Map.get(settings, :billing_mode) || :flexible
+
+  defp billing_mode_of(:classic, _discounts), do: %{"type" => "classic"}
+
+  defp billing_mode_of(:flexible, discounts),
+    do: %{"type" => "flexible", "flexible" => %{"proration_discounts" => to_string(discounts)}}
 
   # Stripe takes the money at once with `automatic_async`, its default and recommended way (it
   # answers sooner than `automatic`); `manual` holds it. Left out, Stripe's default applies.

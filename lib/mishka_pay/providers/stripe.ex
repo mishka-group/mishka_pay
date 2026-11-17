@@ -473,14 +473,15 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Proration discounts go only with the flexible billing mode, the tenant's own mode included.
   defp billing_fits(%{proration_discounts: discounts} = choice, keys)
-       when not is_nil(discounts) do
-    case choice.billing_mode || Map.get(keys, :billing_mode) do
-      :classic -> invalid(:proration_discounts, Messages.text(:proration_discounts_flexible))
-      _flexible -> :ok
-    end
-  end
+       when not is_nil(discounts),
+       do: discounts_fit(Mapper.billing_type(choice, keys))
 
   defp billing_fits(_choice, _keys), do: :ok
+
+  defp discounts_fit(:flexible), do: :ok
+
+  defp discounts_fit(:classic),
+    do: invalid(:proration_discounts, Messages.text(:proration_discounts_flexible))
 
   # A sale for a seller names Connect accounts, and takes its fee in the items' own currency, in
   # amounts Stripe can count.
@@ -2252,14 +2253,16 @@ defmodule MishkaPay.Providers.Stripe do
       {:stripe_meter_session, :crypto.hash(:sha256, keys.secret_key), Map.get(keys, :account_id)}
 
   defp session_token(%{"authentication_token" => token, "expires_at" => expires_at})
-       when is_binary(token) do
-    case DateTime.from_iso8601(to_string(expires_at)) do
+       when is_binary(token) and is_binary(expires_at) do
+    case DateTime.from_iso8601(expires_at) do
       {:ok, at, _offset} -> {:ok, token, max(DateTime.diff(at, DateTime.utc_now()), 1)}
-      _unreadable -> {:ok, token, 60}
+      {:error, _unreadable} -> session_unreadable()
     end
   end
 
-  defp session_token(_other),
+  defp session_token(_other), do: session_unreadable()
+
+  defp session_unreadable,
     do: {:error, Errors.Rejected.exception(provider: "stripe", code: "meter_session_unreadable")}
 
   defp meter_events_url do
@@ -2271,19 +2274,13 @@ defmodule MishkaPay.Providers.Stripe do
   # account in `Stripe-Context` (API v2's name for `Stripe-Account`). Its errors have the same
   # shape as v1's, so they are read the same way.
   defp v2_request(method, base_url, path, body, bearer, opts) do
-    headers =
-      case opts[:account_id] do
-        nil -> %{"stripe-version" => @version}
-        account_id -> %{"stripe-version" => @version, "stripe-context" => account_id}
-      end
-
     %{
       provider: "stripe",
       method: method,
       base_url: base_url,
       path: path,
       auth: {:bearer, bearer},
-      headers: headers,
+      headers: v2_headers(opts[:account_id]),
       json: body,
       idempotency_header: "idempotency-key",
       idempotency_key: opts[:key],
@@ -2294,9 +2291,13 @@ defmodule MishkaPay.Providers.Stripe do
     |> v2_answer()
   end
 
+  defp v2_headers(nil), do: %{"stripe-version" => @version}
+  defp v2_headers(account_id), do: Map.put(v2_headers(nil), "stripe-context", account_id)
+
   # The stream answers an empty object, or no body at all.
-  defp v2_answer({:ok, %Req.Response{status: status, body: body}}) when status in 200..299,
-    do: {:ok, (is_map(body) && body) || %{}}
+  defp v2_answer({:ok, %Req.Response{status: status, body: body}})
+       when status in 200..299 and not is_map(body),
+       do: {:ok, %{}}
 
   defp v2_answer(other), do: answer(other)
 
