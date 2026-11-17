@@ -276,6 +276,7 @@ defmodule MishkaPay.Providers.Stripe do
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
   @meter_events_url "https://meter-events.stripe.com"
+  @meter_event_stream "/v2/billing/meter_event_stream"
 
   # What Stripe takes for each purpose of a file: its most bytes and its types, with the first
   # bytes of each type (docs.stripe.com/file-upload).
@@ -2244,18 +2245,17 @@ defmodule MishkaPay.Providers.Stripe do
     do: "mishka_pay-usage-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   # Stripe's meter event stream (API v2): a session token, kept until shortly before it runs out,
-  # then the report as JSON to `meter-events.stripe.com`. Stripe checks it after it answers, so
-  # the answer has no identifier: the report's own is its id, made here when there is no
-  # reference. A token Stripe no longer takes (401) is dropped and the report sent once more
-  # with a new one.
+  # then the report as JSON to `meter-events.stripe.com`, signed by that token alone (it already
+  # names the account). Stripe checks it after it answers, so the answer has no identifier: the
+  # report's own is its id, made here when there is no reference. A token Stripe no longer takes
+  # (401) is dropped and the report sent once more with a new one.
   defp stream_usage(usage, identifier, keys, tries_left) do
     with {:ok, token} <- meter_session(keys) do
-      case v2_request(
+      case request(
              :post,
-             meter_events_url(),
-             "/v2/billing/meter_event_stream",
+             @meter_event_stream,
              %{"events" => [Mapper.usage_event(usage, identifier)]},
-             token,
+             %{secret_key: token},
              key: identifier
            ) do
         {:ok, _accepted} ->
@@ -2274,16 +2274,7 @@ defmodule MishkaPay.Providers.Stripe do
   # One session per secret key and connected account; the key itself is never kept, only its hash.
   defp meter_session(keys) do
     TokenCache.get(meter_session_key(keys), fn ->
-      with :ok <- maybe_id(Map.get(keys, :account_id), "acct_", :account_id),
-           {:ok, session} <-
-             v2_request(
-               :post,
-               base_url(false),
-               "/v2/billing/meter_event_session",
-               %{},
-               keys.secret_key,
-               account_id: Map.get(keys, :account_id)
-             ) do
+      with {:ok, session} <- request(:post, "/v2/billing/meter_event_session", %{}, keys) do
         session_token(session)
       end
     end)
@@ -2305,42 +2296,6 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp session_unreadable,
     do: {:error, Errors.Rejected.exception(provider: "stripe", code: "meter_session_unreadable")}
-
-  defp meter_events_url do
-    config = Application.get_env(:mishka_pay, __MODULE__, [])
-    config[:meter_events_url] || Keyword.get(config, :base_url, @meter_events_url)
-  end
-
-  # A request to Stripe's API v2: a JSON body, the pinned `Stripe-Version`, and a connected
-  # account in `Stripe-Context` (API v2's name for `Stripe-Account`). Its errors have the same
-  # shape as v1's, so they are read the same way.
-  defp v2_request(method, base_url, path, body, bearer, opts) do
-    %{
-      provider: "stripe",
-      method: method,
-      base_url: base_url,
-      path: path,
-      auth: {:bearer, bearer},
-      headers: v2_headers(opts[:account_id]),
-      json: body,
-      idempotency_header: "idempotency-key",
-      idempotency_key: opts[:key],
-      retry_header: "stripe-should-retry",
-      limit_header: "stripe-rate-limited-reason"
-    }
-    |> Client.request()
-    |> v2_answer()
-  end
-
-  defp v2_headers(nil), do: %{"stripe-version" => @version}
-  defp v2_headers(account_id), do: Map.put(v2_headers(nil), "stripe-context", account_id)
-
-  # The stream answers an empty object, or no body at all.
-  defp v2_answer({:ok, %Req.Response{status: status, body: body}})
-       when status in 200..299 and not is_map(body),
-       do: {:ok, %{}}
-
-  defp v2_answer(other), do: answer(other)
 
   # Stripe takes usage from the last 35 days, and up to 5 minutes ahead for clocks that drift.
   defp usage_time(nil), do: :ok
@@ -2994,7 +2949,8 @@ defmodule MishkaPay.Providers.Stripe do
   # connected account (`:account_id` in its keys) goes in `Stripe-Account` on every request, so
   # each call is made as that account; nothing else sets the header. A `/v2/` path is Stripe's
   # API v2: a write's params go as a JSON body, a read's as a query with indexed lists
-  # (`include[0]`), and the account goes in `Stripe-Context`, the header v2 takes.
+  # (`include[0]`), and the account goes in `Stripe-Context`, the header v2 takes; the usage stream
+  # goes to the meter events host, and an empty answer from it is an empty map.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
     options = opts[:request_options] || %RequestOptions{}
@@ -3005,7 +2961,7 @@ defmodule MishkaPay.Providers.Stripe do
       %{
         provider: "stripe",
         method: method,
-        base_url: base_url(api == :upload),
+        base_url: base_url(api, path),
         path: path,
         auth: {:bearer, keys.secret_key},
         headers: headers(options, account_id, api),
@@ -3049,6 +3005,11 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
+
+  # The meter event stream may accept a report with no body at all.
+  defp answer({:ok, %Req.Response{status: status, body: body}})
+       when status in 200..299 and body in ["", nil],
+       do: {:ok, %{}}
 
   # A tax Stripe could not count can come with a 402 (paying a bill), but no bank declined it.
   defp answer(
@@ -3342,15 +3303,17 @@ defmodule MishkaPay.Providers.Stripe do
 
   defp three_decimal_ok?(_item), do: true
 
-  # The API's address, or the files host's for an upload: its own setting, else the API's.
-  defp base_url(upload?) do
+  # The API's address, the files host's for an upload or the meter events host's for the usage
+  # stream: the host's own setting, else `base_url`, else Stripe's.
+  defp base_url(api, path) do
     config = Application.get_env(:mishka_pay, __MODULE__, [])
-
-    case upload? do
-      true -> config[:files_url] || Keyword.get(config, :base_url, @files_url)
-      false -> Keyword.get(config, :base_url, @base_url)
-    end
+    {setting, default} = host(api, path)
+    config[setting] || Keyword.get(config, :base_url, default)
   end
+
+  defp host(:upload, _path), do: {:files_url, @files_url}
+  defp host(:v2, @meter_event_stream), do: {:meter_events_url, @meter_events_url}
+  defp host(_api, _path), do: {:base_url, @base_url}
 
   @doc """
   Stripe's form encoding of nested params: `%{"line_items" => [%{"quantity" => 1}]}` becomes
