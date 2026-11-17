@@ -11,11 +11,6 @@
 msgid ""
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:713
-#, elixir-autogen, elixir-format
-msgid "%{provider} cannot do %{operation}"
-msgstr ""
-
 #: lib/mishka_pay/messages.ex:675
 #, elixir-autogen, elixir-format
 msgid "%{provider} declined the payment"
@@ -559,4 +554,9 @@ msgstr ""
 #: lib/mishka_pay/messages.ex:534
 #, elixir-autogen, elixir-format
 msgid "PayPal keeps 127 characters for the reference and the owner together: use shorter ones"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:713
+#, elixir-autogen, elixir-format
+msgid "%{provider} does not support %{operation}"
 msgstr ""

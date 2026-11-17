@@ -710,5 +710,5 @@ defmodule MishkaPay.Messages do
     do: dgettext_noop("mishka_pay", "%{provider} did not answer: %{reason}")
 
   defp msgid(:unsupported),
-    do: dgettext_noop("mishka_pay", "%{provider} cannot do %{operation}")
+    do: dgettext_noop("mishka_pay", "%{provider} does not support %{operation}")
 end

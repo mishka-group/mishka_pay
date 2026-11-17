@@ -37,6 +37,16 @@ defmodule MishkaPay.ErrorsTest do
 
   test "messages name the provider and its reason" do
     assert Exception.message(declined()) == "stripe declined the payment: card_declined"
-    assert Exception.message(unsupported()) == "Acme cannot do refund"
+    assert Exception.message(unsupported()) == "Acme does not support refund"
+  end
+
+  test "a capability the provider lacks reads as words; a phrase stays as given" do
+    lacks = Errors.Unsupported.exception(provider: "acme", operation: :subscription_change)
+
+    phrase =
+      Errors.Unsupported.exception(provider: "acme", operation: "checkout with discounts")
+
+    assert Exception.message(lacks) == "Acme does not support subscription change"
+    assert Exception.message(phrase) == "Acme does not support checkout with discounts"
   end
 end
