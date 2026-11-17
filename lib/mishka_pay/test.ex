@@ -116,9 +116,19 @@ defmodule MishkaPay.Test do
   @doc """
   Starts `plugin` (a project's provider or keys plugin) under the test supervisor and returns once
   its event runs it. It is unregistered when the test ends, even when it never started.
+
+  A plugin the application already runs (a provider a host starts, as Mishka CMS does) is only
+  awaited (`await_plugin!/1`): it stays the application's, and a test can name it either way.
   """
   @spec start_plugin!(module()) :: :ok
   def start_plugin!(plugin) do
+    case Process.whereis(plugin) do
+      pid when is_pid(pid) -> await_plugin!(plugin)
+      nil -> start_own_plugin!(plugin)
+    end
+  end
+
+  defp start_own_plugin!(plugin) do
     MishkaInstaller.subscribe("event")
 
     try do

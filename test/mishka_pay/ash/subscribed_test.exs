@@ -121,6 +121,51 @@ defmodule MishkaPay.Ash.SubscribedTest do
     assert {:ok, %{user_id: nil}} = sync("sub_active_2", "site-a")
   end
 
+  test "with PayPal too, the member who started the checkout owns the subscription and has access",
+       %{member: member} do
+    MishkaPay.Test.start_plugin!(MishkaPay.Providers.PayPal)
+
+    MishkaPay.Test.put_keys("paypal", %{
+      publishable_key: "client_a",
+      secret_key: "secret_a",
+      mode: :test
+    })
+
+    MishkaPay.Test.PayPal.stub!()
+
+    {:ok, %MishkaPay.Checkout{id: id}} =
+      SitePayment
+      |> Ash.ActionInput.for_action(
+        :start_checkout,
+        %{
+          checkout: %{
+            provider: "paypal",
+            mode: :subscription,
+            items: [%{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}],
+            success_url: "https://shop.test/thanks",
+            cancel_url: "https://shop.test/plans",
+            reference: "pro-1"
+          }
+        },
+        tenant: "site-a",
+        actor: member
+      )
+      |> Ash.run_action(authorize?: false)
+
+    MishkaPay.Test.PayPal.subscription(id, "ACTIVE")
+
+    assert {:ok, %{user_id: user_id}} =
+             Ash.create(SiteSubscription, %{provider: "paypal", subscription_id: id},
+               action: :sync,
+               tenant: "site-a",
+               authorize?: false
+             )
+
+    assert user_id == member.id
+    assert MishkaPay.Ash.subscribed?(SiteSubscription, member, tenant: "site-a")
+    refute MishkaPay.Ash.subscribed?(SiteSubscription, member, tenant: "site-b")
+  end
+
   test "access follows the subscription's status, trial, product and site", %{member: member} do
     past = DateTime.utc_now() |> DateTime.add(-3600) |> DateTime.to_unix()
     later = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()

@@ -61,7 +61,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       "intent" => "CAPTURE",
       "purchase_units" => [
         %{
-          "custom_id" => checkout.reference,
+          "custom_id" => custom_id(checkout),
           "amount" => %{
             "currency_code" => to_string(currency),
             "value" => value(total, currency),
@@ -135,7 +135,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       struct(Checkout,
         provider: "paypal",
         items: [],
-        reference: unit(order)["custom_id"],
+        reference: reference(unit(order)["custom_id"]),
+        owner: owner(unit(order)["custom_id"]),
         customer: buyer(get_in(order, ["payer", "email_address"]))
       )
 
@@ -178,7 +179,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       amount_captured: captured(capture),
       amount_refunded: refunded,
       status: status(order, capture, refunded, amount),
-      reference: unit(order)["custom_id"],
+      reference: reference(unit(order)["custom_id"]),
+      owner: owner(unit(order)["custom_id"]),
       customer_id: payer["payer_id"],
       customer_email: payer["email_address"],
       customer_name: name(payer["name"]),
@@ -338,7 +340,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
     %{
       "plan_id" => plan_id,
       "quantity" => Integer.to_string(quantity || 1),
-      "custom_id" => checkout.reference,
+      "custom_id" => custom_id(checkout),
       "application_context" => %{
         "return_url" => checkout.success_url,
         "cancel_url" => checkout.cancel_url,
@@ -369,7 +371,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
            provider: "paypal",
            mode: :subscription,
            items: [],
-           reference: sub["custom_id"],
+           reference: reference(sub["custom_id"]),
+           owner: owner(sub["custom_id"]),
            customer: buyer(get_in(sub, ["subscriber", "email_address"]))
          ))
       | id: sub["id"],
@@ -409,7 +412,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       current_period_end: time(billing["next_billing_time"]),
       canceled_at: if(status == :canceled, do: time(sub["status_update_time"])),
       trial_end: if(status == :trialing, do: time(billing["next_billing_time"])),
-      reference: sub["custom_id"],
+      reference: reference(sub["custom_id"]),
+      owner: owner(sub["custom_id"]),
       created_at: time(sub["create_time"])
     }
     |> Subscription.builder()
@@ -545,6 +549,50 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   defp subscription_of("subscription", %{"id" => id}), do: id
   defp subscription_of("sale", %{"billing_agreement_id" => id}), do: id
   defp subscription_of(_other, _resource), do: nil
+
+  @doc """
+  PayPal keeps one caller field, `custom_id` (127 characters at most): the reference alone, or,
+  when the checkout names its owner, both as `r=<reference>&o=<owner>`, read back by
+  `reference/1` and `owner/1`. Nil when the checkout has neither.
+  """
+  @spec custom_id(Checkout.t()) :: String.t() | nil
+  def custom_id(%Checkout{owner: nil, reference: reference}), do: reference
+
+  def custom_id(%Checkout{owner: owner, reference: reference}),
+    do: URI.encode_query([{"r", reference || ""}, {"o", owner}])
+
+  @doc "The reference in a `custom_id/1`."
+  @spec reference(String.t() | nil) :: String.t() | nil
+  def reference(custom_id) do
+    case ids(custom_id) do
+      {reference, _owner} -> reference
+      nil -> custom_id
+    end
+  end
+
+  @doc "The owner in a `custom_id/1`, nil when the checkout named none."
+  @spec owner(String.t() | nil) :: String.t() | nil
+  def owner(custom_id) do
+    case ids(custom_id) do
+      {_reference, owner} -> owner
+      nil -> nil
+    end
+  end
+
+  defp ids("r=" <> _rest = custom_id) do
+    case URI.decode_query(custom_id) do
+      %{"r" => reference, "o" => owner} = pairs when map_size(pairs) == 2 and owner != "" ->
+        {blank_nil(reference), owner}
+
+      _not_ours ->
+        nil
+    end
+  end
+
+  defp ids(_reference_or_nil), do: nil
+
+  defp blank_nil(""), do: nil
+  defp blank_nil(text), do: text
 
   defp unit(order), do: order |> Map.get("purchase_units", []) |> List.first() || %{}
 

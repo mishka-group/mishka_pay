@@ -11,6 +11,10 @@ subscriptions have run against PayPal's sandbox; webhooks from the sandbox are s
   Read it back with `fetch_checkout("paypal", order_id, tenant)`: an approved Order is captured
   then, once, whoever reads it first. The payment's id is the Order's id, and `:amount_captured`
   is what the capture took.
+- The reference and the checkout's `:owner` travel together in PayPal's one caller field
+  (`custom_id`, 127 characters at most; longer is refused before any request), so a PayPal
+  payment or subscription comes back with its owner and `belongs_to_user` and `subscribed?` work
+  as with Stripe.
 - The capture takes PayPal seconds: on the return page, read the checkout off the request path
   (`start_async/3` in a LiveView), never while the page mounts.
 - A subscription is a checkout in `mode: :subscription` with one price that has an `:interval`

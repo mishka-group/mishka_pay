@@ -263,6 +263,51 @@ defmodule MishkaPay.Providers.PayPalTest do
     end
   end
 
+  describe "the owner" do
+    test "goes to PayPal with the reference and comes back on the payment and the subscription" do
+      {:ok, %Checkout{id: order_id}} = MishkaPay.checkout(Map.put(@checkout, :owner, "user-7"))
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      assert hd(body["purchase_units"])["custom_id"] == "r=order-1&o=user-7"
+
+      PayPalStub.order(order_id, "APPROVED")
+
+      assert {:ok, %Checkout{reference: "order-1", owner: "user-7"}} =
+               MishkaPay.fetch_checkout("paypal", order_id, "site-a")
+
+      assert {:ok, %Payment{reference: "order-1", owner: "user-7"}} =
+               MishkaPay.fetch_payment("paypal", order_id, "site-a")
+
+      monthly = %{name: "Pro", amount: %{amount: "9", currency: "USD"}, interval: :month}
+
+      {:ok, %Checkout{id: sub_id}} =
+        MishkaPay.checkout(
+          Map.merge(@checkout, %{mode: :subscription, items: [monthly], owner: "user-7"})
+        )
+
+      PayPalStub.subscription(sub_id, "ACTIVE")
+
+      assert {:ok, %Subscription{reference: "order-1", owner: "user-7"}} =
+               MishkaPay.fetch_subscription("paypal", sub_id, "site-a")
+    end
+
+    test "without one the reference goes alone, and reads back as it was" do
+      {:ok, %Checkout{id: id}} = MishkaPay.checkout(%{@checkout | reference: "r=odd&ref"})
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      assert hd(body["purchase_units"])["custom_id"] == "r=odd&ref"
+
+      assert {:ok, %Payment{reference: "r=odd&ref", owner: nil}} =
+               MishkaPay.fetch_payment("paypal", id, "site-a")
+    end
+
+    test "a reference and owner longer than PayPal keeps are refused before any request" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :reference}]}} =
+               MishkaPay.checkout(Map.put(@checkout, :owner, String.duplicate("u", 130)))
+
+      refute_received {:paypal, "POST", "/v2/checkout/orders", _headers, _body}
+    end
+  end
+
   describe "subscriptions" do
     @monthly %{
       @checkout

@@ -67,8 +67,16 @@ defmodule MishkaPay.Test.PayPal do
 
   @doc "Keeps the Order `id` for this test, in PayPal's `status` (APPROVED, COMPLETED...) with `opts`."
   def order(id, status, opts \\ []) do
-    put_held(:orders, id, build(id, status, opts))
+    put_held(:orders, id, build(id, status, Keyword.merge(kept(id), opts)))
     :ok
+  end
+
+  # An Order made earlier keeps its amount and the caller's `custom_id` when only its state changes.
+  defp kept(id) do
+    case held(:orders)[id] do
+      %{"purchase_units" => [unit | _]} -> [amount: unit["amount"], custom_id: unit["custom_id"]]
+      _new -> []
+    end
   end
 
   @doc """
@@ -172,10 +180,7 @@ defmodule MishkaPay.Test.PayPal do
 
       _paid ->
         captured =
-          build(id, "COMPLETED",
-            amount: hd(order["purchase_units"])["amount"],
-            captures: [capture(id)]
-          )
+          build(id, "COMPLETED", Keyword.put(kept(id), :captures, [capture(id)]))
 
         put_held(:orders, id, captured)
         reply(conn, 201, captured)

@@ -11,547 +11,552 @@ msgstr ""
 "Language: en\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: lib/mishka_pay/messages.ex:705
+#: lib/mishka_pay/messages.ex:713
 #, elixir-autogen, elixir-format
 msgid "%{provider} cannot do %{operation}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:667
+#: lib/mishka_pay/messages.ex:675
 #, elixir-autogen, elixir-format
 msgid "%{provider} declined the payment"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:670
+#: lib/mishka_pay/messages.ex:678
 #, elixir-autogen, elixir-format
 msgid "%{provider} declined the payment: %{reason}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:702
+#: lib/mishka_pay/messages.ex:710
 #, elixir-autogen, elixir-format
 msgid "%{provider} did not answer: %{reason}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:686
+#: lib/mishka_pay/messages.ex:694
 #, elixir-autogen, elixir-format
 msgid "%{provider} refused the request (HTTP %{status})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:689
+#: lib/mishka_pay/messages.ex:697
 #, elixir-autogen, elixir-format
 msgid "%{provider} refused the request: %{code} (HTTP %{status})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:505
+#: lib/mishka_pay/messages.ex:506
 #, elixir-autogen, elixir-format
 msgid "A customer is an id or an email, one of them"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:508
+#: lib/mishka_pay/messages.ex:509
 #, elixir-autogen, elixir-format
 msgid "A keys plugin must answer a map or nil"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:265
+#: lib/mishka_pay/messages.ex:266
 #, elixir-autogen, elixir-format
 msgid "A price needs a name and an amount, or a provider id"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:245
+#: lib/mishka_pay/messages.ex:246
 #, elixir-autogen, elixir-format
 msgid "All items must be in one currency"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:658
+#: lib/mishka_pay/messages.ex:666
 #, elixir-autogen, elixir-format
 msgid "Stripe takes three-decimal currencies only with a last decimal of 0"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:229
+#: lib/mishka_pay/messages.ex:230
 #, elixir-autogen, elixir-format
 msgid "The %{field} field must be an https address"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:147
+#: lib/mishka_pay/messages.ex:148
 #, elixir-autogen, elixir-format
 msgid "The %{field} field must be money: an amount and a currency"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:173
+#: lib/mishka_pay/messages.ex:174
 #, elixir-autogen, elixir-format
 msgid "The amount field has more decimal places than %{currency} has"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:169
+#: lib/mishka_pay/messages.ex:170
 #, elixir-autogen, elixir-format
 msgid "The amount field is too large"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:160
+#: lib/mishka_pay/messages.ex:161
 #, elixir-autogen, elixir-format
 msgid "The amount field must be a number"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:154
+#: lib/mishka_pay/messages.ex:155
 #, elixir-autogen, elixir-format
 msgid "The amount field must be exact: a Decimal, an integer or a string"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:536
+#: lib/mishka_pay/messages.ex:544
 #, elixir-autogen, elixir-format
 msgid "The amount field must be in the payment's currency, %{currency}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:166
+#: lib/mishka_pay/messages.ex:167
 #, elixir-autogen, elixir-format
 msgid "The amount field must be more than zero"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:163
+#: lib/mishka_pay/messages.ex:164
 #, elixir-autogen, elixir-format
 msgid "The amount field must be zero or more"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:177
+#: lib/mishka_pay/messages.ex:178
 #, elixir-autogen, elixir-format
 msgid "The base_url field must be an http or https address, with no user, query or fragment"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:150
+#: lib/mishka_pay/messages.ex:151
 #, elixir-autogen, elixir-format
 msgid "The currency field must be a known ISO 4217 code"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:239
+#: lib/mishka_pay/messages.ex:240
 #, elixir-autogen, elixir-format
 msgid "The metadata field must map string keys to string values"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:193
+#: lib/mishka_pay/messages.ex:194
 #, elixir-autogen, elixir-format
 msgid "The params field must hold plain values only"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:184
+#: lib/mishka_pay/messages.ex:185
 #, elixir-autogen, elixir-format
 msgid "The path field must be one plain path from the root, with no query, dot segment or encoded slash"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:190
+#: lib/mishka_pay/messages.ex:191
 #, elixir-autogen, elixir-format
 msgid "The path field must start with /"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:673
+#: lib/mishka_pay/messages.ex:681
 #, elixir-autogen, elixir-format
 msgid "no %{provider} keys for tenant %{tenant}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:699
+#: lib/mishka_pay/messages.ex:707
 #, elixir-autogen, elixir-format
 msgid "no payment provider %{provider} is installed"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:693
+#: lib/mishka_pay/messages.ex:701
 #, elixir-autogen, elixir-format
 msgid "payment provider %{provider} cannot be looked up: a provider plugin is not loaded"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:683
+#: lib/mishka_pay/messages.ex:691
 #, elixir-autogen, elixir-format
 msgid "the %{operation} was refused: %{reason}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:677
+#: lib/mishka_pay/messages.ex:685
 #, elixir-autogen, elixir-format
 msgid "the %{provider} keys for tenant %{tenant} cannot be read (%{reason})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:664
+#: lib/mishka_pay/messages.ex:672
 #, elixir-autogen, elixir-format
 msgid "the %{provider} webhook cannot be trusted (%{reason})"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:543
+#: lib/mishka_pay/messages.ex:551
 #, elixir-autogen, elixir-format
 msgid "The amount field is more than is left to refund on the payment"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:570
+#: lib/mishka_pay/messages.ex:578
 #, elixir-autogen, elixir-format
 msgid "The reference field is required: this site refunds a payment many times, and each refund needs its own"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:512
+#: lib/mishka_pay/messages.ex:513
 #, elixir-autogen, elixir-format
 msgid "The %{field} field is not a Stripe id that starts with %{prefix}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:566
+#: lib/mishka_pay/messages.ex:574
 #, elixir-autogen, elixir-format
 msgid "The payment is refunded in full: nothing is left to refund"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:256
+#: lib/mishka_pay/messages.ex:257
 #, elixir-autogen, elixir-format
 msgid "The items field has a recurring price: a one-time checkout sells once, use mode subscription"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:249
+#: lib/mishka_pay/messages.ex:250
 #, elixir-autogen, elixir-format
 msgid "The items field needs a recurring price on every item for a subscription: an interval or a provider price id"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:262
+#: lib/mishka_pay/messages.ex:263
 #, elixir-autogen, elixir-format
 msgid "The trial_days field needs a subscription checkout"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:560
+#: lib/mishka_pay/messages.ex:568
 #, elixir-autogen, elixir-format
 msgid "This site refunds a payment once, whole or in part, and this payment has its refund already. A new purchase is a new payment."
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:532
+#: lib/mishka_pay/messages.ex:540
 #, elixir-autogen, elixir-format
 msgid "The %{field} field is not a PayPal id: letters and digits"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:268
+#: lib/mishka_pay/messages.ex:269
 #, elixir-autogen, elixir-format
 msgid "The %{field} field is required for this call"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:499
+#: lib/mishka_pay/messages.ex:500
 #, elixir-autogen, elixir-format
 msgid "This reference was used in the last 24 hours with other details. Use a new reference, or change the record made then"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:289
+#: lib/mishka_pay/messages.ex:290
 #, elixir-autogen, elixir-format
 msgid "A checkout applies discounts or lets the buyer type a promotion code, not both"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:275
+#: lib/mishka_pay/messages.ex:276
 #, elixir-autogen, elixir-format
 msgid "A coupon takes off a percent or an amount, one of them"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:285
+#: lib/mishka_pay/messages.ex:286
 #, elixir-autogen, elixir-format
 msgid "A discount names a coupon or a promotion code, one of them"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:315
+#: lib/mishka_pay/messages.ex:316
 #, elixir-autogen, elixir-format
 msgid "%{provider} already has one with that code or id"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:312
+#: lib/mishka_pay/messages.ex:313
 #, elixir-autogen, elixir-format
 msgid "%{provider} has nothing with the id given"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:492
+#: lib/mishka_pay/messages.ex:493
 #, elixir-autogen, elixir-format
 msgid "An id may hold only letters, digits, underscores and dashes"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:306
+#: lib/mishka_pay/messages.ex:307
 #, elixir-autogen, elixir-format
 msgid "The checkout must expire between %{min} minutes and %{max} hours from now"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:279
+#: lib/mishka_pay/messages.ex:280
 #, elixir-autogen, elixir-format
 msgid "The number of months goes with a coupon that repeats, and only with it"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:272
+#: lib/mishka_pay/messages.ex:273
 #, elixir-autogen, elixir-format, fuzzy
 msgid "The percent off must be a number more than 0 and at most 100"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:457
+#: lib/mishka_pay/messages.ex:458
 #, elixir-autogen, elixir-format
 msgid "A payment link sells catalog prices: give at least one, each by its price id"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:450
+#: lib/mishka_pay/messages.ex:451
 #, elixir-autogen, elixir-format
 msgid "A payment link's reference may hold only letters, digits, underscores and dashes, at most 200"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:464
+#: lib/mishka_pay/messages.ex:465
 #, elixir-autogen, elixir-format
 msgid "An invoice is asked for only in a one-time checkout: a subscription makes its own"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:443
+#: lib/mishka_pay/messages.ex:444
 #, elixir-autogen, elixir-format
 msgid "A pause keeps its invoices as void, keep_as_draft or mark_uncollectible"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:429
+#: lib/mishka_pay/messages.ex:430
 #, elixir-autogen, elixir-format
 msgid "A subscription change needs a new plan, a new quantity or a new billing period"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:436
+#: lib/mishka_pay/messages.ex:437
 #, elixir-autogen, elixir-format
 msgid "This subscription has more than one item: say which one changes"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:422
+#: lib/mishka_pay/messages.ex:423
 #, elixir-autogen, elixir-format, fuzzy
 msgid "%{provider} did not accept the value given for %{param}: check it and try again"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:326
+#: lib/mishka_pay/messages.ex:327
 #, elixir-autogen, elixir-format
 msgid "A merchant of record always makes an invoice: turn merchant of record off to sell without one"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:319
+#: lib/mishka_pay/messages.ex:320
 #, elixir-autogen, elixir-format
 msgid "A proration date goes only with prorations, and not with a new billing period starting now"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:418
+#: lib/mishka_pay/messages.ex:419
 #, elixir-autogen, elixir-format, fuzzy
 msgid "The smallest quantity must be less than the largest"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:412
+#: lib/mishka_pay/messages.ex:413
 #, elixir-autogen, elixir-format
 msgid "%{param} goes only with a plan, a price charged on a schedule"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:405
+#: lib/mishka_pay/messages.ex:406
 #, elixir-autogen, elixir-format
 msgid "%{param} goes only with one-time prices: a plan's subscription makes its own customer and invoices"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:333
+#: lib/mishka_pay/messages.ex:334
 #, elixir-autogen, elixir-format
 msgid "A merchant of record sells only products with a tax category: give the product one, or turn merchant of record off"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:654
+#: lib/mishka_pay/messages.ex:662
 #, elixir-autogen, elixir-format
 msgid "Stripe takes %{currency} only in whole units"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:577
+#: lib/mishka_pay/messages.ex:585
 #, elixir-autogen, elixir-format, fuzzy
 msgid "The metadata field is over Stripe's limits: 48 keys of 40 characters, values of 500"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:648
+#: lib/mishka_pay/messages.ex:656
 #, elixir-autogen, elixir-format
 msgid "Days to pay go only with a bill that is sent (collection: send_invoice)"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:624
+#: lib/mishka_pay/messages.ex:632
 #, elixir-autogen, elixir-format
 msgid "Stripe filters events by at most 20 types at a time"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:621
+#: lib/mishka_pay/messages.ex:629
 #, elixir-autogen, elixir-format
 msgid "Search needs an email, a name or a reference"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:611
+#: lib/mishka_pay/messages.ex:619
 #, elixir-autogen, elixir-format
 msgid "A checkout asks at most three questions"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:615
+#: lib/mishka_pay/messages.ex:623
 #, elixir-autogen, elixir-format
 msgid "A dropdown needs its options, each a value and a label; other fields take none"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:605
+#: lib/mishka_pay/messages.ex:613
 #, elixir-autogen, elixir-format
 msgid "%{param} goes only with merchant of record off: set merchant_of_record to false for this checkout"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:471
+#: lib/mishka_pay/messages.ex:472
 #, elixir-autogen, elixir-format
 msgid "%{param} does not go with a setup checkout: it saves a payment method and charges nothing"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:478
+#: lib/mishka_pay/messages.ex:479
 #, elixir-autogen, elixir-format
 msgid "A setup checkout needs a currency: it decides which payment methods the page offers"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:296
+#: lib/mishka_pay/messages.ex:297
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Making a customer at checkout works only in a one-time or a setup checkout"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:485
+#: lib/mishka_pay/messages.ex:486
 #, elixir-autogen, elixir-format
 msgid "The currency field goes only with a setup checkout: a sale takes its currency from its items"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:196
+#: lib/mishka_pay/messages.ex:197
 #, elixir-autogen, elixir-format
 msgid "Send one body: form, json or multipart"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:216
+#: lib/mishka_pay/messages.ex:217
 #, elixir-autogen, elixir-format
 msgid "Stripe takes this file only as %{types}"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:213
+#: lib/mishka_pay/messages.ex:214
 #, elixir-autogen, elixir-format
 msgid "The content field must hold the file's bytes"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:302
+#: lib/mishka_pay/messages.ex:303
 #, elixir-autogen, elixir-format
 msgid "The expiry must be a time still to come"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:219
+#: lib/mishka_pay/messages.ex:220
 #, elixir-autogen, elixir-format
 msgid "The file is over Stripe's limit of %{megabytes} MB"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:223
+#: lib/mishka_pay/messages.ex:224
 #, elixir-autogen, elixir-format
 msgid "The file's bytes are not the %{content_type} its content_type field names"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:207
+#: lib/mishka_pay/messages.ex:208
 #, elixir-autogen, elixir-format
 msgid "The filename field must be a plain name, with no folder or control character"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:200
+#: lib/mishka_pay/messages.ex:201
 #, elixir-autogen, elixir-format
 msgid "The multipart field must be a list of names with bytes, and a filename and content type for a file"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:627
+#: lib/mishka_pay/messages.ex:635
 #, elixir-autogen, elixir-format
 msgid "A price on a meter needs an interval to bill its usage"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:641
+#: lib/mishka_pay/messages.ex:649
 #, elixir-autogen, elixir-format
 msgid "Stripe takes usage from the last 35 days and up to 5 minutes ahead"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:637
+#: lib/mishka_pay/messages.ex:645
 #, elixir-autogen, elixir-format
 msgid "The end of a usage window must come after its start"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:631
+#: lib/mishka_pay/messages.ex:639
 #, elixir-autogen, elixir-format
 msgid "The value field must be an exact number: an integer, a Decimal or a string"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:233
+#: lib/mishka_pay/messages.ex:234
 #, elixir-autogen, elixir-format
 msgid "A hosted checkout needs success_url and cancel_url; an embedded one needs return_url instead"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:550
+#: lib/mishka_pay/messages.ex:558
 #, elixir-autogen, elixir-format
 msgid "Holding the money to capture later does not go with an invoice made at payment, and a merchant of record always makes one: turn both off for this checkout"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:556
+#: lib/mishka_pay/messages.ex:564
 #, elixir-autogen, elixir-format, fuzzy
 msgid "The amount field is more than the payment holds"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:394
+#: lib/mishka_pay/messages.ex:395
 #, elixir-autogen, elixir-format
 msgid "A Stripe checkout offers at most 5 shipping rates"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:398
+#: lib/mishka_pay/messages.ex:399
 #, elixir-autogen, elixir-format
 msgid "A merchant of record does not ship goods: turn merchant of record off to charge for shipping"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:374
+#: lib/mishka_pay/messages.ex:375
 #, elixir-autogen, elixir-format
 msgid "A shipping rate needs the provider's rate id, or a name and an amount"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:367
+#: lib/mishka_pay/messages.ex:368
 #, elixir-autogen, elixir-format
 msgid "A tax calculation needs the buyer's address or a customer whose address the provider keeps"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:360
+#: lib/mishka_pay/messages.ex:361
 #, elixir-autogen, elixir-format
 msgid "A tax calculation takes at most 100 lines"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:363
+#: lib/mishka_pay/messages.ex:364
 #, elixir-autogen, elixir-format
 msgid "Each line of a tax calculation needs its own reference"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:354
+#: lib/mishka_pay/messages.ex:355
 #, elixir-autogen, elixir-format
 msgid "The buyer's address is not enough to count the tax: give its country, and its postal code in the US"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:381
+#: lib/mishka_pay/messages.ex:382
 #, elixir-autogen, elixir-format
 msgid "The fewest days of a delivery estimate must not be more than the most days"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:347
+#: lib/mishka_pay/messages.ex:348
 #, elixir-autogen, elixir-format
 msgid "The provider's tax service is not turned on for this account: set it up in the provider's dashboard first"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:388
+#: lib/mishka_pay/messages.ex:389
 #, elixir-autogen, elixir-format
 msgid "The shipping countries must be a list of two-letter country codes, such as NL"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:340
+#: lib/mishka_pay/messages.ex:341
 #, elixir-autogen, elixir-format
 msgid "The tax id number does not have the form its kind needs: check the number and its country"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:242
+#: lib/mishka_pay/messages.ex:243
 #, elixir-autogen, elixir-format
 msgid "Give at least one item"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:598
+#: lib/mishka_pay/messages.ex:606
 #, elixir-autogen, elixir-format
 msgid "The customer portal has this task turned off: turn it on in the portal's settings at the provider, or use another portal configuration"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:591
+#: lib/mishka_pay/messages.ex:599
 #, elixir-autogen, elixir-format
 msgid "That subscription belongs to another customer: open the portal for the customer who has it"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:584
+#: lib/mishka_pay/messages.ex:592
 #, elixir-autogen, elixir-format
 msgid "The webhook address must be an https URL, such as https://shop.example/pay/webhooks/stripe"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:519
+#: lib/mishka_pay/messages.ex:520
 #, elixir-autogen, elixir-format
 msgid "The subscription %{id} has no next bill: it is not active, or it ends without one"
 msgstr ""
 
-#: lib/mishka_pay/messages.ex:526
+#: lib/mishka_pay/messages.ex:527
 #, elixir-autogen, elixir-format
 msgid "The buyer has not approved this subscription on PayPal yet, so there is nothing to cancel: it ends by itself"
+msgstr ""
+
+#: lib/mishka_pay/messages.ex:534
+#, elixir-autogen, elixir-format
+msgid "PayPal keeps 127 characters for the reference and the owner together: use shorter ones"
 msgstr ""
