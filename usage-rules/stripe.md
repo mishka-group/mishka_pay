@@ -4,6 +4,15 @@
 `:subscription`, `:subscription_list`, `:webhook` and the rest. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
 `mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
 
+## Retries and rate limits
+
+- A read, and a write with its idempotency key, is tried again on a network error and on 408,
+  429, 500, 502, 503 and 504. Stripe's `Stripe-Should-Retry` header wins over the status: `true`
+  retries even another status (a lock held a moment too long, 409), `false` never retries.
+- A 429 is `Errors.Rejected` with `status: 429` and Stripe's `Stripe-Rate-Limited-Reason` as
+  `:rate_limit_reason`; the same reason is in `[:mishka_pay, :request, :retry]` and
+  `[:mishka_pay, :request, :stop]` telemetry, so a dashboard can count limits by kind.
+
 ## Checkout
 
 - A checkout is a Stripe Checkout Session. The buyer comes back to `success_url` with the session

@@ -176,6 +176,7 @@ defmodule MishkaPay.Providers.Stripe do
     PromotionCode,
     ProviderKit,
     Refund,
+    RequestOptions,
     SubscriptionSchedule
   }
 
@@ -1948,25 +1949,34 @@ defmodule MishkaPay.Providers.Stripe do
     do: {:error, Errors.BadSignature.exception(provider: "stripe", reason: reason)}
 
   # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
-  # `upload: true` sends `params` as multipart parts to Stripe's files host.
+  # `upload: true` sends `params` as multipart parts to Stripe's files host; `request_options:` (a
+  # `MishkaPay.RequestOptions`) another API version and the objects to expand.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
+    options = opts[:request_options] || %RequestOptions{}
+
     base = %{
       provider: "stripe",
       method: method,
       base_url: base_url(opts[:upload] == true),
       path: path,
       auth: {:bearer, keys.secret_key},
-      headers: %{"stripe-version" => @version},
+      headers: %{"stripe-version" => options.api_version || @version},
       idempotency_header: "idempotency-key",
-      idempotency_key: opts[:key]
+      idempotency_key: opts[:key],
+      retry_header: "stripe-should-retry",
+      limit_header: "stripe-rate-limited-reason"
     }
 
     base
-    |> put_body(method, params, opts[:upload] == true)
+    |> put_body(method, expanded(params, options.expand), opts[:upload] == true)
     |> Client.request()
     |> answer()
   end
+
+  # Stripe takes `expand[]` in a read's query and in a write's form alike.
+  defp expanded(params, nil), do: params
+  defp expanded(params, paths), do: form(params) ++ Enum.map(paths, &{"expand[]", &1})
 
   defp put_body(spec, _method, parts, true), do: Map.put(spec, :multipart, parts)
   defp put_body(spec, :get, params, false), do: Map.put(spec, :params, form(params))
@@ -1997,7 +2007,9 @@ defmodule MishkaPay.Providers.Stripe do
        param: field_of(error["param"] || param_in(error["message"])),
        message: error["message"],
        request_id: request_id(response),
-       doc_url: error["doc_url"]
+       doc_url: error["doc_url"],
+       rate_limit_reason:
+         response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
      )}
   end
 

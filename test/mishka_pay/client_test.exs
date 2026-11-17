@@ -7,7 +7,7 @@ defmodule MishkaPay.ClientTest do
   use ExUnit.Case, async: true
 
   alias GuardedStruct.Errors.Validation
-  alias MishkaPay.{Client, Errors}
+  alias MishkaPay.{Client, Errors, RequestOptions}
 
   defp request(attrs) do
     %{
@@ -276,6 +276,89 @@ defmodule MishkaPay.ClientTest do
     refute_received {[:mishka_pay, :request, :retry], ^ref, _, %{path: "/v1/net"}}
   end
 
+  # Answers each `{status, headers}` in turn, and tells the test each attempt it got.
+  defp answer_with(answers) do
+    {:ok, left} = Agent.start_link(fn -> answers end)
+    test = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {status, headers} = Agent.get_and_update(left, fn [now | rest] -> {now, rest} end)
+      send(test, {:attempt, conn.method, conn.request_path})
+
+      headers
+      |> Enum.reduce(conn, fn {name, value}, conn ->
+        Plug.Conn.put_resp_header(conn, name, value)
+      end)
+      |> Plug.Conn.put_status(status)
+      |> Req.Test.json(%{"status" => status})
+    end)
+  end
+
+  @told %{retry_header: "Stripe-Should-Retry", limit_header: "stripe-rate-limited-reason"}
+
+  test "the provider's should-retry header retries a status that is not on the list, and its false stops a retry" do
+    answer_with([{409, [{"stripe-should-retry", "true"}]}, {200, []}])
+
+    assert {:ok, %Req.Response{status: 200}} =
+             request(Map.merge(@told, %{method: :post, idempotency_header: "idempotency-key"}))
+
+    assert_received {:attempt, "POST", _path}
+    assert_received {:attempt, "POST", _path}
+
+    answer_with([{503, [{"stripe-should-retry", "false"}]}, {200, []}])
+    assert {:ok, %Req.Response{status: 503}} = request(@told)
+    assert_received {:attempt, "GET", _path}
+    refute_received {:attempt, _method, _path}
+  end
+
+  test "a should-retry true on an answer that did not fail is never sent again" do
+    answer_with([{200, [{"stripe-should-retry", "true"}]}, {200, []}])
+    assert {:ok, %Req.Response{status: 200}} = request(@told)
+    assert_received {:attempt, "GET", _path}
+    refute_received {:attempt, _method, _path}
+  end
+
+  test "a should-retry true never sends a write twice without its idempotency key" do
+    answer_with([{409, [{"stripe-should-retry", "true"}]}, {200, []}])
+
+    assert {:ok, %Req.Response{status: 409}} = request(Map.merge(@told, %{method: :post}))
+    assert_received {:attempt, "POST", _path}
+    refute_received {:attempt, _method, _path}
+  end
+
+  test "without a should-retry header the status decides, as before" do
+    answer_with([{409, []}, {200, []}])
+    assert {:ok, %Req.Response{status: 409}} = request(@told)
+    assert_received {:attempt, "GET", _path}
+    refute_received {:attempt, _method, _path}
+  end
+
+  test "the rate-limit reason is in the retry and stop telemetry" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:mishka_pay, :request, :retry],
+        [:mishka_pay, :request, :stop]
+      ])
+
+    answer_with([
+      {429, [{"stripe-rate-limited-reason", "endpoint-concurrency"}]},
+      {429, [{"stripe-rate-limited-reason", "global-rate"}]}
+    ])
+
+    assert {:ok, %Req.Response{status: 429}} =
+             request(Map.merge(@told, %{path: "/v1/limited", max_retries: 1}))
+
+    assert_received {[:mishka_pay, :request, :retry], ^ref, %{wait: 0},
+                     %{
+                       path: "/v1/limited",
+                       status: 429,
+                       rate_limit_reason: "endpoint-concurrency"
+                     }}
+
+    assert_received {[:mishka_pay, :request, :stop], ^ref, _measurements,
+                     %{path: "/v1/limited", status: 429, rate_limit_reason: "global-rate"}}
+  end
+
   test "options cannot turn retries back on for a write without an idempotency key" do
     answer([503, 200])
 
@@ -324,6 +407,28 @@ defmodule MishkaPay.ClientTest do
       assert {:error, %Errors.Invalid{errors: [%Validation{field: ^field}]}} =
                Client.request(Map.merge(base, attrs))
     end
+  end
+
+  test "request options take a version and expand paths, and no field that could become a header" do
+    assert {:ok, %RequestOptions{api_version: "2026-10-28.endive", expand: ["data.customer"]}} =
+             RequestOptions.builder(%{
+               api_version: "2026-10-28.endive",
+               expand: ["data.customer"]
+             })
+
+    for {field, attrs} <- [
+          api_version: %{api_version: "2026-10-28\r\nAuthorization: Bearer x"},
+          api_version: %{api_version: "a b"},
+          expand: %{expand: ["a.b.c.d.e"]},
+          expand: %{expand: ["Customer"]},
+          expand: %{expand: [:customer]},
+          expand: %{expand: Enum.map(1..21, &"f#{&1}")}
+        ] do
+      assert {:error, [%{field: ^field} | _]} = RequestOptions.builder(attrs)
+    end
+
+    assert {:error, _unknown} = RequestOptions.builder(%{headers: %{"authorization" => "x"}})
+    assert {:error, _unknown} = RequestOptions.builder(%{idempotency_key: "k"})
   end
 
   test "inspect leaves out the auth" do

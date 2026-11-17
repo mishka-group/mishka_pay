@@ -339,6 +339,11 @@ Match the error's struct. Show people plain words, never `inspect(error)`:
 | `MishkaPay.Errors.UnknownProvider` | no such provider installed | supervise the provider |
 | `MishkaPay.Errors.Unreachable` | no answer from the provider | retry later; nothing was charged twice |
 
+A request the provider limited (HTTP 429) is a `Rejected` whose message says to try again in a
+moment; its `rate_limit_reason` says why when the provider told (Stripe: `"global-rate"`,
+`"endpoint-concurrency"`...). Mishka Pay has already retried it, a write only with its
+idempotency key, and follows the provider's own word on whether a retry is safe.
+
 `Rejected` and `Declined` keep the provider's id of the failed request as `request_id` (Stripe's
 `Request-Id`, `req_...`; PayPal's debug id) and its page about the error as `doc_url`. Log them and
 quote the id to the provider's support; never show them to a buyer (`Exception.message/1` and

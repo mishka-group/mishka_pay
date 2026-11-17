@@ -28,6 +28,8 @@ defmodule MishkaPay.Messages do
           | :base_url
           | :path_plain
           | :path_root
+          | :api_version
+          | :expand_paths
           | :params_plain
           | :one_body
           | :multipart_parts
@@ -133,6 +135,7 @@ defmodule MishkaPay.Messages do
           | :refused
           | :rejected
           | :rejected_code
+          | :rate_limited
           | :provider_cannot_run
           | :provider_not_installed
           | :unreachable
@@ -196,6 +199,20 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The path field must be one plain path from the root, with no query, dot segment or encoded slash"
+      )
+
+  defp msgid(:api_version),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The api_version field takes letters, digits, dots, dashes and underscores only"
+      )
+
+  defp msgid(:expand_paths),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The expand field takes up to 20 dotted paths of lower-case names, at most four levels deep"
       )
 
   defp msgid(:path_root),
@@ -759,6 +776,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:rejected_code),
     do: dgettext_noop("mishka_pay", "%{provider} refused the request: %{code} (HTTP %{status})")
+
+  defp msgid(:rate_limited),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} is limiting how fast this site may ask: try again in a moment"
+      )
 
   defp msgid(:provider_cannot_run),
     do:

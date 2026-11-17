@@ -1,7 +1,8 @@
 defmodule Shop.Pay.TelemetryFeed do
   @moduledoc """
   Sends every Mishka Pay telemetry event to the page, so each call shows with its time and
-  outcome. The handler runs in the caller and only broadcasts: never a key or a body.
+  outcome, and a request the provider limited with the reason it gave. The handler runs in the
+  caller and only broadcasts: never a key or a body.
   """
 
   @topic "pay:telemetry"
@@ -40,8 +41,13 @@ defmodule Shop.Pay.TelemetryFeed do
   defp ms(nil), do: nil
   defp ms(duration), do: System.convert_time_unit(duration, :native, :millisecond)
 
-  defp detail(%{method: method, path: path}),
-    do: "#{method |> to_string() |> String.upcase()} #{path}"
+  # A request the provider limited says why (Stripe's Stripe-Rate-Limited-Reason).
+  defp detail(%{method: method, path: path} = meta) do
+    case meta[:rate_limit_reason] do
+      nil -> "#{method |> to_string() |> String.upcase()} #{path}"
+      reason -> "#{method |> to_string() |> String.upcase()} #{path} · rate limited: #{reason}"
+    end
+  end
 
   defp detail(%{type: type}) when is_binary(type), do: type
 

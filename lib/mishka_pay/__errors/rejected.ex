@@ -32,6 +32,10 @@ defmodule MishkaPay.Errors.Rejected do
       PayPal's debug id), when it gave one. Quote it to the provider's support, or find the request
       in its dashboard log.
     * `:doc_url`: the provider's page about the error, when it named one.
+    * `:rate_limit_reason`: why the provider limited the rate of a request it answered 429 for,
+      when it said (Stripe's `Stripe-Rate-Limited-Reason`: `"global-rate"`, `"endpoint-rate"`,
+      `"global-concurrency"`, `"endpoint-concurrency"`, `"resource-specific"`). Its message
+      then says to try again in a moment.
 
   The request id and the page are for support and the log only: `Exception.message/1` never shows
   them.
@@ -40,7 +44,16 @@ defmodule MishkaPay.Errors.Rejected do
   alias MishkaPay.Messages
 
   use Splode.Error,
-    fields: [:provider, :status, :code, :param, :message, :request_id, :doc_url],
+    fields: [
+      :provider,
+      :status,
+      :code,
+      :param,
+      :message,
+      :request_id,
+      :doc_url,
+      :rate_limit_reason
+    ],
     class: :provider
 
   @impl true
@@ -48,6 +61,9 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{provider: provider, code: "resource_missing"}),
     do: Messages.text(:rejected_missing, provider: MishkaPay.Provider.label_of(provider))
+
+  def message(%{provider: provider, status: 429}),
+    do: Messages.text(:rate_limited, provider: MishkaPay.Provider.label_of(provider))
 
   def message(%{code: "managed_payments_invoice"}), do: Messages.text(:managed_payments_invoice)
   def message(%{code: "tax_code_missing"}), do: Messages.text(:tax_code_missing)

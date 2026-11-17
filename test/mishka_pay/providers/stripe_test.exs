@@ -65,6 +65,38 @@ defmodule MishkaPay.Providers.StripeTest do
                MishkaPay.checkout(@checkout)
     end
 
+    test "request options send another API version and expand objects, as Stripe's spec accepts" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, {:sent, conn.method, Map.new(conn.req_headers), conn.query_string})
+        StripeMock.forward(conn)
+      end)
+
+      keys = %{secret_key: "sk_test_123"}
+
+      options = %MishkaPay.RequestOptions{
+        api_version: "2025-03-31.basil",
+        expand: ["data.customer"]
+      }
+
+      assert {:ok, %{"object" => "list"}} =
+               Stripe.request(:get, "/v1/payment_intents", [{"limit", "1"}], keys,
+                 request_options: options
+               )
+
+      assert_received {:sent, "GET", %{"stripe-version" => "2025-03-31.basil"}, query}
+      assert %{"expand[]" => "data.customer", "limit" => "1"} = URI.decode_query(query)
+
+      assert {:ok, %{"object" => "customer"}} =
+               Stripe.request(:post, "/v1/customers", %{"email" => "a@shop.test"}, keys,
+                 request_options: %MishkaPay.RequestOptions{expand: ["invoice_settings"]}
+               )
+
+      assert_received {:sent, "POST", %{"stripe-version" => version}, ""}
+      assert version == Stripe.version()
+    end
+
     test "a reference reused with other details is a plain rejection that never shows the key" do
       MishkaPay.Test.stub_http(fn conn ->
         conn
@@ -272,6 +304,30 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert Exception.message(error) ==
                "Stripe did not accept the value given for trial_days: check it and try again"
+    end
+
+    test "Stripe's should-retry false and rate-limit reason: one request, the reason kept, plain words" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test, :asked)
+
+        conn
+        |> Plug.Conn.put_resp_header("stripe-should-retry", "false")
+        |> Plug.Conn.put_resp_header("stripe-rate-limited-reason", "endpoint-concurrency")
+        |> Plug.Conn.put_status(429)
+        |> Req.Test.json(%{
+          "error" => %{"type" => "invalid_request_error", "code" => "rate_limit"}
+        })
+      end)
+
+      assert {:error,
+              %Errors.Rejected{status: 429, rate_limit_reason: "endpoint-concurrency"} = error} =
+               MishkaPay.fetch_payment("stripe", "pi_1", "site-a")
+
+      assert_received :asked
+      refute_received :asked
+      assert Exception.message(error) =~ "Stripe is limiting how fast this site may ask"
     end
 
     test "a page takes its cursor as Stripe's starting_after, and the next one is its last id" do
