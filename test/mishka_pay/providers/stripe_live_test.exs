@@ -2487,6 +2487,32 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
   end
 
+  # A charge the transfer is paid from (Stripe's `source_transaction`): the transfer then never
+  # depends on the sandbox's available balance, which earlier runs and refunds move.
+  defp charged(currency, run) do
+    assert {:ok, %MishkaPay.PaymentIntent{id: intent}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "2.00", currency: currency},
+               payment_method_id: "pm_card_mastercard",
+               reference: "fund-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.PaymentIntent{status: :succeeded}} =
+             MishkaPay.confirm_payment_intent("stripe", intent, nil,
+               return_url: "https://shop.test/paid"
+             )
+
+    assert {:ok, %{"latest_charge" => "ch_" <> _ = charge}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               method: :get,
+               path: "/v1/payment_intents/#{intent}"
+             })
+
+    charge
+  end
+
   defp paid_and_given_back(id, currency, run) do
     assert {:ok,
             %MishkaPay.ConnectedAccount{
@@ -2498,11 +2524,14 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     refute "identity.individual.id_numbers.us_ssn" in due
 
+    charge = charged(currency, run)
+
     assert {:ok, %MishkaPay.Transfer{id: "tr_" <> _ = transfer_id, destination: ^id}} =
              MishkaPay.create_transfer(%{
                provider: "stripe",
                amount: %{amount: "1.00", currency: currency},
                destination: id,
+               source_charge_id: charge,
                reference: "transfer-#{run}"
              })
 
