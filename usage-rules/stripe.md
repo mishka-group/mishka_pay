@@ -486,13 +486,17 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and
   `customer.tax_id.created`, `.updated` and `.deleted` for a customer's tax ids; the event's
   `:customer_id` names the customer, and the Ash customer listener syncs the row on each. A
-  customer made on v2 sends thin events instead (`v2.core.account.created`,
-  `v2.core.account[configuration.customer].updated`, `v2.core.account[identity].updated`,
-  `v2.core.account.closed`), only to an event destination with the thin payload (see Connect):
-  the `v2.core.account[configuration.customer].*` ones name the account as `:customer_id`, so the
-  customer listener syncs it; the others name no configuration and stay with the account. Its
-  subscriptions and invoices still send v1 snapshot events, and read back with the account as
-  their `:customer_id`.
+  customer made on v2 sends thin events instead, only to an event destination with the thin
+  payload (see Connect). As read live: making it sends `v2.core.account.created` and
+  `v2.core.account[configuration.customer].updated` (and `[identity].updated` with a phone or
+  address); a new invoice default `[configuration.customer].updated`; a new email or name
+  `v2.core.account.updated`; a new phone or address `[identity].updated`; a close
+  `v2.core.account.closed`. Only the `v2.core.account[configuration.customer].*` ones say the
+  account is a customer, so only they name it as `:customer_id` and reach the customer listener;
+  the others look the same for a seller's account and stay with the account. A change made
+  outside Mishka Pay to a v2 customer's email, name, phone or address, or its close, reaches the
+  Ash row only when the row is read again (`:sync`). Its subscriptions and invoices still send v1
+  snapshot events, and read back with the account as their `:customer_id`.
 - Tax ids start with `txi_`. Stripe checks EU VAT, GB VAT and AU ABN numbers against the
   government register after they are added: `:verification` is `:pending` first, and
   `customer.tax_id.updated` comes when the check ends. Other kinds get their format checked only.
