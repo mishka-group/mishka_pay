@@ -28,6 +28,9 @@ defmodule MishkaPay.Messages do
           | :base_url
           | :path_plain
           | :path_root
+          | :api_version
+          | :expand_paths
+          | :request_options_none
           | :params_plain
           | :one_body
           | :multipart_parts
@@ -73,6 +76,13 @@ defmodule MishkaPay.Messages do
           | :shipping_days
           | :managed_payments_shipping
           | :shipping_countries
+          | :webhook_secrets
+          | :account_id_plain
+          | :account_invalid
+          | :capability_names
+          | :connect_not_set_up
+          | :fee_percent
+          | :fee_currency
           | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
@@ -109,10 +119,29 @@ defmodule MishkaPay.Messages do
           | :due_sent_only
           | :stripe_event_types
           | :search_needs
+          | :subscription_search_needs
+          | :subscription_status
+          | :invoice_item_moves
+          | :credit_note_one_of
+          | :tax_percentage
+          | :tax_rate_ids
+          | :tax_rate_fixed
+          | :tax_rates_line_only
+          | :tax_rates_automatic
+          | :registration_state
+          | :registration_scheme
+          | :credit_line_needs
+          | :phase_prices
+          | :phase_length
+          | :schedule_from_subscription
+          | :schedule_moves
+          | :choices
           | :fields_three
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
+          | :intent_of_invoice
+          | :intent_of_checkout
           | :endpoint_url
           | :dropdown_options
           | :declined
@@ -122,6 +151,7 @@ defmodule MishkaPay.Messages do
           | :refused
           | :rejected
           | :rejected_code
+          | :rate_limited
           | :provider_cannot_run
           | :provider_not_installed
           | :unreachable
@@ -186,6 +216,23 @@ defmodule MishkaPay.Messages do
         "mishka_pay",
         "The path field must be one plain path from the root, with no query, dot segment or encoded slash"
       )
+
+  defp msgid(:api_version),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The api_version field takes letters, digits, dots, dashes and underscores only"
+      )
+
+  defp msgid(:expand_paths),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The expand field takes up to 20 dotted paths of lower-case names, at most four levels deep"
+      )
+
+  defp msgid(:request_options_none),
+    do: dgettext_noop("mishka_pay", "%{provider} takes no api_version or expand option")
 
   defp msgid(:path_root),
     do: dgettext_noop("mishka_pay", "The path field must start with /")
@@ -382,6 +429,55 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The fewest days of a delivery estimate must not be more than the most days"
+      )
+
+  defp msgid(:webhook_secrets),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The webhook_secrets field must be a list of secrets, none of them empty"
+      )
+
+  defp msgid(:account_id_plain),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The account_id field must be an account id of letters, digits and underscores only"
+      )
+
+  defp msgid(:account_invalid),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} does not know this site's connected account, or the platform's key has no access to it"
+      )
+
+  defp msgid(:capability_names),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The capabilities field must be a list of names in lowercase letters, digits and underscores"
+      )
+
+  defp msgid(:connect_not_set_up),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} makes connected accounts only once the platform has signed up for Connect in its dashboard"
+      )
+
+  defp msgid(:fee_percent),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The application_fee_percent field must be a share above 0 and up to 100, with at most two decimals"
+      )
+
+  defp msgid(:fee_currency),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The application_fee field must be in the same currency as the items"
       )
 
   defp msgid(:shipping_countries),
@@ -601,6 +697,13 @@ defmodule MishkaPay.Messages do
         "That subscription belongs to another customer: open the portal for the customer who has it"
       )
 
+  defp msgid(:intent_of_invoice),
+    do: dgettext_noop("mishka_pay", "This payment belongs to a bill: void the bill instead.")
+
+  defp msgid(:intent_of_checkout),
+    do:
+      dgettext_noop("mishka_pay", "This payment belongs to a checkout: end the checkout instead.")
+
   defp msgid(:portal_feature_off),
     do:
       dgettext_noop(
@@ -627,6 +730,93 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:search_needs),
     do: dgettext_noop("mishka_pay", "Search needs an email, a name or a reference")
+
+  defp msgid(:subscription_search_needs),
+    do: dgettext_noop("mishka_pay", "Search needs a status, a reference or metadata")
+
+  defp msgid(:choices),
+    do: dgettext_noop("mishka_pay", "The %{field} field takes only: %{choices}")
+
+  defp msgid(:tax_percentage),
+    do: dgettext_noop("mishka_pay", "The percentage field must be an exact number from 0 to 100")
+
+  defp msgid(:tax_rate_ids),
+    do: dgettext_noop("mishka_pay", "The tax_rate_ids field must be a list of tax rate ids")
+
+  defp msgid(:tax_rate_fixed),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax rate's percentage and inclusive never change: make a new rate and archive this one"
+      )
+
+  defp msgid(:tax_rates_line_only),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Tax rates go on the lines of a checkout or a bill, not on a catalog price or a payment link"
+      )
+
+  defp msgid(:registration_scheme),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe takes no such place of supply scheme for this kind of registration in this country"
+      )
+
+  defp msgid(:registration_state),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A state goes only with a US registration or a Canadian provincial one (province_standard)"
+      )
+
+  defp msgid(:tax_rates_automatic),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Tax rates set by hand do not go with automatic tax: turn automatic_tax off for this checkout"
+      )
+
+  defp msgid(:credit_note_one_of),
+    do: dgettext_noop("mishka_pay", "A credit note takes an amount or lines, one of them")
+
+  defp msgid(:credit_line_needs),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A credit note line names a line of the bill with a quantity or an amount, or a name with the credit for one"
+      )
+
+  defp msgid(:phase_prices),
+    do: dgettext_noop("mishka_pay", "A phase charges one or more catalog prices, each by its id")
+
+  defp msgid(:phase_length),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A phase lasts a number of periods of one interval, or until an end date, one of them"
+      )
+
+  defp msgid(:schedule_from_subscription),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A schedule made from a subscription takes its plan from it: change its phases after it is made"
+      )
+
+  defp msgid(:schedule_moves),
+    do: dgettext_noop("mishka_pay", "A schedule stays on its customer and subscription")
+
+  defp msgid(:invoice_item_moves),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "An invoice item stays on its customer and bill: delete it and add a new one instead"
+      )
+
+  defp msgid(:subscription_status),
+    do: dgettext_noop("mishka_pay", "The status field must be one of: %{statuses}")
 
   defp msgid(:stripe_event_types),
     do: dgettext_noop("mishka_pay", "Stripe filters events by at most 20 types at a time")
@@ -695,6 +885,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:rejected_code),
     do: dgettext_noop("mishka_pay", "%{provider} refused the request: %{code} (HTTP %{status})")
+
+  defp msgid(:rate_limited),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "%{provider} is limiting how fast this site may ask: try again in a moment"
+      )
 
   defp msgid(:provider_cannot_run),
     do:

@@ -26,7 +26,8 @@ defmodule MishkaPay.Test.PayPal do
   `order/3` puts an Order in a state (an `"APPROVED"` one is captured when read; `declined: true`
   declines the capture), `subscription/3` a subscription (`"ACTIVE"` with `:billing_info` and
   `:transactions`). A webhook message is verified when its `paypal-transmission-sig` header is
-  `"good"`.
+  `"good"`. Every answer carries a `PayPal-Debug-Id` header, `"f3a1c2b4d5e60"`, and a declined
+  capture its `information_link`, as PayPal's do.
 
   `MishkaPay.Test.setup!/0` makes its table. What it holds belongs to the test that called `stub!/0`, read from any process the test starts
   (through `$callers`), so async tests never see each other's. It tells the test every request
@@ -34,6 +35,9 @@ defmodule MishkaPay.Test.PayPal do
   """
 
   @table __MODULE__
+
+  # PayPal names every answer in its `PayPal-Debug-Id` header; the stand-in uses one id.
+  @debug_id "f3a1c2b4d5e60"
 
   @doc "Answers this test's PayPal requests with the stand-in, holding what it makes for this test."
   @spec stub!() :: :ok
@@ -175,7 +179,16 @@ defmodule MishkaPay.Test.PayPal do
       true ->
         reply(conn, 422, %{
           "name" => "UNPROCESSABLE_ENTITY",
-          "details" => [%{"issue" => "INSTRUMENT_DECLINED"}]
+          "details" => [%{"issue" => "INSTRUMENT_DECLINED"}],
+          "debug_id" => @debug_id,
+          "links" => [
+            %{
+              "href" =>
+                "https://developer.paypal.com/api/rest/reference/orders/v2/errors/#INSTRUMENT_DECLINED",
+              "rel" => "information_link",
+              "method" => "GET"
+            }
+          ]
         })
 
       _paid ->
@@ -327,7 +340,10 @@ defmodule MishkaPay.Test.PayPal do
   end
 
   defp reply(conn, status, body) do
-    conn |> put_resp_content_type("application/json") |> send_resp(status, JSON.encode!(body))
+    conn
+    |> put_resp_header("paypal-debug-id", @debug_id)
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, JSON.encode!(body))
   end
 
   defp build(id, status, opts) do

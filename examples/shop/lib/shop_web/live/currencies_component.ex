@@ -18,14 +18,21 @@ defmodule ShopWeb.CurrenciesComponent do
     {"HUF", "1990", "Hungarian forint: two places"}
   ]
 
+  @form %{"currency" => "ISK", "amount" => "1500", "product_id" => ""}
+
   @impl true
-  def mount(socket), do: {:ok, assign(socket, made: nil, error: nil)}
+  def mount(socket), do: {:ok, assign(socket, made: nil, error: nil, form: @form)}
 
   @impl true
   def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
+  # The form as typed, so the price shown after a make keeps the currency picked for the next one.
   @impl true
+  def handle_event("draft", params, socket),
+    do: {:noreply, assign(socket, form: Map.merge(@form, Map.take(params, Map.keys(@form))))}
+
   def handle_event("make", params, socket) do
+    socket = assign(socket, form: Map.merge(@form, Map.take(params, Map.keys(@form))))
     tenant = socket.assigns.tenant
     amount = %{amount: String.trim(params["amount"] || ""), currency: params["currency"]}
 
@@ -72,6 +79,7 @@ defmodule ShopWeb.CurrenciesComponent do
 
       <form
         id="currencies-form"
+        phx-change="draft"
         phx-submit="make"
         phx-target={@myself}
         class="card bg-base-200"
@@ -82,7 +90,11 @@ defmodule ShopWeb.CurrenciesComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Currency</span>
               <select name="currency" class="select select-sm" data-testid="currencies-currency">
-                <option :for={{code, _amount, note} <- @currencies} value={code}>
+                <option
+                  :for={{code, _amount, note} <- @currencies}
+                  value={code}
+                  selected={@form["currency"] == code}
+                >
                   {code}: {note}
                 </option>
               </select>
@@ -91,7 +103,7 @@ defmodule ShopWeb.CurrenciesComponent do
               <span class="fieldset-legend">Amount</span>
               <input
                 name="amount"
-                value="1500"
+                value={@form["amount"]}
                 class="input input-sm"
                 data-testid="currencies-amount"
               />
@@ -100,6 +112,7 @@ defmodule ShopWeb.CurrenciesComponent do
               <span class="fieldset-legend">Product id (empty: a new one)</span>
               <input
                 name="product_id"
+                value={@form["product_id"]}
                 placeholder="prod_..."
                 class="input input-sm"
                 data-testid="currencies-product"

@@ -104,6 +104,32 @@ defmodule MishkaPay.WebhookTest do
     assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{outcome: :mode}}
   end
 
+  test "a site acting for a connected account takes only that account's events", %{ref: ref} do
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_platform", webhook_secret: @secret, account_id: "acct_site_b"},
+      "site-b"
+    )
+
+    own = payload(%{"account" => "acct_site_b"})
+    assert post("/pay/webhooks/stripe/site-b", own, signed(own)).status == 200
+    assert_received {:webhook_event, %Event{tenant: "site-b", account: "acct_site_b"}}
+
+    for body <- [payload(%{"account" => "acct_site_c"}), payload()] do
+      assert post("/pay/webhooks/stripe/site-b", body, signed(body)).status == 400
+      assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{status: 400, outcome: :account}}
+    end
+
+    refute_received {:webhook_event, _event}
+  end
+
+  test "the platform's own endpoint takes its connected accounts' events, each naming its account" do
+    body = payload(%{"account" => "acct_site_b"})
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+    assert_received {:webhook_event, %Event{tenant: "site-a", account: "acct_site_b"}}
+  end
+
   test "a rolled secret still works while Stripe signs with both" do
     body = payload()
     time = System.system_time(:second)
@@ -112,6 +138,42 @@ defmodule MishkaPay.WebhookTest do
       "t=#{time},v1=#{Stripe.signature(body, time, "whsec_old")},v1=#{Stripe.signature(body, time, @secret)}"
 
     assert post("/pay/webhooks/stripe/site-a", body, both).status == 200
+  end
+
+  test "after a roll, a message signed with the old secret or the new one passes; with neither it is refused",
+       %{ref: ref} do
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_a", webhook_secret: "whsec_new", webhook_secrets: ["whsec_old"]},
+      "site-a"
+    )
+
+    body = payload()
+
+    for secret <- ["whsec_old", "whsec_new"] do
+      assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: secret)).status == 200
+      assert_received {:webhook_event, %Event{id: "evt_123"}}
+    end
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: @secret)).status == 400
+    assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{status: 400, outcome: :mismatch}}
+    refute_received {:webhook_event, _event}
+  end
+
+  test "keys with only older secrets still check messages, and keys with none refuse them" do
+    body = payload()
+
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_a", webhook_secrets: ["whsec_old"]},
+      "site-a"
+    )
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: "whsec_old")).status ==
+             200
+
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a"}, "site-a")
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 400
   end
 
   test "a listener that cannot take the event makes Stripe send it again", %{ref: ref} do

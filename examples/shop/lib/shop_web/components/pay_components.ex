@@ -32,6 +32,127 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
+  @doc """
+  Stripe's own form inside the page, mounted by Stripe.js with a client secret and the site's
+  publishable key: an embedded Checkout (`mode="embedded_checkout"`), or the Payment Element of a
+  payment intent (`"payment"`) or a setup intent (`"setup"`). The form is an iframe only Stripe.js
+  can mount, hence the one hook. A Payment Element is confirmed by a `stripe:confirm` event on
+  its element (`JS.dispatch("stripe:confirm", to: "#" <> id)`), and then tells the part that
+  shows it with a `stripe_confirmed` event (`%{"mode" => mode, "error" => message | nil}`).
+  """
+  attr :id, :string, required: true
+  attr :mode, :string, values: ~w(embedded_checkout payment setup), required: true
+  attr :client_secret, :string, required: true
+  attr :publishable_key, :string, required: true
+  attr :rest, :global
+
+  def stripe_form(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      phx-hook=".StripeForm"
+      phx-update="ignore"
+      data-mode={@mode}
+      data-client-secret={@client_secret}
+      data-publishable-key={@publishable_key}
+      {@rest}
+    >
+    </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".StripeForm">
+      // A hook, not LiveView.JS: Stripe's forms are iframes that only Stripe.js can mount and
+      // confirm, with the client secret. The script loads once per page.
+      let stripeJs
+      const loadStripe = () => stripeJs ||= new Promise((resolve, reject) => {
+        if (window.Stripe) return resolve(window.Stripe)
+        const script = document.createElement("script")
+        script.src = "https://js.stripe.com/endive/stripe.js"
+        script.onload = () => resolve(window.Stripe)
+        script.onerror = () => { stripeJs = null; reject(new Error("Stripe.js did not load")) }
+        document.head.appendChild(script)
+      })
+
+      export default {
+        async mounted() {
+          const {mode, clientSecret, publishableKey} = this.el.dataset
+          try {
+            const stripe = (await loadStripe())(publishableKey)
+            if (mode === "embedded_checkout") {
+              const create = stripe.createEmbeddedCheckoutPage || stripe.initEmbeddedCheckout
+              this.form = await create.call(stripe, {fetchClientSecret: async () => clientSecret})
+            } else {
+              const elements = stripe.elements({clientSecret})
+              this.form = elements.create("payment")
+              this.el.addEventListener("stripe:confirm", () => this.confirm(stripe, elements, mode))
+            }
+            if (this.el.isConnected) this.form.mount(this.el)
+          } catch (error) {
+            this.el.textContent = "Stripe's form could not load: " + error.message
+          }
+        },
+        async confirm(stripe, elements, mode) {
+          const confirm = mode === "setup" ? stripe.confirmSetup : stripe.confirmPayment
+          const {error} = await confirm.call(stripe, {
+            elements,
+            redirect: "if_required",
+            confirmParams: {return_url: window.location.href}
+          })
+          this.pushEventTo(this.el, "stripe_confirmed", {mode, error: error ? error.message : null})
+        },
+        destroyed() {
+          if (this.form && this.form.destroy) this.form.destroy()
+        }
+      }
+    </script>
+    """
+  end
+
+  @doc """
+  The site's publishable key that Stripe.js needs for `what` (`"An embedded checkout"`), or a
+  sentence that says how to add one.
+  """
+  def publishable_key(tenant, what) do
+    case MishkaPay.Credentials.fetch("stripe", tenant) do
+      {:ok, %{publishable_key: key}} when is_binary(key) ->
+        {:ok, key}
+
+      _no_key ->
+        {:error,
+         "#{what} needs the site's publishable key: put STRIPE_PUBLISHABLE_KEY=pk_test_... in examples/shop/.env."}
+    end
+  end
+
+  @doc """
+  For the site's staff, beside an error's plain words: the provider's id of the request that
+  failed (`:request_id` of `MishkaPay.Errors.Rejected` or `Declined`, found with
+  `MishkaPay.Ash.provider_error/1`) and its page about the error. A buyer never sees it.
+  """
+  attr :error, :map, required: true
+
+  def request_id(assigns) do
+    ~H"""
+    <p
+      :if={@error.request_id}
+      class="text-xs opacity-70 mb-3 flex flex-wrap items-center gap-2"
+      data-testid="request-id"
+    >
+      <span>
+        {MishkaPay.Provider.label_of(@error.provider)}'s request id, for its support:
+      </span>
+      <code class="break-all" data-testid="request-id-value">{@error.request_id}</code>
+      <a
+        :if={@error.doc_url}
+        href={@error.doc_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="link"
+        data-testid="request-id-doc"
+      >
+        about this error
+      </a>
+    </p>
+    """
+  end
+
   @doc "What Mishka Pay sees right now: providers, the site's keys and settings, and plugins."
   attr :providers, :list, required: true
   attr :keys, :any, required: true
@@ -83,6 +204,11 @@ defmodule ShopWeb.PayComponents do
             <dt class="opacity-70">Webhook secret</dt>
             <dd data-testid="site-webhook-secret">
               {if @local_webhook_secret?, do: "the simulator's own", else: "from stripe listen"}
+              <span class="block text-xs opacity-70" data-testid="site-webhook-old-secrets">
+                + {length(@keys.webhook_secrets)} from before a roll, still accepted<span :if={
+                  @keys.webhook_secrets == []
+                }> (set <code>STRIPE_WEBHOOK_SECRET_OLD</code> to keep one)</span>
+              </span>
             </dd>
             <dt class="opacity-70">Refunds</dt>
             <dd data-testid="site-refunds">{@keys.refunds}</dd>
@@ -539,7 +665,12 @@ defmodule ShopWeb.PayComponents do
         <span data-testid="stats-taken">taken <b>{money(@taken, "USD")}</b></span>
         <span data-testid="stats-refunded">refunded <b>{money(@refunded, "USD")}</b></span>
       </div>
-      <form phx-change="filter" class="flex flex-wrap gap-1" data-testid="status-filter">
+      <form
+        id="status-filter"
+        phx-change="filter"
+        class="flex flex-wrap gap-1"
+        data-testid="status-filter"
+      >
         <label
           :for={status <- ["all" | @statuses]}
           class={["btn btn-xs", (@filter == status && "btn-primary") || "btn-ghost"]}
@@ -629,10 +760,15 @@ defmodule ShopWeb.PayComponents do
     """
   end
 
-  @doc "One payment: the row the shop keeps, the payment as its provider has it, its events and actions."
+  @doc """
+  One payment: the row the shop keeps, the payment as its provider has it, its events and actions.
+  A Stripe payment not paid yet has "Cancel" (`cancel_payment`), so one left waiting can be ended;
+  one a checkout made (its row has a `checkout_id`) has none, as only its checkout can end it.
+  """
   attr :selected, :map, required: true
   attr :live, :any, required: true
   attr :names, :map, required: true
+  attr :refund_form, :map, default: %{"amount" => "", "reason" => ""}
 
   def payment_details(assigns) do
     assigns = assign(assigns, :at, MishkaPay.Provider.label_of(assigns.selected.payment.provider))
@@ -711,14 +847,28 @@ defmodule ShopWeb.PayComponents do
               <dt class="opacity-70">Last synced</dt>
               <dd class="text-xs" data-testid="stored-synced">{time(@selected.payment.synced_at)}</dd>
             </dl>
-            <button
-              class="btn btn-sm mt-3"
-              phx-click="sync"
-              phx-value-payment_id={@selected.payment.provider_id}
-              data-testid="details-sync"
-            >
-              <.icon name="hero-arrow-path" class="size-4" /> Sync from {@at}
-            </button>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <button
+                class="btn btn-sm"
+                phx-click="sync"
+                phx-value-payment_id={@selected.payment.provider_id}
+                data-testid="details-sync"
+              >
+                <.icon name="hero-arrow-path" class="size-4" /> Sync from {@at}
+              </button>
+              <button
+                :if={cancelable?(@selected.payment)}
+                class="btn btn-sm btn-error btn-outline"
+                phx-click="cancel_payment"
+                phx-value-payment={@selected.payment.id}
+                phx-disable-with="Asking Stripe..."
+                data-confirm="Cancel this payment on Stripe? It can no longer be paid."
+                data-testid="payment-cancel"
+              >
+                <.icon name="hero-no-symbol" class="size-4" /> Cancel
+              </button>
+            </div>
+            <.hint :if={cancelable?(@selected.payment)}>MishkaPay.cancel_payment_intent/3</.hint>
           </div>
 
           <div class="rounded-box bg-base-100 p-4" data-testid="details-live">
@@ -813,6 +963,8 @@ defmodule ShopWeb.PayComponents do
           </div>
           <form
             :if={@selected.payment.status in [:paid, :partially_refunded]}
+            id="refund-form"
+            phx-change="draft_refund"
             phx-submit="refund"
             novalidate
             class="rounded-box bg-base-100 p-4 space-y-2"
@@ -827,15 +979,26 @@ defmodule ShopWeb.PayComponents do
                 type="number"
                 step="0.01"
                 min="0.01"
+                value={@refund_form["amount"]}
                 placeholder="amount, empty = all"
                 class="input input-sm w-44"
                 data-testid="refund-amount"
               />
               <select name="reason" class="select select-sm w-60" data-testid="refund-reason">
-                <option value="">No reason</option>
-                <option value="requested_by_customer">Requested by customer</option>
-                <option value="duplicate">Duplicate</option>
-                <option value="fraudulent">Fraudulent (Stripe then blocks this card)</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"", "No reason"},
+                      {"requested_by_customer", "Requested by customer"},
+                      {"duplicate", "Duplicate"},
+                      {"fraudulent", "Fraudulent (Stripe then blocks this card)"}
+                    ]
+                  }
+                  value={value}
+                  selected={@refund_form["reason"] == value}
+                >
+                  {label}
+                </option>
               </select>
               <button
                 class="btn btn-sm btn-warning"
@@ -885,6 +1048,14 @@ defmodule ShopWeb.PayComponents do
     {@message} <code :if={@code} class="text-xs opacity-60">{@code}</code>
     """
   end
+
+  # A Stripe payment intent no one has paid yet (waiting for a card, for the buyer, or after a
+  # declined card) can still be canceled; a held one is let go under "Refunds and held payments".
+  # One a checkout made ends only with its checkout, so it has no Cancel here.
+  defp cancelable?(%{provider: "stripe", checkout_id: nil, status: status}),
+    do: status in [:pending, :requires_action, :failed]
+
+  defp cancelable?(_payment), do: false
 
   defp no_refund(:refunded), do: "Nothing to refund: the payment is refunded in full."
   defp no_refund(:pending), do: "Nothing to refund yet: the payment is not paid."
@@ -1041,6 +1212,10 @@ defmodule ShopWeb.PayComponents do
   defp simulated_meaning(:good),
     do:
       "Stored once in the inbox and worked as a job: the row shows processed, or the error once its tries run out."
+
+  defp simulated_meaning(:rolled_secret),
+    do:
+      "Taken: after a roll Stripe signs with the old secret for a while, and the site still lists it (webhook_secrets)."
 
   defp simulated_meaning(:bad_signature),
     do: "Refused and never stored: the signature does not match the site's secret."

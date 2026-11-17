@@ -118,6 +118,38 @@ defmodule ShopWeb.OperationsTest do
     assert has_element?(view, "[data-testid=replay-delivered]", "1")
   end
 
+  test "the replay window picked stays picked while the events are read, and is the one used",
+       %{conn: conn} do
+    test = self()
+
+    StripeStub.stub(fn
+      "GET", "/v1/events", %{"created" => %{"gte" => since}} ->
+        send(test, {:since, String.to_integer(since)})
+        StripeStub.list([])
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    form = "[data-testid=operations-replay-form]"
+
+    view |> form(form, %{window: "1d"}) |> render_change()
+    view |> element("[data-testid=operations-events]") |> render_click()
+    assert_received {:since, _hour_ago}
+
+    assert has_element?(
+             view,
+             "[data-testid=operations-replay-window] option[value='1d'][selected]"
+           )
+
+    view |> form(form) |> render_submit()
+    render_async(view)
+
+    assert_received {:since, since}
+    assert since <= System.os_time(:second) - 86_000
+  end
+
   test "compares the pinned Stripe API version with the newest", %{conn: conn} do
     StripeStub.stub(fn
       "GET", "/stripe/openapi/master/latest/openapi.spec3.json", _params ->

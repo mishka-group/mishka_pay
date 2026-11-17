@@ -13,10 +13,21 @@ defmodule ShopWeb.TaxComponent do
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
+  @tax_id_form %{"type" => "eu_vat", "value" => "DE123456789"}
+  @calc_form %{
+    "amount" => "30.00",
+    "currency" => "EUR",
+    "tax_code" => "txcd_10302000",
+    "country" => "DE",
+    "postal_code" => ""
+  }
+
   @impl true
   def mount(socket) do
     {:ok,
      assign(socket,
+       tax_id_form: @tax_id_form,
+       calc_form: @calc_form,
        customer_id: "",
        tax_ids: nil,
        calculation: nil,
@@ -39,15 +50,27 @@ defmodule ShopWeb.TaxComponent do
   end
 
   @impl true
+  # Both forms keep what is typed or picked, so a list or a result shown keeps it.
+  def handle_event("draft_tax_ids", params, socket), do: {:noreply, keep_tax_id(socket, params)}
+
+  def handle_event("draft_calculation", params, socket),
+    do: {:noreply, assign(socket, calc_form: kept(@calc_form, params))}
+
   # One form, two buttons: list the customer's tax ids, or add one.
-  def handle_event("tax_ids", %{"intent" => "list", "customer_id" => customer_id}, socket) do
+  def handle_event(
+        "tax_ids",
+        %{"intent" => "list", "customer_id" => customer_id} = params,
+        socket
+      ) do
     {:noreply,
      socket
+     |> keep_tax_id(params)
      |> assign(customer_id: String.trim(customer_id), notice: nil, error: nil)
      |> list_tax_ids()}
   end
 
   def handle_event("tax_ids", %{"customer_id" => customer_id} = params, socket) do
+    socket = keep_tax_id(socket, params)
     customer_id = String.trim(customer_id)
     attrs = %{type: params["type"], value: params["value"]}
 
@@ -77,6 +100,8 @@ defmodule ShopWeb.TaxComponent do
   end
 
   def handle_event("calculate", params, socket) do
+    socket = assign(socket, calc_form: kept(@calc_form, params))
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -118,6 +143,15 @@ defmodule ShopWeb.TaxComponent do
     end
   end
 
+  defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
+
+  defp keep_tax_id(socket, params) do
+    assign(socket,
+      customer_id: params["customer_id"] || socket.assigns.customer_id,
+      tax_id_form: kept(@tax_id_form, params)
+    )
+  end
+
   defp list_tax_ids(%{assigns: %{customer_id: ""}} = socket),
     do: assign(socket, tax_ids: nil, error: "Give a customer id (cus_...).")
 
@@ -154,6 +188,7 @@ defmodule ShopWeb.TaxComponent do
             <.hint>MishkaPay.create_tax_id/4, list_tax_ids/4, delete_tax_id/4</.hint>
             <form
               id="tax-ids-form"
+              phx-change="draft_tax_ids"
               phx-submit="tax_ids"
               phx-target={@myself}
               class="grid gap-2 sm:grid-cols-2"
@@ -176,16 +211,26 @@ defmodule ShopWeb.TaxComponent do
               <label class="fieldset">
                 <span class="fieldset-legend">Type</span>
                 <select name="type" class="select select-sm" data-testid="tax-id-type">
-                  <option value="eu_vat">EU VAT</option>
-                  <option value="gb_vat">UK VAT</option>
-                  <option value="au_abn">Australian ABN</option>
+                  <option
+                    :for={
+                      {value, label} <- [
+                        {"eu_vat", "EU VAT"},
+                        {"gb_vat", "UK VAT"},
+                        {"au_abn", "Australian ABN"}
+                      ]
+                    }
+                    value={value}
+                    selected={@tax_id_form["type"] == value}
+                  >
+                    {label}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">Number (test: DE123456789)</span>
                 <input
                   name="value"
-                  value="DE123456789"
+                  value={@tax_id_form["value"]}
                   class="input input-sm"
                   data-testid="tax-id-value"
                 />
@@ -246,6 +291,7 @@ defmodule ShopWeb.TaxComponent do
             <.hint>MishkaPay.calculate_tax/1, record_tax/4</.hint>
             <form
               id="tax-calc-form"
+              phx-change="draft_calculation"
               phx-submit="calculate"
               phx-target={@myself}
               class="grid gap-2 sm:grid-cols-3"
@@ -255,7 +301,7 @@ defmodule ShopWeb.TaxComponent do
                 <span class="fieldset-legend">Amount</span>
                 <input
                   name="amount"
-                  value="30.00"
+                  value={@calc_form["amount"]}
                   type="number"
                   step="0.01"
                   min="0.01"
@@ -266,16 +312,20 @@ defmodule ShopWeb.TaxComponent do
               <label class="fieldset">
                 <span class="fieldset-legend">Currency</span>
                 <select name="currency" class="select select-sm" data-testid="tax-calc-currency">
-                  <option value="EUR">EUR</option>
-                  <option value="USD">USD</option>
-                  <option value="GBP">GBP</option>
+                  <option
+                    :for={currency <- ~w(EUR USD GBP)}
+                    value={currency}
+                    selected={@calc_form["currency"] == currency}
+                  >
+                    {currency}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">Tax code</span>
                 <input
                   name="tax_code"
-                  value="txcd_10302000"
+                  value={@calc_form["tax_code"]}
                   class="input input-sm"
                   data-testid="tax-calc-code"
                 />
@@ -283,16 +333,27 @@ defmodule ShopWeb.TaxComponent do
               <label class="fieldset">
                 <span class="fieldset-legend">Buyer's country</span>
                 <select name="country" class="select select-sm" data-testid="tax-calc-country">
-                  <option value="DE">Germany</option>
-                  <option value="NL">Netherlands</option>
-                  <option value="GB">United Kingdom</option>
-                  <option value="US">United States</option>
+                  <option
+                    :for={
+                      {code, name} <- [
+                        {"DE", "Germany"},
+                        {"NL", "Netherlands"},
+                        {"GB", "United Kingdom"},
+                        {"US", "United States"}
+                      ]
+                    }
+                    value={code}
+                    selected={@calc_form["country"] == code}
+                  >
+                    {name}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">Postal code (US needs it)</span>
                 <input
                   name="postal_code"
+                  value={@calc_form["postal_code"]}
                   placeholder="10115"
                   class="input input-sm"
                   data-testid="tax-calc-postal"

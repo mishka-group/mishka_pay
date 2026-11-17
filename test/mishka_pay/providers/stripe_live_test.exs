@@ -571,6 +571,213 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {status, answer}
   end
 
+  test "a customer is deleted on Stripe for good: it reads back deleted, and a second delete is refused" do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: id}} =
+      MishkaPay.create_customer(%{
+        provider: "stripe",
+        email: "erase-#{run}@example.com",
+        reference: "erase-#{run}"
+      })
+
+    assert :ok = MishkaPay.delete_customer("stripe", id)
+
+    assert {:error, %Errors.Rejected{code: "customer_deleted"}} =
+             MishkaPay.fetch_customer("stripe", id)
+
+    assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
+             MishkaPay.delete_customer("stripe", id)
+  end
+
+  test "a customer's subscriptions are listed by price and status, and searched, then ended",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "subs-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Listed plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    {200, %{"id" => id, "items" => %{"data" => [%{"price" => %{"id" => price}}]}}} =
+      stripe(key, :post, "/v1/subscriptions", %{
+        "customer" => customer,
+        "trial_period_days" => 7,
+        "metadata" => %{"mishka_pay_reference" => "subs-#{run}"},
+        "items" => [
+          %{
+            "price_data" => %{
+              "currency" => "usd",
+              "product" => product,
+              "unit_amount" => 500,
+              "recurring" => %{"interval" => "month"}
+            }
+          }
+        ]
+      })
+
+    assert {:ok, %MishkaPay.Page{items: [%Subscription{id: ^id, status: :trialing} = listed]}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, price_id: price)
+
+    assert {listed.reference, listed.customer_email} == {"subs-#{run}", "subs-#{run}@example.com"}
+    assert [%{product_id: ^product, interval: :month}] = listed.items
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, status: :active)
+
+    assert {:ok, %MishkaPay.Page{}} =
+             MishkaPay.search_subscriptions("stripe", nil,
+               status: :trialing,
+               reference: "subs-#{run}"
+             )
+
+    {:ok, %Subscription{status: :canceled}} =
+      MishkaPay.cancel_subscription("stripe", id, nil, at: :now)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.Page{items: [%Subscription{id: ^id, status: :canceled}]}} =
+             MishkaPay.list_subscriptions("stripe", nil, customer_id: customer, status: :all)
+  end
+
+  test "a pending invoice item is added once per reference, changed, listed and removed",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "items-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    item = %{
+      provider: "stripe",
+      customer_id: customer,
+      name: "Setup fee #{run}",
+      amount: %{amount: "49.00", currency: "USD"},
+      quantity: 2,
+      reference: "setup-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.InvoiceItem{id: "ii_" <> _ = id, invoice_id: nil} = made} =
+             MishkaPay.create_invoice_item(item)
+
+    assert {made.amount, made.total, made.reference} ==
+             {Money.new(:USD, "49.00"), Money.new(:USD, "98.00"), "setup-#{run}"}
+
+    assert {:ok, %MishkaPay.InvoiceItem{id: ^id}} = MishkaPay.create_invoice_item(item)
+
+    assert {:ok, %MishkaPay.InvoiceItem{quantity: 3, total: total}} =
+             MishkaPay.update_invoice_item(%{provider: "stripe", id: id, quantity: 3})
+
+    assert total == Money.new(:USD, "147.00")
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.InvoiceItem{id: ^id}]}} =
+             MishkaPay.list_invoice_items("stripe", nil, customer_id: customer, pending: true)
+
+    assert :ok = MishkaPay.delete_invoice_item("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_invoice_items("stripe", nil, customer_id: customer, pending: true)
+  end
+
+  test "a portal configuration is made, changed, read and listed, a session opens with it, and it is turned off",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "portal-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Portal plan #{run}"})
+
+    {:ok, %MishkaPay.Price{id: price}} =
+      MishkaPay.create_price(%{
+        provider: "stripe",
+        product_id: product,
+        amount: %{amount: "7.00", currency: "USD"},
+        interval: :month
+      })
+
+    assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_" <> _ = id} = config} =
+             MishkaPay.create_portal_configuration(%{
+               provider: "stripe",
+               name: "Live portal #{run}",
+               headline: "Live billing",
+               default_return_url: "https://shop.test/account",
+               invoice_history: true,
+               payment_method_update: true,
+               customer_update: [:email, :name],
+               subscription_cancel: :at_period_end,
+               subscription_update: [:price, :quantity],
+               plans: [%{product_id: product, price_ids: [price]}],
+               proration: :create_prorations
+             })
+
+    on_exit(fn ->
+      cleanup(
+        key,
+        &Stripe.update_portal_configuration(
+          %MishkaPay.PortalConfiguration{provider: "stripe", id: id, active: false},
+          &1
+        )
+      )
+
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    assert {config.active, config.default, config.customer_update, config.subscription_cancel} ==
+             {true, false, [:email, :name], :at_period_end}
+
+    assert [%MishkaPay.PortalPlan{product_id: ^product, price_ids: [^price]}] = config.plans
+
+    assert {:ok, %MishkaPay.PortalConfiguration{subscription_cancel: :off, customer_update: []}} =
+             MishkaPay.update_portal_configuration(%{
+               provider: "stripe",
+               id: id,
+               subscription_cancel: :off,
+               customer_update: []
+             })
+
+    assert {:ok, %MishkaPay.PortalConfiguration{name: "Live portal " <> _, invoice_history: true}} =
+             MishkaPay.fetch_portal_configuration("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _]}} =
+             MishkaPay.list_portal_configurations("stripe", nil, active: true, limit: 100)
+
+    assert {:ok, %MishkaPay.PortalSession{url: "https://billing.stripe.com/" <> _}} =
+             MishkaPay.portal_session(%{
+               provider: "stripe",
+               customer_id: customer,
+               return_url: "https://shop.test/account",
+               configuration: id
+             })
+  end
+
+  defp delete_customer(id, keys) do
+    with :ok <- Stripe.delete_customer(id, keys), do: {:ok, :deleted}
+  end
+
+  test "a refusal keeps Stripe's request id and error page, and its words show neither" do
+    assert {:error,
+            %Errors.Rejected{
+              status: 404,
+              code: "resource_missing",
+              request_id: "req_" <> _ = request_id,
+              doc_url: "https://" <> _ = doc_url
+            } = error} = MishkaPay.fetch_payment("stripe", "pi_doesnotexist")
+
+    refute Exception.message(error) =~ request_id
+    refute Exception.message(error) =~ doc_url
+  end
+
   test "a customer is made, changed, found by email and read on Stripe, and its portal opens" do
     run = run_id()
     email = "live-#{run}@example.com"
@@ -910,6 +1117,195 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     {:ok, %Invoice{id: fourth}} = MishkaPay.create_invoice(draft.("bill-#{run}-4"))
     assert :ok = MishkaPay.delete_invoice("stripe", fourth)
     assert {:error, %Errors.Rejected{}} = MishkaPay.fetch_invoice("stripe", fourth)
+  end
+
+  test "a schedule is made once per reference, changed, released, then made from its subscription and canceled with it",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "plan-#{run}@example.com"})
+
+    {:ok, %MishkaPay.Product{id: product} = made} =
+      MishkaPay.create_product(%{provider: "stripe", name: "Scheduled plan #{run}"})
+
+    on_exit(fn ->
+      archive(key, made)
+      cleanup(key, &delete_customer(customer, &1))
+    end)
+
+    price = fn amount ->
+      {:ok, %MishkaPay.Price{id: id}} =
+        MishkaPay.create_price(%{
+          provider: "stripe",
+          product_id: product,
+          amount: %{amount: amount, currency: "USD"},
+          interval: :month
+        })
+
+      id
+    end
+
+    {intro, full} = {price.("5.00"), price.("19.00")}
+
+    schedule = %{
+      provider: "stripe",
+      customer_id: customer,
+      end_behavior: :cancel,
+      reference: "plan-#{run}",
+      phases: [
+        %{items: [%{id: intro}], trial: true, iterations: 1, interval: :month},
+        %{items: [%{id: full, quantity: 2}], iterations: 2, interval: :month}
+      ]
+    }
+
+    assert {:ok,
+            %MishkaPay.SubscriptionSchedule{
+              id: "sub_sched_" <> _ = id,
+              status: :active,
+              subscription_id: "sub_" <> _ = subscription,
+              current_phase: 0,
+              end_behavior: :cancel,
+              reference: reference,
+              phases: [first, second]
+            }} = MishkaPay.create_subscription_schedule(schedule)
+
+    assert reference == "plan-#{run}"
+    assert {first.end_at, first.trial_end_at} == {second.start_at, second.start_at}
+    assert [%{id: ^full, quantity: 2}] = second.items
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+             MishkaPay.create_subscription_schedule(schedule)
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+             MishkaPay.fetch_subscription_schedule("stripe", id)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.SubscriptionSchedule{id: ^id}]}} =
+             MishkaPay.list_subscription_schedules("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{end_behavior: :release, phases: [kept, next]}} =
+             MishkaPay.update_subscription_schedule(%{
+               provider: "stripe",
+               id: id,
+               end_behavior: :release,
+               phases: [
+                 %{
+                   items: [%{id: intro}],
+                   start_at: first.start_at,
+                   end_at: first.end_at,
+                   trial_end_at: first.trial_end_at
+                 },
+                 %{items: [%{id: intro, quantity: 3}], iterations: 1, interval: :month}
+               ]
+             })
+
+    assert kept.start_at == first.start_at
+    assert [%{id: ^intro, quantity: 3}] = next.items
+
+    assert {:ok,
+            %MishkaPay.SubscriptionSchedule{
+              status: :released,
+              released_subscription_id: ^subscription,
+              released_at: %DateTime{}
+            }} = MishkaPay.release_subscription_schedule("stripe", id)
+
+    assert {:ok,
+            %MishkaPay.SubscriptionSchedule{
+              id: from_id,
+              status: :active,
+              subscription_id: ^subscription,
+              reference: "plan-from-" <> _,
+              phases: [%{items: [%{id: ^intro}]} | _]
+            }} =
+             MishkaPay.create_subscription_schedule(%{
+               provider: "stripe",
+               subscription_id: subscription,
+               reference: "plan-from-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^from_id, status: :canceled}} =
+             MishkaPay.cancel_subscription_schedule("stripe", from_id)
+
+    assert {:ok, %Subscription{status: :canceled}} =
+             MishkaPay.fetch_subscription("stripe", subscription)
+  end
+
+  test "a credit note is previewed, made once per reference by line, listed and voided on an open bill, then made on a paid one",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "credit-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer_id, &1)) end)
+
+    {:ok, %Invoice{id: invoice_id}} =
+      MishkaPay.create_invoice(%{
+        provider: "stripe",
+        customer_id: customer_id,
+        collection: :send_invoice,
+        reference: "credit-bill-#{run}",
+        items: [
+          %{name: "Seat", amount: %{amount: "30.00", currency: "USD"}, quantity: 2},
+          %{name: "Setup", amount: %{amount: "50.00", currency: "USD"}}
+        ]
+      })
+
+    {:ok, %Invoice{status: :open, lines: lines}} =
+      MishkaPay.finalize_invoice("stripe", invoice_id)
+
+    %{id: "il_" <> _ = seat_line} = Enum.find(lines, &(&1.description == "Seat"))
+
+    note = %{
+      provider: "stripe",
+      invoice_id: invoice_id,
+      lines: [%{invoice_line_id: seat_line, quantity: 1}],
+      reason: :order_change,
+      memo: "One seat less",
+      reference: "credit-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.CreditNote{amount: preview_amount, type: :pre_payment}} =
+             MishkaPay.preview_credit_note(note)
+
+    assert Money.equal?(preview_amount, Money.new(:USD, "30.00"))
+
+    assert {:ok, %MishkaPay.CreditNote{id: "cn_" <> _ = id, status: :issued} = made} =
+             MishkaPay.create_credit_note(note)
+
+    assert {made.amount, made.reference, made.memo} ==
+             {preview_amount, "credit-#{run}", "One seat less"}
+
+    assert {:ok, %MishkaPay.CreditNote{id: ^id}} = MishkaPay.create_credit_note(note)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote{id: ^id}]}} =
+             MishkaPay.list_credit_notes("stripe", nil, invoice_id: invoice_id)
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNoteLine{} = line]}} =
+             MishkaPay.list_credit_note_lines("stripe", id)
+
+    assert {line.type, line.invoice_line_id, line.quantity, line.amount} ==
+             {:invoice_line, seat_line, 1, Money.new(:USD, "30.00")}
+
+    assert {:ok, %MishkaPay.CreditNote{id: ^id, status: :void, voided_at: %DateTime{}}} =
+             MishkaPay.void_credit_note("stripe", id)
+
+    assert {:ok, %Invoice{status: :paid}} =
+             MishkaPay.pay_invoice("stripe", invoice_id, nil, out_of_band: true)
+
+    ten = %{amount: "10.00", currency: "USD"}
+
+    assert {:ok, %MishkaPay.CreditNote{type: :post_payment, out_of_band_amount: given} = paid} =
+             MishkaPay.create_credit_note(%{
+               provider: "stripe",
+               invoice_id: invoice_id,
+               amount: ten,
+               out_of_band_amount: ten,
+               reason: :product_unsatisfactory,
+               reference: "credit-paid-#{run}"
+             })
+
+    assert {paid.status, given} == {:issued, Money.new(:USD, "10.00")}
   end
 
   test "a site's webhook endpoint is made with every handled event, then checked and deleted" do
@@ -1257,6 +1653,81 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.deactivate_meter("stripe", meter_id)
   end
 
+  test "a meter is read and renamed, a wrong report is taken back once, and the meter is turned off and on again",
+       %{key: key} do
+    run = run_id()
+    event = "mishka_pay_fix_#{run}"
+
+    {:ok, %MishkaPay.Meter{id: meter_id}} =
+      MishkaPay.create_meter(%{provider: "stripe", name: "Fix #{run}", event_name: event})
+
+    on_exit(fn ->
+      cleanup(key, fn keys ->
+        case Stripe.deactivate_meter(meter_id, keys) do
+          {:error, %Errors.Rejected{}} -> {:ok, :inactive}
+          answer -> answer
+        end
+      end)
+    end)
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "fix-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer_id, &1)) end)
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, name: "Fix " <> _, event_name: ^event}} =
+             MishkaPay.fetch_meter("stripe", meter_id)
+
+    renamed = "Renamed #{run}"
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, name: ^renamed, event_name: ^event}} =
+             MishkaPay.update_meter(%{provider: "stripe", id: meter_id, name: renamed})
+
+    {:ok, %MishkaPay.Usage{id: usage_id}} =
+      MishkaPay.report_usage(%{
+        provider: "stripe",
+        event_name: event,
+        customer_id: customer_id,
+        value: 5,
+        reference: "wrong-#{run}"
+      })
+
+    cancel = %{provider: "stripe", event_name: event, usage_id: usage_id}
+
+    assert {:ok, %MishkaPay.UsageCancellation{status: status, usage_id: ^usage_id}} =
+             MishkaPay.cancel_usage(cancel)
+
+    assert status in [:pending, :complete]
+
+    assert {:ok, %MishkaPay.UsageCancellation{usage_id: ^usage_id}} =
+             MishkaPay.cancel_usage(cancel)
+
+    assert {:ok, %MishkaPay.Meter{status: :inactive}} =
+             MishkaPay.deactivate_meter("stripe", meter_id)
+
+    assert {:ok, %MishkaPay.Meter{id: ^meter_id, status: :active}} =
+             MishkaPay.reactivate_meter("stripe", meter_id)
+  end
+
+  # Stripe's API makes no early fraud warning or review on demand: a warning comes from a card
+  # issuer, and a review only from a Radar rule the account must have. What can be checked live is
+  # that both lists are read, and that a warning or review that is not there is refused plainly.
+  test "early fraud warnings and open reviews are listed, and one that does not exist is a plain rejection" do
+    assert {:ok, %MishkaPay.Page{items: warnings}} =
+             MishkaPay.list_fraud_warnings("stripe", nil, limit: 5)
+
+    assert Enum.all?(warnings, &match?(%MishkaPay.FraudWarning{id: "issfr_" <> _}, &1))
+
+    assert {:ok, %MishkaPay.Page{items: reviews}} = MishkaPay.list_fraud_reviews("stripe", nil)
+    assert Enum.all?(reviews, &match?(%MishkaPay.FraudReview{id: "prv_" <> _, open: true}, &1))
+
+    assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
+             MishkaPay.fetch_fraud_warning("stripe", "issfr_doesnotexist")
+
+    assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
+             MishkaPay.approve_fraud_review("stripe", "prv_doesnotexist")
+  end
+
   test "a feature is attached to a product, and a customer who bought nothing has no entitlements",
        %{key: key} do
     run = run_id()
@@ -1374,5 +1845,420 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
   # Stripe and PayPal keep codes, lookup keys and idempotency keys between runs; a counter alone
   # starts again each run, so the run's time makes every name new.
+  test "a raw call makes a customer once per reference in another API version, reads it expanded and deletes it",
+       %{key: key} do
+    run = run_id()
+
+    made = %{
+      provider: "stripe",
+      method: :post,
+      path: "/v1/customers",
+      params: %{"email" => "raw-#{run}@example.com", "metadata" => %{"run" => run}},
+      reference: "raw-#{run}",
+      options: %{api_version: "2025-03-31.basil", expand: ["invoice_settings"]}
+    }
+
+    assert {:ok, %{"object" => "customer", "id" => "cus_" <> _ = id} = customer} =
+             MishkaPay.request(made)
+
+    on_exit(fn ->
+      cleanup(key, fn keys ->
+        case Stripe.delete_customer(id, keys) do
+          {:error, %Errors.Rejected{code: "resource_missing"}} -> {:ok, :gone}
+          answer -> with :ok <- answer, do: {:ok, :deleted}
+        end
+      end)
+    end)
+
+    assert customer["metadata"] == %{"run" => run}
+    assert {:ok, %{"id" => ^id}} = MishkaPay.request(made)
+
+    assert {:ok, %{"id" => ^id, "test_clock" => nil}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               path: "/v1/customers/#{id}",
+               options: %{expand: ["test_clock"]}
+             })
+
+    assert {:ok, %{"object" => "balance"}} =
+             MishkaPay.request(%{provider: "stripe", path: "/v1/balance"})
+
+    assert {:ok, %{"id" => ^id, "deleted" => true}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               method: :delete,
+               path: "/v1/customers/#{id}"
+             })
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :path}]}} =
+             MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
+  end
+
+  # Mastercard: this sandbox's Radar block list holds the test Visa card (a refund as fraudulent
+  # puts a card there), so a Visa charge is blocked.
+  test "a payment intent is made once, changed, confirmed on the server with a test card and read as a payment; a held one is let go",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "intent-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    intent = %{
+      provider: "stripe",
+      amount: %{amount: "12.00", currency: "USD"},
+      customer_id: customer,
+      setup_future_usage: :off_session,
+      reference: "intent-#{run}",
+      owner: "user-#{run}"
+    }
+
+    assert {:ok,
+            %MishkaPay.PaymentIntent{
+              id: "pi_" <> _ = id,
+              status: :requires_payment_method,
+              client_secret: "pi_" <> _
+            }} = MishkaPay.create_payment_intent(intent)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^id}} = MishkaPay.create_payment_intent(intent)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^id, amount: amount}} =
+             MishkaPay.update_payment_intent(%{
+               provider: "stripe",
+               id: id,
+               amount: %{amount: "15.00", currency: "USD"}
+             })
+
+    assert Money.equal?(amount, Money.new(:USD, "15.00"))
+
+    assert {:ok,
+            %MishkaPay.PaymentIntent{id: ^id, status: :succeeded, payment_method_id: "pm_" <> _}} =
+             MishkaPay.confirm_payment_intent("stripe", id, nil,
+               payment_method_id: "pm_card_mastercard",
+               return_url: "https://shop.test/paid"
+             )
+
+    reference = "intent-#{run}"
+    owner = "user-#{run}"
+
+    assert {:ok, %Payment{id: ^id, status: :paid, reference: ^reference, owner: ^owner}} =
+             MishkaPay.fetch_payment("stripe", id)
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: held, capture: :manual}} =
+             MishkaPay.create_payment_intent(%{
+               provider: "stripe",
+               amount: %{amount: "5.00", currency: "USD"},
+               capture: :manual,
+               payment_method_id: "pm_card_mastercard"
+             })
+
+    assert {:ok, %MishkaPay.PaymentIntent{status: :requires_capture}} =
+             MishkaPay.confirm_payment_intent("stripe", held, nil,
+               return_url: "https://shop.test/paid"
+             )
+
+    assert {:ok, %MishkaPay.PaymentIntent{id: ^held, status: :canceled}} =
+             MishkaPay.cancel_payment_intent("stripe", held)
+  end
+
+  test "a setup intent saves a test card on a customer without a charge; another is canceled",
+       %{key: key} do
+    run = run_id()
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "setup-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    assert {:ok,
+            %MishkaPay.SetupIntent{
+              id: "seti_" <> _ = id,
+              status: :requires_payment_method,
+              client_secret: "seti_" <> _,
+              reference: "card-" <> _
+            }} =
+             MishkaPay.create_setup_intent(%{
+               provider: "stripe",
+               customer_id: customer,
+               usage: :off_session,
+               reference: "card-#{run}"
+             })
+
+    assert {:ok, %MishkaPay.SetupIntent{id: ^id, status: :succeeded, payment_method_id: method}} =
+             MishkaPay.confirm_setup_intent("stripe", id, nil,
+               payment_method_id: "pm_card_mastercard",
+               return_url: "https://shop.test/saved"
+             )
+
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: ^method}]}} =
+             MishkaPay.list_payment_methods("stripe", nil, customer_id: customer)
+
+    assert {:ok, %MishkaPay.SetupIntent{id: other}} =
+             MishkaPay.create_setup_intent(%{provider: "stripe", customer_id: customer})
+
+    assert {:ok, %MishkaPay.SetupIntent{id: ^other, status: :canceled}} =
+             MishkaPay.cancel_setup_intent("stripe", other)
+  end
+
+  test "a tax rate is made once, put on a checkout's line and a pending charge, and archived; a registration is added and ended; the settings are read and set as they were",
+       %{key: key} do
+    run = run_id()
+
+    rate = %{
+      provider: "stripe",
+      display_name: "Live VAT",
+      percentage: "19",
+      inclusive: false,
+      country: "DE",
+      jurisdiction: "DE",
+      tax_type: "vat",
+      reference: "rate-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.TaxRate{id: "txr_" <> _ = id, active: true, inclusive: false} = made} =
+             MishkaPay.create_tax_rate(rate)
+
+    on_exit(fn ->
+      cleanup(
+        key,
+        &Stripe.update_tax_rate(%MishkaPay.TaxRate{provider: "stripe", id: id, active: false}, &1)
+      )
+    end)
+
+    assert Decimal.equal?(made.percentage, 19)
+
+    assert {:ok, %MishkaPay.TaxRate{id: ^id, reference: "rate-" <> _}} =
+             MishkaPay.create_tax_rate(rate)
+
+    assert {:ok, %MishkaPay.TaxRate{id: ^id, description: "Made by a live test"}} =
+             MishkaPay.update_tax_rate(%{
+               provider: "stripe",
+               id: id,
+               description: "Made by a live test"
+             })
+
+    assert {:ok, %Checkout{status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [
+                 %{name: "Ebook", amount: %{amount: "10", currency: "EUR"}, tax_rate_ids: [id]}
+               ],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false,
+               automatic_tax: false,
+               reference: "rated-#{run}"
+             })
+
+    {:ok, %MishkaPay.Customer{id: customer}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "rated-#{run}@example.com"})
+
+    on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
+
+    assert {:ok, %MishkaPay.InvoiceItem{tax_rate_ids: [^id]}} =
+             MishkaPay.create_invoice_item(%{
+               provider: "stripe",
+               customer_id: customer,
+               name: "Setup",
+               amount: %{amount: "20", currency: "EUR"},
+               tax_rate_ids: [id]
+             })
+
+    assert {:ok, %MishkaPay.TaxRate{id: ^id, active: false}} =
+             MishkaPay.update_tax_rate(%{provider: "stripe", id: id, active: false})
+
+    assert {:ok, %MishkaPay.Page{items: archived}} =
+             MishkaPay.list_tax_rates("stripe", nil, active: false, limit: 100)
+
+    assert Enum.any?(archived, &(&1.id == id))
+
+    # Stripe takes one registration in a country at a time and ends one only after it started, so
+    # this run's starts when an earlier run's ends (now, when none still runs) and ends a minute
+    # after it starts, always ahead of the request that sets it.
+    starts = earlier_end("IS")
+
+    assert {:ok,
+            %MishkaPay.TaxRegistration{
+              id: "taxreg_" <> _ = registration,
+              status: status,
+              active_from: %DateTime{} = from
+            }} =
+             MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "IS",
+               type: "standard",
+               active_from: starts
+             })
+
+    assert status == ((starts && :scheduled) || :active)
+    on_exit(fn -> cleanup(key, &end_registration(registration, &1)) end)
+    ends = from |> DateTime.add(60) |> DateTime.truncate(:second)
+
+    assert {:ok,
+            %MishkaPay.TaxRegistration{
+              id: ^registration,
+              country: "IS",
+              type: "standard",
+              expires_at: ^ends
+            }} = MishkaPay.expire_tax_registration("stripe", registration, nil, at: ends)
+
+    assert {:ok, %MishkaPay.Page{items: registrations}} =
+             MishkaPay.list_tax_registrations("stripe", nil, status: :all, limit: 100)
+
+    assert Enum.any?(registrations, &(&1.id == registration))
+
+    assert {:ok, %MishkaPay.TaxSettings{status: status} = settings} =
+             MishkaPay.fetch_tax_settings("stripe")
+
+    assert status in [:active, :pending]
+
+    assert {:ok, %MishkaPay.TaxSettings{status: ^status}} =
+             MishkaPay.update_tax_settings(%{
+               provider: "stripe",
+               tax_code: settings.tax_code,
+               tax_behavior: settings.tax_behavior
+             })
+  end
+
+  # When the last registration an earlier run left in `country` ends, if it still runs or waits.
+  defp earlier_end(country) do
+    {:ok, %MishkaPay.Page{items: registrations}} =
+      MishkaPay.list_tax_registrations("stripe", nil, status: :all, limit: 100)
+
+    registrations
+    |> Enum.filter(&(&1.country == country and &1.status in [:active, :scheduled]))
+    |> Enum.map(& &1.expires_at)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  # A registration the test left without an end is ended now; one with its end set keeps it.
+  defp end_registration(registration, keys) do
+    with {:ok, %MishkaPay.Page{items: active}} <-
+           Stripe.list_tax_registrations([status: :active, limit: 100], keys) do
+      case Enum.find(active, &(&1.id == registration)) do
+        %{expires_at: nil} -> Stripe.expire_tax_registration(registration, nil, keys)
+        _ended_or_ending -> {:ok, :ending}
+      end
+    end
+  end
+
+  # The account this key reaches is checked by Stripe, not by Mishka Pay: a site's keys that name
+  # an account the platform does not have are refused plainly, and the key never shows.
+  test "a site's keys naming a connected account the platform does not have are a plain rejection",
+       %{key: key} do
+    MishkaPay.Test.put_keys("stripe", %{secret_key: key, account_id: "acct_1doesnotexist0"}, "x")
+
+    assert {:error, %Errors.Rejected{code: "account_invalid"} = error} =
+             MishkaPay.fetch_balance("stripe", "x")
+
+    assert Exception.message(error) =~ "connected account"
+    refute Exception.message(error) =~ "sk_test"
+  end
+
+  # Stripe makes connected accounts only for a platform that signed up for Connect in its
+  # Dashboard; a sandbox that has not is told so plainly, and that is all this test can check there.
+  test "an express account is made once per reference, read, changed, listed and onboarded by link" do
+    run = run_id()
+
+    attrs = %{
+      provider: "stripe",
+      type: :express,
+      country: "US",
+      email: "seller-#{run}@example.com",
+      capabilities: ["card_payments", "transfers"],
+      reference: "site-#{run}"
+    }
+
+    assert {:ok, %MishkaPay.Page{items: listed}} =
+             MishkaPay.list_connected_accounts("stripe", nil, limit: 5)
+
+    assert Enum.all?(listed, &match?(%MishkaPay.ConnectedAccount{id: "acct_" <> _}, &1))
+
+    case MishkaPay.create_connected_account(attrs) do
+      {:ok, %MishkaPay.ConnectedAccount{id: "acct_" <> _ = id, type: :express} = account} ->
+        with_account(id, fn -> onboarded_by_link(account, attrs, run) end)
+
+      {:error, %Errors.Rejected{code: "connect_not_set_up"} = error} ->
+        assert Exception.message(error) =~ "signed up for Connect"
+    end
+  end
+
+  # Money can reach only a connected account that finished onboarding, which a test cannot do on
+  # its own; what runs live is reading the lists, and that an account or object that is not there
+  # is refused plainly, for a transfer and for a checkout made for a seller.
+  test "transfers, payouts and application fees are listed, and money for a seller that is not there is refused" do
+    run = run_id()
+
+    for {list, item} <- [
+          {MishkaPay.list_transfers("stripe", nil, limit: 5), MishkaPay.Transfer},
+          {MishkaPay.list_payouts("stripe", nil, limit: 5), MishkaPay.Payout},
+          {MishkaPay.list_application_fees("stripe", nil, limit: 5), MishkaPay.ApplicationFee}
+        ] do
+      assert {:ok, %MishkaPay.Page{items: items}} = list
+      assert Enum.all?(items, &is_struct(&1, item))
+    end
+
+    for missing <- [
+          MishkaPay.fetch_transfer("stripe", "tr_doesnotexist"),
+          MishkaPay.fetch_payout("stripe", "po_doesnotexist"),
+          MishkaPay.fetch_application_fee("stripe", "fee_doesnotexist"),
+          MishkaPay.create_transfer(%{
+            provider: "stripe",
+            amount: %{amount: "1.00", currency: "USD"},
+            destination: "acct_1doesnotexist0",
+            reference: "transfer-#{run}"
+          })
+        ] do
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} = missing
+    end
+
+    assert {:error, %Errors.Rejected{}} =
+             MishkaPay.checkout(%{
+               provider: "stripe",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               success_url: "https://shop.test/thanks",
+               cancel_url: "https://shop.test/cart",
+               merchant_of_record: false,
+               destination: "acct_1doesnotexist0",
+               application_fee: %{amount: "2.00", currency: "USD"},
+               reference: "seller-#{run}"
+             })
+  end
+
+  # A test account is deleted when the test is done with it, whatever happened.
+  defp with_account(id, fun) do
+    fun.()
+  after
+    MishkaPay.request(%{provider: "stripe", method: :delete, path: "/v1/accounts/#{id}"})
+  end
+
+  defp onboarded_by_link(%{id: id} = account, attrs, run) do
+    assert account.reference == "site-#{run}"
+    assert account.charges_enabled == false
+    assert {:ok, %{id: ^id}} = MishkaPay.create_connected_account(attrs)
+
+    name = "Shop #{run}"
+
+    assert {:ok, %MishkaPay.ConnectedAccount{id: ^id, business_name: ^name}} =
+             MishkaPay.update_connected_account(%{
+               provider: "stripe",
+               id: id,
+               business_name: name
+             })
+
+    assert {:ok, %MishkaPay.AccountLink{url: "https://connect.stripe.com/" <> _}} =
+             MishkaPay.account_link(%{
+               provider: "stripe",
+               account_id: id,
+               refresh_url: "https://shop.test/connect/again",
+               return_url: "https://shop.test/connect/done"
+             })
+
+    # A login link needs an account that finished onboarding.
+    assert {:error, %Errors.Rejected{}} = MishkaPay.login_link("stripe", id)
+  end
+
   defp run_id, do: "#{System.os_time(:millisecond)}#{System.unique_integer([:positive])}"
 end

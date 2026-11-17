@@ -1,10 +1,11 @@
 defmodule ShopWeb.UsageComponent do
   @moduledoc """
   Usage billing, read live from Stripe: make a meter (`MishkaPay.create_meter/1`), list them
-  (`list_meters/3`) and turn one off (`deactivate_meter/3`); report what a customer used
-  (`report_usage/1`, with a reference so it never counts twice) and read what a meter counted for
-  them (`usage_summary/6`); and a price that bills a meter's count each period (`create_price/1`
-  with `meter_id` and an interval).
+  (`list_meters/3`), turn one off (`deactivate_meter/3`) and on again (`reactivate_meter/3`);
+  report what a customer used (`report_usage/1`, with a reference so it never counts twice), take
+  a report sent by mistake back (`cancel_usage/1`) and read what a meter counted for them
+  (`usage_summary/6`); and a price that bills a meter's count each period (`create_price/1` with
+  `meter_id` and an interval).
   """
 
   use ShopWeb, :live_component
@@ -13,15 +14,28 @@ defmodule ShopWeb.UsageComponent do
 
   @windows %{"hour" => 3600, "day" => 86_400, "month" => 30 * 86_400}
 
+  # What the forms keep between re-renders: the selects of the meter, summary and price forms
+  # (their other fields are function components LiveView leaves alone while their attributes do
+  # not change), and all the report form's fields, so a refused report keeps what was typed.
+  @meter_form %{"name" => "", "event_name" => "", "aggregation" => "sum"}
+  @summary_form %{"window" => "hour"}
+  @price_form %{"currency" => "USD", "interval" => "month"}
+  @report_form %{"event_name" => "", "customer_id" => "", "value" => "1", "reference" => ""}
+
   @impl true
   def mount(socket) do
     {:ok,
      assign(socket,
+       meter_form: @meter_form,
+       summary_form: @summary_form,
+       price_form: @price_form,
+       report_form: %{@report_form | "reference" => reference()},
+       report_error: nil,
        meters: nil,
        reported: nil,
+       cancelled: nil,
        summary: nil,
        price: nil,
-       reference: reference(),
        notice: nil,
        error: nil
      )}
@@ -31,7 +45,14 @@ defmodule ShopWeb.UsageComponent do
   def update(assigns, socket), do: {:ok, assign(socket, tenant: assigns.tenant)}
 
   @impl true
+  def handle_event("draft_report", params, socket),
+    do: {:noreply, socket |> keep("report", params) |> assign(report_error: nil)}
+
+  def handle_event("draft_" <> form, params, socket), do: {:noreply, keep(socket, form, params)}
+
   def handle_event("create_meter", params, socket) do
+    socket = keep(socket, "meter", params)
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -52,12 +73,9 @@ defmodule ShopWeb.UsageComponent do
   def handle_event("deactivate", %{"id" => id}, socket) do
     case MishkaPay.deactivate_meter("stripe", id, socket.assigns.tenant) do
       {:ok, meter} ->
-        # Stripe's list can lag a moment behind: the row takes the meter Stripe answered.
         {:noreply,
          socket
-         |> update(:meters, fn meters ->
-           Enum.map(meters || [], &if(&1.id == meter.id, do: meter, else: &1))
-         end)
+         |> put_meter(meter)
          |> done("Meter #{meter.id} is off: it takes no more usage.")}
 
       {:error, error} ->
@@ -65,7 +83,44 @@ defmodule ShopWeb.UsageComponent do
     end
   end
 
+  def handle_event("reactivate", %{"id" => id}, socket) do
+    case MishkaPay.reactivate_meter("stripe", id, socket.assigns.tenant) do
+      {:ok, meter} ->
+        {:noreply,
+         socket
+         |> put_meter(meter)
+         |> done("Meter #{meter.id} is on again: it takes usage.")}
+
+      {:error, error} ->
+        {:noreply, failed(socket, error)}
+    end
+  end
+
+  def handle_event("cancel_usage", _params, %{assigns: %{reported: %MishkaPay.Usage{}}} = socket) do
+    %{reported: usage, tenant: tenant} = socket.assigns
+
+    attrs = %{
+      provider: "stripe",
+      tenant: tenant,
+      event_name: usage.event_name,
+      usage_id: usage.id
+    }
+
+    case MishkaPay.cancel_usage(attrs) do
+      {:ok, cancel} ->
+        {:noreply,
+         socket
+         |> assign(cancelled: cancel)
+         |> done("Report #{cancel.usage_id} taken back (#{cancel.status}): it no longer counts.")}
+
+      {:error, error} ->
+        {:noreply, failed(socket, error)}
+    end
+  end
+
   def handle_event("report", params, socket) do
+    socket = keep(socket, "report", params)
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -79,15 +134,17 @@ defmodule ShopWeb.UsageComponent do
       {:ok, usage} ->
         {:noreply,
          socket
-         |> assign(reported: usage, reference: reference())
+         |> assign(reported: usage, cancelled: nil, report_error: nil)
+         |> update(:report_form, &%{&1 | "reference" => reference()})
          |> done("Usage reported. Stripe counts it within a few minutes.")}
 
       {:error, error} ->
-        {:noreply, failed(socket, error)}
+        {:noreply, assign(socket, report_error: MishkaPay.Ash.message(error))}
     end
   end
 
   def handle_event("summary", params, socket) do
+    socket = keep(socket, "summary", params)
     to = DateTime.utc_now()
     from = DateTime.add(to, -Map.get(@windows, params["window"], 3600), :second)
     %{tenant: tenant} = socket.assigns
@@ -109,6 +166,8 @@ defmodule ShopWeb.UsageComponent do
   end
 
   def handle_event("metered_price", params, socket) do
+    socket = keep(socket, "price", params)
+
     attrs = %{
       provider: "stripe",
       tenant: socket.assigns.tenant,
@@ -125,6 +184,25 @@ defmodule ShopWeb.UsageComponent do
       {:error, error} ->
         {:noreply, socket |> assign(price: nil) |> failed(error)}
     end
+  end
+
+  defp keep(socket, "meter", params), do: assign(socket, meter_form: kept(@meter_form, params))
+
+  defp keep(socket, "summary", params),
+    do: assign(socket, summary_form: kept(@summary_form, params))
+
+  defp keep(socket, "price", params), do: assign(socket, price_form: kept(@price_form, params))
+
+  defp keep(socket, "report", params),
+    do: assign(socket, report_form: kept(@report_form, params))
+
+  defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
+
+  # Stripe's list can lag a moment behind: the row takes the meter Stripe answered.
+  defp put_meter(socket, meter) do
+    update(socket, :meters, fn meters ->
+      Enum.map(meters || [], &if(&1.id == meter.id, do: meter, else: &1))
+    end)
   end
 
   defp list_meters(socket) do
@@ -154,7 +232,7 @@ defmodule ShopWeb.UsageComponent do
         A meter counts what customers use; a price on it bills that count each period.
       </p>
       <.hint>
-        MishkaPay.create_meter/1, list_meters/3, report_usage/1, usage_summary/6, deactivate_meter/3
+        MishkaPay.create_meter/1, list_meters/3, report_usage/1, cancel_usage/1, usage_summary/6, deactivate_meter/3, reactivate_meter/3
       </.hint>
 
       <div :if={@notice} role="status" class="alert alert-success py-2" data-testid="usage-notice">
@@ -166,6 +244,7 @@ defmodule ShopWeb.UsageComponent do
 
       <form
         id="meter-form"
+        phx-change="draft_meter"
         phx-submit="create_meter"
         phx-target={@myself}
         class="card bg-base-200"
@@ -178,6 +257,7 @@ defmodule ShopWeb.UsageComponent do
               <span class="fieldset-legend">Name</span>
               <input
                 name="name"
+                value={@meter_form["name"]}
                 placeholder="API calls"
                 class="input input-sm"
                 data-testid="meter-name"
@@ -187,6 +267,7 @@ defmodule ShopWeb.UsageComponent do
               <span class="fieldset-legend">Event name</span>
               <input
                 name="event_name"
+                value={@meter_form["event_name"]}
                 placeholder="api_call"
                 class="input input-sm"
                 data-testid="meter-event"
@@ -195,9 +276,19 @@ defmodule ShopWeb.UsageComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Adds up as</span>
               <select name="aggregation" class="select select-sm" data-testid="meter-aggregation">
-                <option value="sum">Sum of values</option>
-                <option value="count">Count of reports</option>
-                <option value="last">Last value</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"sum", "Sum of values"},
+                      {"count", "Count of reports"},
+                      {"last", "Last value"}
+                    ]
+                  }
+                  value={value}
+                  selected={@meter_form["aggregation"] == value}
+                >
+                  {label}
+                </option>
               </select>
             </label>
           </div>
@@ -260,6 +351,16 @@ defmodule ShopWeb.UsageComponent do
                 >
                   Turn off
                 </button>
+                <button
+                  :if={meter.status == :inactive}
+                  class="btn btn-xs btn-outline"
+                  phx-click="reactivate"
+                  phx-value-id={meter.id}
+                  phx-target={@myself}
+                  data-testid="meter-reactivate"
+                >
+                  Turn on
+                </button>
               </td>
             </tr>
           </tbody>
@@ -269,6 +370,7 @@ defmodule ShopWeb.UsageComponent do
       <div class="grid gap-4 lg:grid-cols-3">
         <form
           id="usage-report-form"
+          phx-change="draft_report"
           phx-submit="report"
           phx-target={@myself}
           class="card bg-base-200"
@@ -276,20 +378,34 @@ defmodule ShopWeb.UsageComponent do
         >
           <div class="card-body gap-2">
             <h3 class="font-medium">Report usage</h3>
-            <.meter_events meters={@meters} />
+            <.meter_events meters={@meters} value={@report_form["event_name"]} />
             <.input_field
               name="customer_id"
               label="Customer id"
+              value={@report_form["customer_id"]}
               placeholder="cus_..."
               testid="usage-customer"
             />
-            <.input_field name="value" label="How much" value="1" testid="usage-value" />
+            <.input_field
+              name="value"
+              label="How much"
+              value={@report_form["value"]}
+              testid="usage-value"
+            />
             <.input_field
               name="reference"
               label="Reference (counts once)"
-              value={@reference}
+              value={@report_form["reference"]}
               testid="usage-reference"
             />
+            <p
+              :if={@report_error}
+              role="alert"
+              class="alert alert-error py-2 text-sm"
+              data-testid="usage-report-error"
+            >
+              {@report_error}
+            </p>
             <div>
               <button
                 class="btn btn-sm btn-primary"
@@ -302,11 +418,31 @@ defmodule ShopWeb.UsageComponent do
             <p :if={@reported} class="text-sm" data-testid="usage-reported">
               Reported {to_string(@reported.value)} for {@reported.customer_id} as <code>{@reported.id}</code>.
             </p>
+            <div :if={@reported && !@cancelled}>
+              <button
+                type="button"
+                class="btn btn-xs btn-outline btn-warning"
+                phx-click="cancel_usage"
+                phx-target={@myself}
+                phx-disable-with="Asking Stripe..."
+                data-confirm="Take this report back? It will not be counted."
+                data-testid="usage-cancel"
+              >
+                Take back this report
+              </button>
+            </div>
+            <p :if={@cancelled} class="text-sm" data-testid="usage-cancelled">
+              Taken back: <code>{@cancelled.usage_id}</code>
+              <span class="badge badge-sm" data-testid="usage-cancel-status">
+                {@cancelled.status}
+              </span>
+            </p>
           </div>
         </form>
 
         <form
           id="usage-summary-form"
+          phx-change="draft_summary"
           phx-submit="summary"
           phx-target={@myself}
           class="card bg-base-200"
@@ -324,9 +460,19 @@ defmodule ShopWeb.UsageComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Since</span>
               <select name="window" class="select select-sm" data-testid="summary-window">
-                <option value="hour">One hour ago</option>
-                <option value="day">One day ago</option>
-                <option value="month">30 days ago</option>
+                <option
+                  :for={
+                    {value, label} <- [
+                      {"hour", "One hour ago"},
+                      {"day", "One day ago"},
+                      {"month", "30 days ago"}
+                    ]
+                  }
+                  value={value}
+                  selected={@summary_form["window"] == value}
+                >
+                  {label}
+                </option>
               </select>
             </label>
             <div>
@@ -349,6 +495,7 @@ defmodule ShopWeb.UsageComponent do
 
         <form
           id="metered-price-form"
+          phx-change="draft_price"
           phx-submit="metered_price"
           phx-target={@myself}
           class="card bg-base-200"
@@ -368,15 +515,25 @@ defmodule ShopWeb.UsageComponent do
               <label class="fieldset">
                 <span class="fieldset-legend">Currency</span>
                 <select name="currency" class="select select-sm" data-testid="metered-currency">
-                  <option value="USD">USD</option>
-                  <option value="EUR">EUR</option>
+                  <option
+                    :for={currency <- ~w(USD EUR)}
+                    value={currency}
+                    selected={@price_form["currency"] == currency}
+                  >
+                    {currency}
+                  </option>
                 </select>
               </label>
               <label class="fieldset">
                 <span class="fieldset-legend">Billed every</span>
                 <select name="interval" class="select select-sm" data-testid="metered-interval">
-                  <option value="month">month</option>
-                  <option value="year">year</option>
+                  <option
+                    :for={interval <- ~w(month year)}
+                    value={interval}
+                    selected={@price_form["interval"] == interval}
+                  >
+                    {interval}
+                  </option>
                 </select>
               </label>
             </div>
@@ -400,6 +557,7 @@ defmodule ShopWeb.UsageComponent do
   end
 
   attr :meters, :list, default: nil
+  attr :value, :string, default: nil
 
   defp meter_events(assigns) do
     ~H"""
@@ -408,6 +566,7 @@ defmodule ShopWeb.UsageComponent do
       <input
         name="event_name"
         list="usage-event-names"
+        value={@value}
         placeholder="api_call"
         class="input input-sm"
         data-testid="usage-event"

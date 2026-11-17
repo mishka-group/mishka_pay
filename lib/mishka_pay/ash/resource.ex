@@ -227,6 +227,10 @@ if Code.ensure_loaded?(Ash) do
         customer the provider deleted keeps its row, with `:deleted_at` set.
       * `:edit` changes `:email`, `:name`, `:phone` or `:metadata` at the provider
         (`MishkaPay.update_customer/1`).
+      * `:remove` deletes the customer at the provider for good (`MishkaPay.delete_customer/3`),
+        as a person's erase request asks, and keeps the row with `:deleted_at` set. A host that
+        must erase its own copy too destroys the row after. A `customer.deleted` webhook marks
+        the row the same way.
       * `:portal` (generic) takes the row's `:id` and a `:return_url` (and the provider's
         `:configuration`) and answers a `MishkaPay.PortalSession`: redirect the buyer to its
         `:url`, where they manage their cards, invoices and subscriptions.

@@ -100,6 +100,11 @@ defmodule MishkaPay.Providers.PayPalTest do
                  }
                ]
              }, "checkout with a tax behavior"},
+            {%{
+               items: [
+                 %{name: "Ebook", amount: %{amount: "10", currency: "USD"}, tax_rate_ids: ["T1"]}
+               ]
+             }, "checkout with tax rates"},
             {%{items: [%{id: "price_1"}]}, "checkout by a provider price id"},
             {%{items: [%{name: "Ebook", amount: %{amount: "100", currency: "INR"}}]},
              "checkout in INR"},
@@ -148,6 +153,305 @@ defmodule MishkaPay.Providers.PayPalTest do
 
       assert {:error, %Errors.Declined{provider: "paypal", reason: "INSTRUMENT_DECLINED"}} =
                MishkaPay.fetch_payment("paypal", "ORDER2", "site-a")
+    end
+
+    test "a customer cannot be deleted at PayPal: refused before any request" do
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :customer}} =
+               MishkaPay.delete_customer("paypal", "CUSTOMER1", "site-a")
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no list of subscriptions: a list or a search is refused before any request" do
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :subscription_list}} =
+               MishkaPay.list_subscriptions("paypal", "site-a", status: :active)
+
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :subscription_list}} =
+               MishkaPay.search_subscriptions("paypal", "site-a", reference: "order-1")
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no subscription schedules: every schedule call is refused before any request" do
+      for call <- [
+            fn ->
+              MishkaPay.create_subscription_schedule(%{
+                provider: "paypal",
+                subscription_id: "I-1"
+              })
+            end,
+            fn -> MishkaPay.fetch_subscription_schedule("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.list_subscription_schedules("paypal", "site-a") end,
+            fn ->
+              MishkaPay.update_subscription_schedule(%{
+                provider: "paypal",
+                id: "S1",
+                end_behavior: :cancel
+              })
+            end,
+            fn -> MishkaPay.release_subscription_schedule("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.cancel_subscription_schedule("paypal", "S1", "site-a") end
+          ] do
+        assert {:error,
+                %Errors.Unsupported{provider: "paypal", operation: :subscription_schedule}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "a raw call reaches PayPal's API with the OAuth token, JSON and a request id from its reference" do
+      body = %{
+        "intent" => "CAPTURE",
+        "purchase_units" => [%{"amount" => %{"currency_code" => "USD", "value" => "5.00"}}],
+        "payment_source" => %{
+          "paypal" => %{"experience_context" => %{"return_url" => "https://shop.test/back"}}
+        }
+      }
+
+      call = %{
+        provider: "paypal",
+        tenant: "site-a",
+        method: :post,
+        path: "/v2/checkout/orders",
+        params: body,
+        reference: "raw-order-1"
+      }
+
+      assert {:ok, %{"id" => "ORDER" <> _ = id, "status" => "PAYER_ACTION_REQUIRED"}} =
+               MishkaPay.request(call)
+
+      {headers, sent} = paypal_request("POST", "/v2/checkout/orders")
+      assert headers["paypal-request-id"] =~ "mishka_pay-raw-"
+      assert headers["authorization"] =~ "Bearer "
+      assert sent["intent"] == "CAPTURE"
+
+      assert {:ok, %{"id" => ^id}} =
+               MishkaPay.request(%{
+                 provider: "paypal",
+                 tenant: "site-a",
+                 path: "/v2/checkout/orders/#{id}"
+               })
+
+      assert {:error, %Errors.Rejected{code: "resource_missing"}} =
+               MishkaPay.request(%{
+                 provider: "paypal",
+                 tenant: "site-a",
+                 path: "/v2/checkout/orders/NOPE"
+               })
+    end
+
+    test "PayPal has no API version or expand: a raw call with either is refused before any request" do
+      for options <- [%{api_version: "2026-01-01"}, %{expand: ["payer"]}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :options}]}} =
+                 MishkaPay.request(%{
+                   provider: "paypal",
+                   tenant: "site-a",
+                   path: "/v2/checkout/orders/X",
+                   options: options
+                 })
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no usage billing: reading, renaming, turning a meter on and cancelling usage are refused before any request" do
+      for call <- [
+            fn -> MishkaPay.fetch_meter("paypal", "M1", "site-a") end,
+            fn -> MishkaPay.update_meter(%{provider: "paypal", id: "M1", name: "Calls"}) end,
+            fn -> MishkaPay.reactivate_meter("paypal", "M1", "site-a") end,
+            fn ->
+              MishkaPay.cancel_usage(%{provider: "paypal", event_name: "api", usage_id: "u1"})
+            end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :usage}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no card form of its own: every intent call is refused before any request" do
+      for call <- [
+            fn ->
+              MishkaPay.create_payment_intent(%{
+                provider: "paypal",
+                amount: %{amount: "10", currency: "USD"}
+              })
+            end,
+            fn -> MishkaPay.fetch_payment_intent("paypal", "O1", "site-a") end,
+            fn -> MishkaPay.update_payment_intent(%{provider: "paypal", id: "O1"}) end,
+            fn -> MishkaPay.confirm_payment_intent("paypal", "O1", "site-a") end,
+            fn -> MishkaPay.cancel_payment_intent("paypal", "O1", "site-a") end,
+            fn -> MishkaPay.create_setup_intent(%{provider: "paypal"}) end,
+            fn -> MishkaPay.fetch_setup_intent("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.confirm_setup_intent("paypal", "S1", "site-a") end,
+            fn -> MishkaPay.cancel_setup_intent("paypal", "S1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :intent}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no tax rates, registrations or settings: each is refused before any request" do
+      for {call, capability} <- [
+            {fn ->
+               MishkaPay.create_tax_rate(%{
+                 provider: "paypal",
+                 display_name: "VAT",
+                 percentage: 19,
+                 inclusive: true
+               })
+             end, :tax_rate},
+            {fn -> MishkaPay.fetch_tax_rate("paypal", "T1", "site-a") end, :tax_rate},
+            {fn -> MishkaPay.update_tax_rate(%{provider: "paypal", id: "T1", active: false}) end,
+             :tax_rate},
+            {fn -> MishkaPay.list_tax_rates("paypal", "site-a") end, :tax_rate},
+            {fn ->
+               MishkaPay.create_tax_registration(%{
+                 provider: "paypal",
+                 country: "DE",
+                 type: "standard"
+               })
+             end, :tax_setup},
+            {fn -> MishkaPay.list_tax_registrations("paypal", "site-a") end, :tax_setup},
+            {fn -> MishkaPay.expire_tax_registration("paypal", "R1", "site-a") end, :tax_setup},
+            {fn -> MishkaPay.fetch_tax_settings("paypal", "site-a") end, :tax_setup},
+            {fn -> MishkaPay.update_tax_settings(%{provider: "paypal", tax_code: "t"}) end,
+             :tax_setup}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: ^capability}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no fraud reviews: every Radar call is refused before any request" do
+      for call <- [
+            fn -> MishkaPay.fetch_fraud_warning("paypal", "W1", "site-a") end,
+            fn -> MishkaPay.list_fraud_warnings("paypal", "site-a", payment_id: "O1") end,
+            fn -> MishkaPay.fetch_fraud_review("paypal", "R1", "site-a") end,
+            fn -> MishkaPay.list_fraud_reviews("paypal", "site-a") end,
+            fn -> MishkaPay.approve_fraud_review("paypal", "R1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :fraud}} = call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no connected accounts: every Connect call is refused before any request" do
+      link = %{
+        provider: "paypal",
+        tenant: "site-a",
+        account_id: "A1",
+        refresh_url: "https://shop.test/again",
+        return_url: "https://shop.test/done"
+      }
+
+      for call <- [
+            fn -> MishkaPay.create_connected_account(%{provider: "paypal", tenant: "site-a"}) end,
+            fn -> MishkaPay.fetch_connected_account("paypal", "A1", "site-a") end,
+            fn -> MishkaPay.update_connected_account(%{provider: "paypal", id: "A1"}) end,
+            fn -> MishkaPay.list_connected_accounts("paypal", "site-a") end,
+            fn -> MishkaPay.reject_connected_account("paypal", "A1", "site-a") end,
+            fn -> MishkaPay.account_link(link) end,
+            fn -> MishkaPay.login_link("paypal", "A1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :connect}} = call.()
+      end
+
+      for {call, capability} <- [
+            {fn -> MishkaPay.fetch_application_fee("paypal", "F1", "site-a") end, :connect},
+            {fn -> MishkaPay.list_application_fees("paypal", "site-a") end, :connect},
+            {fn -> MishkaPay.refund_application_fee("paypal", "F1", "site-a") end, :connect},
+            {fn ->
+               MishkaPay.create_transfer(%{
+                 provider: "paypal",
+                 amount: %{amount: "5", currency: "USD"},
+                 destination: "A1",
+                 reference: "t-1"
+               })
+             end, :transfer},
+            {fn -> MishkaPay.fetch_transfer("paypal", "T1", "site-a") end, :transfer},
+            {fn -> MishkaPay.list_transfers("paypal", "site-a") end, :transfer},
+            {fn -> MishkaPay.reverse_transfer("paypal", "T1", "site-a") end, :transfer},
+            {fn -> MishkaPay.fetch_payout("paypal", "P1", "site-a") end, :payout},
+            {fn -> MishkaPay.list_payouts("paypal", "site-a") end, :payout},
+            {fn -> MishkaPay.cancel_payout("paypal", "P1", "site-a") end, :payout}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: ^capability}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no credit notes: every credit note call is refused before any request" do
+      note = %{provider: "paypal", invoice_id: "INV2-1", amount: %{amount: "5", currency: "USD"}}
+
+      for call <- [
+            fn -> MishkaPay.create_credit_note(note) end,
+            fn -> MishkaPay.preview_credit_note(note) end,
+            fn -> MishkaPay.fetch_credit_note("paypal", "CN1", "site-a") end,
+            fn -> MishkaPay.void_credit_note("paypal", "CN1", "site-a") end,
+            fn -> MishkaPay.list_credit_notes("paypal", "site-a", invoice_id: "INV2-1") end,
+            fn -> MishkaPay.list_credit_note_lines("paypal", "CN1", "site-a") end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :credit_note}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal keeps no charges between bills: every invoice item call is refused before any request" do
+      for call <- [
+            fn ->
+              MishkaPay.create_invoice_item(%{
+                provider: "paypal",
+                customer_id: "C1",
+                price_id: "P1"
+              })
+            end,
+            fn -> MishkaPay.update_invoice_item(%{provider: "paypal", id: "I1", quantity: 2}) end,
+            fn -> MishkaPay.delete_invoice_item("paypal", "I1", "site-a") end,
+            fn -> MishkaPay.list_invoice_items("paypal", "site-a", pending: true) end
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "paypal", operation: :invoice_item}} =
+                 call.()
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "PayPal has no customer portal: its setups are refused before any request" do
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :portal}} =
+               MishkaPay.create_portal_configuration(%{provider: "paypal", name: "Teams"})
+
+      assert {:error, %Errors.Unsupported{provider: "paypal", operation: :portal}} =
+               MishkaPay.list_portal_configurations("paypal", "site-a")
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+    end
+
+    test "a decline and a refusal keep PayPal's debug id and error page, never in their words" do
+      PayPalStub.order("ORDER3", "APPROVED", declined: true)
+
+      assert {:error, %Errors.Declined{request_id: "f3a1c2b4d5e60", doc_url: doc_url} = declined} =
+               MishkaPay.fetch_payment("paypal", "ORDER3", "site-a")
+
+      assert doc_url =~ "#INSTRUMENT_DECLINED"
+
+      assert {:error, %Errors.Rejected{status: 404, request_id: "f3a1c2b4d5e60"} = missing} =
+               MishkaPay.fetch_payment("paypal", "ORDER404NOTHERE", "site-a")
+
+      for error <- [declined, missing],
+          text <- [Exception.message(error), MishkaPay.Ash.message(error)] do
+        refute text =~ "f3a1c2b4d5e60"
+        refute text =~ "developer.paypal.com"
+      end
     end
 
     test "an Order's states read as payment statuses" do

@@ -173,6 +173,7 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 | Customer | `:register` | `provider`, `tenant`, `email`, `name`, `phone`, `reference`, `metadata`; the user attribute with `belongs_to_user` |
 | Customer | `:sync` | `provider`, `customer_id`, `tenant`; a deleted customer gets `deleted_at` |
 | Customer | `:edit` (update) | `email`, `name`, `phone`, `metadata` |
+| Customer | `:remove` (update) | none; deletes it at the provider for good and sets `deleted_at` (destroy the row too to erase the host's copy) |
 | Product | `:sync`; `:add` (`provider`, `tenant`, `name`, `description`, `tax_code`, `id`, `metadata`); `:edit`; `:archive` | |
 | Price | `:sync`; `:add` (`product_id`, `amount` map, `interval`, `interval_count`, `tax_behavior`, `lookup_key`, `metadata`); `:archive` | |
 | Coupon | `:sync`; `:add` (`id`, `name`, `percent_off` or `amount_off` map, `duration`...); `:remove` (sets `deleted_at`) | |
@@ -191,7 +192,8 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 - Every resource also gets the primary `:read`; with `code_interface? true` each action is a
   function of the resource named like it (`receive_event` for the inbox's `:receive`).
 - Errors are Ash errors on their fields (`MishkaPay.Ash.to_ash_error/1`); show
-  `MishkaPay.Ash.message(error)`.
+  `MishkaPay.Ash.message(error)`. `MishkaPay.Ash.provider_error(error)` gives the provider's own
+  `Rejected` or `Declined` inside, with its `request_id` for the log and the provider's support.
 - An inbox event whose work fails stays `:pending` with `last_error` set and is tried again (10
   tries), then `:failed`. A host listener on `mishka_pay:event:process` can do its own work per
   event.

@@ -3,7 +3,8 @@ defmodule Shop.Pay.WebhookSimulator do
   Sends the shop a Stripe webhook about one payment (`pi_...`) or subscription (`sub_...`), signed the way Stripe signs, to its own
   `MishkaPay.Webhook` endpoint over HTTP. The event then goes the whole way a real one goes:
   signature check, the inbox, an Oban job, the payment sync and `mishka_pay:payment:changed`.
-  With `:bad_signature` it signs with the wrong secret, to show the endpoint refuse it.
+  With `:bad_signature` it signs with the wrong secret, to show the endpoint refuse it; with
+  `:rolled_secret`, with the secret from before a roll, which the endpoint still takes.
   """
 
   alias MishkaPay.Providers.Stripe
@@ -24,6 +25,7 @@ defmodule Shop.Pay.WebhookSimulator do
 
   @situations [
     good: %{label: "Good signature", expect: [200]},
+    rolled_secret: %{label: "Signed with the secret before a roll", expect: [200]},
     bad_signature: %{label: "Bad signature", expect: [400]},
     old_timestamp: %{label: "Too old (a replay, over 5 minutes)", expect: [400]},
     unknown_tenant: %{label: "A site with no keys", expect: [400]},
@@ -34,8 +36,16 @@ defmodule Shop.Pay.WebhookSimulator do
     twice: %{label: "The same event twice", expect: [200, 200]}
   ]
 
-  @doc "Every situation the simulator plays, with what the endpoint must answer."
-  def situations, do: @situations
+  @doc """
+  Every situation the simulator plays, with what the endpoint must answer; a rolled secret only
+  when the site still accepts one (`Shop.Pay.Keys.old_webhook_secrets/0`).
+  """
+  def situations do
+    case Shop.Pay.Keys.old_webhook_secrets() do
+      [] -> Keyword.delete(@situations, :rolled_secret)
+      _old -> @situations
+    end
+  end
 
   @doc """
   Sends a `type` event about `id` for `tenant` in `situation`, and answers the HTTP statuses the
@@ -62,10 +72,7 @@ defmodule Shop.Pay.WebhookSimulator do
         "data" => %{"object" => object(type, id), "padding" => padding(situation)}
       })
 
-    secret =
-      if situation == :bad_signature,
-        do: "whsec_not_the_right_one",
-        else: Shop.Pay.Keys.webhook_secret()
+    secret = secret(situation)
 
     request =
       request(situation, tenant, body, "t=#{time},v1=#{Stripe.signature(body, time, secret)}")
@@ -74,6 +81,10 @@ defmodule Shop.Pay.WebhookSimulator do
 
     {Enum.map(1..times, fn _try -> deliver(request) end), event_id}
   end
+
+  defp secret(:bad_signature), do: "whsec_not_the_right_one"
+  defp secret(:rolled_secret), do: List.first(Shop.Pay.Keys.old_webhook_secrets())
+  defp secret(_signed_now), do: Shop.Pay.Keys.webhook_secret()
 
   defp request(situation, tenant, body, signature) do
     provider = if situation == :unknown_provider, do: "nopay", else: "stripe"

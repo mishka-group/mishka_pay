@@ -257,6 +257,16 @@ defmodule MishkaPay.Ash.PaymentTest do
       assert MishkaPay.Ash.message(required) =~ "payment_id"
     end
 
+    test "several errors read as separate sentences" do
+      assert {:error, %MishkaPay.Errors.Invalid{errors: [_, _ | _]} = error} =
+               MishkaPay.create_tax_registration(%{provider: "acme", country: "D", type: "-"})
+
+      text = MishkaPay.Ash.message(error)
+      refute text =~ ";"
+      refute text =~ ".."
+      assert [_, _ | _] = String.split(text, ". ")
+    end
+
     test "errors reach Ash as plain words, with no stack trace" do
       declined = MishkaPay.Errors.Declined.exception(provider: "stripe", reason: "card_declined")
 

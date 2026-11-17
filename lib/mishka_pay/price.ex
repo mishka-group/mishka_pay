@@ -20,6 +20,9 @@ defmodule MishkaPay.Price do
     * `:tax_behavior`: `:exclusive` (tax is added on top, as in the US) or `:inclusive` (the
       amount already holds the tax, as in much of Europe); what a provider counting the tax
       (Stripe Tax, Managed Payments) does with the amount.
+    * `:tax_rate_ids`: on a checkout's or a bill's line, the seller's own tax rates added to it
+      (`MishkaPay.TaxRate`), instead of a provider counting the tax. A catalog price and a payment
+      link take none.
     * `:interval`, `:interval_count`: a price charged again on a schedule, for a subscription:
       every `:interval_count` (1 by default) `:day`, `:week`, `:month` or `:year`. Left out, the
       price is paid once.
@@ -63,6 +66,8 @@ defmodule MishkaPay.Price do
     field :tax_behavior, :inclusive | :exclusive,
       derives: "validate(enum=Atom[inclusive::exclusive])",
       validator: {__MODULE__, :tax_behavior}
+
+    field :tax_rate_ids, list(), validator: {MishkaPay.TaxRate, :ids}
 
     field :quantity, pos_integer(),
       default: 1,

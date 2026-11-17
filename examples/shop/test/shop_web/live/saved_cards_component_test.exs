@@ -140,6 +140,53 @@ defmodule ShopWeb.SavedCardsComponentTest do
     assert params["flow_data"]["after_completion"]["redirect"]["return_url"] =~ "portal=back"
   end
 
+  test "the portal's task and subscription stay picked while a customer's cards are listed",
+       %{conn: conn} do
+    stub_cards([@visa], "pm_visa")
+
+    Ash.Seed.seed!(Shop.Pay.Subscription, %{
+      provider: "stripe",
+      provider_id: "sub_ada",
+      tenant: "demo",
+      status: :active,
+      plan: "Pro plan",
+      customer_id: "cus_ada",
+      synced_at: DateTime.utc_now()
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    portal = "[data-testid=portal-flow-form]"
+
+    view |> form(portal, %{"flow" => "subscription_cancel"}) |> render_change()
+    view |> form(portal, %{"subscription_id" => "sub_ada"}) |> render_change()
+    view |> form("[data-testid=cards-form]", customer_id: "cus_ada") |> render_submit()
+    assert has_element?(view, "[data-testid=card-row]")
+
+    assert has_element?(
+             view,
+             "[data-testid=portal-flow] option[value=subscription_cancel][selected]"
+           )
+
+    StripeRoutes.stub(%{
+      {"POST", "/v1/billing_portal/sessions"} => %{
+        "object" => "billing_portal.session",
+        "id" => "bps_1",
+        "url" => "https://billing.stripe.com/p/session/bps_1"
+      }
+    })
+
+    assert {:error, {:redirect, _to}} =
+             view |> form(portal, %{"customer_id" => "cus_ada"}) |> render_submit()
+
+    assert_received {:stripe, "POST", "/v1/billing_portal/sessions", params}
+
+    assert %{
+             "type" => "subscription_cancel",
+             "subscription_cancel" => %{"subscription" => "sub_ada"}
+           } =
+             params["flow_data"]
+  end
+
   test "cancelling a subscription in the portal needs the subscription", %{conn: conn} do
     StripeRoutes.stub(%{})
     {:ok, view, _html} = live(conn, ~p"/")

@@ -14,8 +14,13 @@ defmodule ShopWeb.LookupsComponent do
 
   alias Shop.Pay.Subscription
 
+  @bill_form %{"subscription" => "", "price_id" => "", "quantity" => ""}
+  @search_form %{"email" => "", "name" => "", "reference" => ""}
+
   @impl true
-  def mount(socket), do: {:ok, assign(socket, found: nil, bill: nil)}
+  def mount(socket) do
+    {:ok, assign(socket, found: nil, bill: nil, bill_form: @bill_form, search_form: @search_form)}
+  end
 
   @impl true
   def update(assigns, socket) do
@@ -27,8 +32,14 @@ defmodule ShopWeb.LookupsComponent do
      )}
   end
 
+  # Both forms keep what is typed or picked: a re-render of one must not empty the other.
   @impl true
+  def handle_event("draft_search", params, socket),
+    do: {:noreply, assign(socket, search_form: kept(@search_form, params))}
+
   def handle_event("search", params, socket) do
+    socket = assign(socket, search_form: kept(@search_form, params))
+
     filters =
       for field <- ~w(email name reference)a,
           value = blank_nil(params[Atom.to_string(field)]),
@@ -47,7 +58,12 @@ defmodule ShopWeb.LookupsComponent do
     end
   end
 
+  def handle_event("draft_bill", params, socket),
+    do: {:noreply, assign(socket, bill_form: kept(@bill_form, params))}
+
   def handle_event("bill", %{"subscription" => id} = params, socket) do
+    socket = assign(socket, bill_form: kept(@bill_form, params))
+
     {action, args, title} =
       case params["do"] do
         "preview" -> {:preview_change, change_args(params), "If the change is made"}
@@ -73,24 +89,33 @@ defmodule ShopWeb.LookupsComponent do
       <.section_title icon="hero-magnifying-glass-circle" title="Find customers, preview bills" />
       <div class="grid gap-4 md:grid-cols-2">
         <div class="rounded-box bg-base-200 p-4 space-y-3">
-          <form phx-submit="search" phx-target={@myself} data-testid="customer-search-form">
+          <form
+            id="customer-search-form"
+            phx-change="draft_search"
+            phx-submit="search"
+            phx-target={@myself}
+            data-testid="customer-search-form"
+          >
             <h3 class="font-medium">Search Stripe's customers</h3>
             <.hint>MishkaPay.search_customers/3</.hint>
             <div class="grid gap-2 sm:grid-cols-3">
               <input
                 name="email"
+                value={@search_form["email"]}
                 placeholder="email"
                 class="input input-sm"
                 data-testid="customer-search-email"
               />
               <input
                 name="name"
+                value={@search_form["name"]}
                 placeholder="name"
                 class="input input-sm"
                 data-testid="customer-search-name"
               />
               <input
                 name="reference"
+                value={@search_form["reference"]}
                 placeholder="the shop's reference"
                 class="input input-sm"
                 data-testid="customer-search-reference"
@@ -128,14 +153,24 @@ defmodule ShopWeb.LookupsComponent do
         </div>
 
         <div class="rounded-box bg-base-200 p-4 space-y-3">
-          <form phx-submit="bill" phx-target={@myself} data-testid="sub-bill-form">
+          <form
+            id="sub-bill-form"
+            phx-change="draft_bill"
+            phx-submit="bill"
+            phx-target={@myself}
+            data-testid="sub-bill-form"
+          >
             <h3 class="font-medium">A subscription's bills, ahead of time</h3>
             <.hint>Shop.Pay.Subscription :upcoming_invoice and :preview_change</.hint>
             <label class="fieldset">
               <span class="fieldset-legend">Subscription</span>
               <select name="subscription" class="select select-sm" data-testid="sub-bill-subscription">
                 <option value="">Pick one</option>
-                <option :for={sub <- @subscriptions} value={sub.id}>
+                <option
+                  :for={sub <- @subscriptions}
+                  value={sub.id}
+                  selected={@bill_form["subscription"] == sub.id}
+                >
                   {sub.plan || "Subscription"} · {sub.customer_email || sub.customer_id} · {sub.provider_id}
                 </option>
               </select>
@@ -145,7 +180,11 @@ defmodule ShopWeb.LookupsComponent do
                 <span class="fieldset-legend">New plan (preview only)</span>
                 <select name="price_id" class="select select-sm" data-testid="sub-bill-plan">
                   <option value="">Keep the plan</option>
-                  <option :for={plan <- @plans} value={plan.stripe_price_id}>
+                  <option
+                    :for={plan <- @plans}
+                    value={plan.stripe_price_id}
+                    selected={@bill_form["price_id"] == plan.stripe_price_id}
+                  >
                     {plan.name} (${plan.price})
                   </option>
                 </select>
@@ -156,6 +195,7 @@ defmodule ShopWeb.LookupsComponent do
                   name="quantity"
                   type="number"
                   min="1"
+                  value={@bill_form["quantity"]}
                   class="input input-sm"
                   data-testid="sub-bill-quantity"
                 />
@@ -202,6 +242,8 @@ defmodule ShopWeb.LookupsComponent do
     </section>
     """
   end
+
+  defp kept(defaults, params), do: Map.merge(defaults, Map.take(params, Map.keys(defaults)))
 
   defp change_args(params) do
     %{price_id: blank_nil(params["price_id"]), quantity: integer(params["quantity"])}

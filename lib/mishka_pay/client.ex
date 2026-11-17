@@ -25,14 +25,22 @@ defmodule MishkaPay.Client do
       or `retry_delay` milliseconds (500 by default) doubled on each try, and never more than
       `max_wait` milliseconds (ten seconds by default). A write (`post`, `put`, `patch`, `delete`) is tried again only when the provider takes
       an idempotency key, so a payment is never made twice.
+    * **The provider's own word on a retry.** With `retry_header` set (Stripe's
+      `"stripe-should-retry"`), an answer carrying it decides: `true` tries again even a status
+      that is not on the list above (a lock held a moment too long), `false` never tries again.
+      A write without its idempotency key is still never sent twice.
+    * **Why the rate was limited.** With `limit_header` set (Stripe's
+      `"stripe-rate-limited-reason"`), its value is the `:rate_limit_reason` of the telemetry
+      below, so a site can tell a burst of its own from a limit on one endpoint.
     * **One idempotency key per call.** When `idempotency_header` is set, a write carries the key in
       that header: `idempotency_key` when the caller gives one (derived from its own operation, so a
       repeated call is the same call), a random one otherwise. Every retry sends the same key.
     * **Telemetry.** `[:mishka_pay, :request, :start | :stop | :exception]`, with `:provider`,
       `:method`, `:path` and `:idempotency_key`, and `:status` on `:stop`; and
       `[:mishka_pay, :request, :retry]` before each retry, with the `:wait` in milliseconds, the
-      `:attempt`, the `:status` or network `:reason`, and the `:retry_after` the provider asked
-      for. Never a key or a body.
+      `:attempt`, the `:status` or network `:reason`, the `:retry_after` the provider asked
+      for and its `:rate_limit_reason`. `:stop` carries the `:rate_limit_reason` of the last
+      answer too (`nil` when it gave none). Never a key or a body.
 
   `request/1` answers `{:ok, %Req.Response{}}` for any HTTP status: the adapter reads its
   provider's own error body. A request that never got an answer is a
@@ -100,6 +108,13 @@ defmodule MishkaPay.Client do
       derives: "sanitize(trim, downcase) validate(string, not_empty)"
 
     field :idempotency_key, String.t(), derives: "validate(string, not_empty)"
+
+    field :retry_header, String.t(),
+      derives: "sanitize(trim, downcase) validate(string, not_empty)"
+
+    field :limit_header, String.t(),
+      derives: "sanitize(trim, downcase) validate(string, not_empty)"
+
     field :max_retries, non_neg_integer(), default: 2, derives: "validate(integer, min_len=0)"
     field :retry_delay, non_neg_integer(), default: 500, derives: "validate(integer, min_len=0)"
     field :max_wait, non_neg_integer(), default: 10_000, derives: "validate(integer, min_len=0)"
@@ -137,7 +152,12 @@ defmodule MishkaPay.Client do
 
     :telemetry.span([:mishka_pay, :request], meta, fn ->
       result = spec |> req() |> Req.request()
-      {answer(result, spec), Map.put(meta, :status, status(result))}
+
+      {answer(result, spec),
+       Map.merge(meta, %{
+         status: status(result),
+         rate_limit_reason: header(result, spec.limit_header)
+       })}
     end)
   end
 
@@ -204,16 +224,30 @@ defmodule MishkaPay.Client do
     do: false
 
   defp retry(%{retry_delay: base, max_wait: most} = spec),
-    do: &retry?(&1, &2, {base, most, Map.take(spec, [:provider, :method, :path])})
+    do: &retry?(&1, &2, {base, most, Map.take(spec, [:provider, :method, :path])}, spec)
 
-  defp retry?(request, %Req.Response{status: status} = response, waits)
-       when status in @retry_statuses,
-       do: delay(request, retry_after(response), %{status: status}, waits)
+  # The provider's own answer on a retry wins over the status of a failed request; without one,
+  # the status decides. An answer that did not fail is never sent again.
+  defp retry?(_request, %Req.Response{status: status}, _waits, _spec) when status < 400,
+    do: false
 
-  defp retry?(request, %Req.TransportError{reason: reason}, waits),
+  defp retry?(request, %Req.Response{status: status} = response, waits, spec) do
+    case {header({:ok, response}, spec.retry_header), status in @retry_statuses} do
+      {"false", _status} -> false
+      {told, worth?} when told == "true" or worth? -> answered(request, response, spec, waits)
+      _not_worth -> false
+    end
+  end
+
+  defp retry?(request, %Req.TransportError{reason: reason}, waits, _spec),
     do: delay(request, nil, %{reason: reason}, waits)
 
-  defp retry?(_request, _answer, _waits), do: false
+  defp retry?(_request, _answer, _waits, _spec), do: false
+
+  defp answered(request, %Req.Response{status: status} = response, spec, waits) do
+    cause = %{status: status, rate_limit_reason: header({:ok, response}, spec.limit_header)}
+    delay(request, retry_after(response), cause, waits)
+  end
 
   # Announces each retry Req will make, with the wait it was given, so a caller (or a test) sees
   # it without timing anything.
@@ -344,4 +378,14 @@ defmodule MishkaPay.Client do
 
   defp status({:ok, %Req.Response{status: status}}), do: status
   defp status(_error), do: nil
+
+  # The first value of a provider header this request names, read without case.
+  defp header({:ok, %Req.Response{} = response}, name) when is_binary(name) do
+    case Req.Response.get_header(response, name) do
+      [value | _] -> value |> String.trim() |> String.downcase()
+      [] -> nil
+    end
+  end
+
+  defp header(_answer, _name), do: nil
 end

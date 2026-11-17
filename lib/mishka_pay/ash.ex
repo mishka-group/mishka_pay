@@ -32,6 +32,8 @@ if Code.ensure_loaded?(Ash) do
     its field: an `:invalid` error becomes `Ash.Error.Changes.InvalidArgument`s at their fields
     (for a nested input such as the customer of a checkout, at the inner field that failed, such
     as `:email`), anything else an `Ash.Error.Unknown.UnknownError`. The actions here return them.
+    `message/1` gives their plain words; `provider_error/1` finds the provider's own error inside,
+    with its `:request_id` for the provider's support.
     """
 
     alias MishkaPay.Errors
@@ -160,17 +162,52 @@ if Code.ensure_loaded?(Ash) do
     defp other(%Errors.Unsupported{} = error),
       do: Ash.Error.Changes.InvalidChanges.exception(message: message(error), stacktrace: [])
 
+    # The words are what Ash shows; the provider's error stays as the `:value`, for
+    # `provider_error/1`.
     defp other(error),
-      do: Ash.Error.Unknown.UnknownError.exception(error: message(error), stacktrace: [])
+      do:
+        Ash.Error.Unknown.UnknownError.exception(
+          error: message(error),
+          value: error,
+          stacktrace: []
+        )
+
+    @doc """
+    The provider's own error inside `error`: a `MishkaPay.Errors.Rejected` or
+    `MishkaPay.Errors.Declined`, given as it is, inside a `MishkaPay.Errors` class, or inside the
+    Ash error an action returned (or `to_ash_error/1`'s list). Its `:request_id` and `:doc_url` are for the provider's support
+    and the log, never for the person's message. `nil` when the provider gave no error.
+
+        {:error, error} = Ash.create(MyApp.Pay.Payment, attrs, action: :sync)
+
+        case MishkaPay.Ash.provider_error(error) do
+          %{request_id: id} when is_binary(id) -> Logger.warning("Stripe request \#{id} failed")
+          _none -> :ok
+        end
+    """
+    @spec provider_error(term()) :: Exception.t() | nil
+    def provider_error(%Errors.Rejected{} = error), do: error
+    def provider_error(%Errors.Declined{} = error), do: error
+
+    def provider_error(%Ash.Error.Unknown.UnknownError{value: %{__exception__: true} = inner}),
+      do: provider_error(inner)
+
+    def provider_error(%{errors: errors}) when is_list(errors), do: provider_error(errors)
+
+    def provider_error(errors) when is_list(errors),
+      do: Enum.find_value(errors, &provider_error/1)
+
+    def provider_error(_other), do: nil
 
     @doc """
     The plain words of an error, for a person or a log: the error's own message, without the
-    breadcrumbs and stack traces a Splode class adds; a class gives its errors' words, joined.
+    breadcrumbs and stack traces a Splode class adds; a class gives its errors' words, each its own
+    sentence.
     """
     @spec message(term()) :: String.t()
-    def message(%{errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+    def message(%{errors: [_ | _] = errors}), do: sentences(errors)
 
-    def message(%{child_errors: [_ | _] = errors}), do: Enum.map_join(errors, "; ", &message/1)
+    def message(%{child_errors: [_ | _] = errors}), do: sentences(errors)
 
     def message(%{__exception__: true, bread_crumbs: [_ | _]} = error),
       do: message(%{error | bread_crumbs: []})
@@ -184,6 +221,10 @@ if Code.ensure_loaded?(Ash) do
     def message(%{__exception__: true, __struct__: module} = error), do: module.message(error)
     def message(text) when is_binary(text), do: text
     def message(other), do: inspect(other)
+
+    # Each error's words start with a capital, so they are joined as sentences.
+    defp sentences(errors),
+      do: Enum.map_join(errors, ". ", &(&1 |> message() |> String.trim_trailing(".")))
 
     # A nested input reports its own failures under it; the person needs the inner ones.
     defp leaves(%{child_errors: [_ | _] = errors}), do: Enum.flat_map(errors, &leaves/1)

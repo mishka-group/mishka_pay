@@ -10,20 +10,26 @@ defmodule ShopWeb.ShopLive do
       stored row beside the payment read live from Stripe (buyer, card, receipt, failure, metadata,
       refunds), its webhook events, sync and refund;
     * the customers: register one on Stripe, find and keep one, edit it, open its customer portal,
-      and buy as that customer;
+      and buy as that customer; the portal's setups on Stripe, and the portal opened with one;
     * the catalog: the shop's products published to Stripe as products and prices, sold by price
       id, and every Stripe list read page by page;
     * payment links for catalog prices, with every limit a developer can choose, and one buyer's
-      address; invoices for one-time checkouts; the site's Stripe Tax setting;
+      address; invoices for one-time checkouts; the site's Stripe Tax setting; tax rates set by
+      hand, tax registrations and Stripe Tax's settings;
     * disputes: read from Stripe or by webhook, answered with evidence or accepted; every change
-      reaches the page through Mishka Pay's own PubSub plugin (`Shop.Pay.Broadcast`);
+      reaches the page through Mishka Pay's own PubSub plugin (`Shop.Pay.Broadcast`); Radar's
+      early fraud warnings and the reviews it holds, approved from the page;
     * coupons and promotion codes, and every checkout option: discounts or typed codes, Stripe
       Tax, page language, expiry, billing address, tax ids, customer creation; a checkout held on
       the page, then paid or ended;
     * members and access by subscription, refunds and held payments, more checkout options
-      (embedded too), saved cards and portal links, one-off bills, customer search and bill
+      (embedded too), a card form of the shop's own (Stripe Elements: a payment intent, or a
+      setup intent that saves a card), saved cards and portal links, one-off bills, customer search and bill
       previews, each in its own component;
-    * reading a checkout or a payment back by its id;
+    * Stripe Connect: the shop as a platform that makes its sellers' connected accounts, opens
+      their onboarding pages, sends them money and takes it back, and lists its payouts and its
+      cut of their sales;
+    * reading a checkout or a payment back by its id, and a raw call to any Stripe API path;
     * a webhook simulator, the webhook inbox and every telemetry event, live;
     * the site settings, read again on the next call.
   """
@@ -47,6 +53,7 @@ defmodule ShopWeb.ShopLive do
 
   # The most of one product a demo checkout sells, so a typo never opens Stripe for thousands.
   @max_quantity 10
+  @refund_form %{"amount" => "", "reason" => ""}
 
   @settings_topic "pay:settings"
 
@@ -78,7 +85,8 @@ defmodule ShopWeb.ShopLive do
      |> assign(member: member(session["member_id"]))
      |> assign(products: Shop.Catalog.all(), names: Shop.Catalog.names())
      |> assign(selected: nil, checkout_read: nil, simulated: nil, simulate_form: %{}, buyer: nil)
-     |> assign(lookup: nil, typed: %{})
+     |> assign(lookup: nil, typed: %{}, lookup_failure: nil, refund_form: @refund_form)
+     |> assign(checkout_lookup: nil)
      |> assign(
        filter: "all",
        max_quantity: @max_quantity,
@@ -181,9 +189,15 @@ defmodule ShopWeb.ShopLive do
 
   def handle_event("clear_buyer", _params, socket), do: {:noreply, push_patch(socket, to: ~p"/")}
 
-  def handle_event("select", %{"id" => id}, socket), do: {:noreply, select(socket, id)}
+  def handle_event("select", %{"id" => id}, socket),
+    do: {:noreply, socket |> assign(refund_form: @refund_form) |> select(id)}
 
-  def handle_event("close", _params, socket), do: {:noreply, assign(socket, selected: nil)}
+  def handle_event("close", _params, socket),
+    do: {:noreply, assign(socket, selected: nil, refund_form: @refund_form)}
+
+  # The refund typed is kept, so a webhook that updates the open payment does not reset it.
+  def handle_event("draft_refund", params, socket),
+    do: {:noreply, assign(socket, refund_form: refund_form(params))}
 
   def handle_event("filter", %{"status" => status}, socket) when status in ["all" | @statuses] do
     {:noreply,
@@ -191,6 +205,8 @@ defmodule ShopWeb.ShopLive do
   end
 
   def handle_event("refund", %{"payment" => id} = params, socket) do
+    socket = assign(socket, refund_form: refund_form(params))
+
     with {:ok, payment} <- Ash.get(Payment, id, authorize?: false),
          {:ok, refunded} <-
            payment
@@ -200,11 +216,29 @@ defmodule ShopWeb.ShopLive do
        socket
        |> put_payment(refunded)
        |> assign_last()
+       |> assign(refund_form: @refund_form)
        |> select(refunded.id, refunded.__metadata__.refund)
        |> flash(
          :info,
          "Refunded. #{MishkaPay.Provider.label_of(payment.provider)} gives the money back to the buyer."
        )}
+    else
+      {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  # A payment intent no one paid is canceled on Stripe, then read back and saved, so the row and the
+  # panel show it ended.
+  def handle_event("cancel_payment", %{"payment" => id}, socket) do
+    with {:ok, row} <- Ash.get(Payment, id, authorize?: false),
+         {:ok, _intent} <-
+           MishkaPay.cancel_payment_intent(row.provider, row.provider_id, row.tenant),
+         {:ok, payment} <- sync(row.provider_id) do
+      {:noreply,
+       socket
+       |> put_payment(payment)
+       |> select(payment.id)
+       |> flash(:info, "Payment canceled: it can no longer be paid.")}
     else
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
@@ -226,7 +260,7 @@ defmodule ShopWeb.ShopLive do
       {:noreply,
        socket
        |> put_payment(payment)
-       |> assign(lookup: nil)
+       |> assign(lookup: nil, lookup_failure: nil)
        |> assign_last()
        |> select(payment.id)
        |> flash(
@@ -238,7 +272,7 @@ defmodule ShopWeb.ShopLive do
         {:noreply,
          socket
          |> close_other(payment_id)
-         |> assign(lookup: payment_id)
+         |> assign(lookup: payment_id, lookup_failure: MishkaPay.Ash.provider_error(error))
          |> flash(:error, MishkaPay.Ash.message(error))}
     end
   end
@@ -255,6 +289,10 @@ defmodule ShopWeb.ShopLive do
         {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
     end
   end
+
+  # What is typed stays through the page's live updates and a reconnect.
+  def handle_event("checkout_lookup", %{"checkout_id" => value}, socket),
+    do: {:noreply, assign(socket, checkout_lookup: value)}
 
   def handle_event("read_checkout", %{"checkout_id" => checkout_id}, socket) do
     with {:ok, checkout_id} <- checkout_id(checkout_id),
@@ -480,11 +518,18 @@ defmodule ShopWeb.ShopLive do
             </button>
           </form>
         </div>
+        <.request_id :if={@lookup_failure} error={@lookup_failure} />
         <.stats stats={@stats} filter={@filter} statuses={@statuses} />
         <.payments_table payments={@streams.payments} names={@names} />
       </section>
 
-      <.payment_details :if={@selected} selected={@selected} live={@live} names={@names} />
+      <.payment_details
+        :if={@selected}
+        selected={@selected}
+        live={@live}
+        names={@names}
+        refund_form={@refund_form}
+      />
 
       <.live_component module={ShopWeb.SubscriptionsComponent} id="subscriptions" tenant={@tenant} />
 
@@ -495,9 +540,13 @@ defmodule ShopWeb.ShopLive do
         buyer={@buyer}
       />
 
+      <.live_component module={ShopWeb.PortalConfigsComponent} id="portal-configs" tenant={@tenant} />
+
       <.live_component module={ShopWeb.DiscountsComponent} id="discounts" tenant={@tenant} />
 
       <.live_component module={ShopWeb.DisputesComponent} id="disputes" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.FraudComponent} id="fraud" tenant={@tenant} />
 
       <.live_component module={ShopWeb.CatalogComponent} id="catalog" tenant={@tenant} />
 
@@ -513,11 +562,15 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.TaxComponent} id="tax" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.TaxSetupComponent} id="tax-setup" tenant={@tenant} />
+
       <.live_component module={ShopWeb.UsageComponent} id="usage" tenant={@tenant} />
 
       <.live_component module={ShopWeb.EntitlementsComponent} id="entitlements" tenant={@tenant} />
 
       <.live_component module={ShopWeb.BalanceComponent} id="balance" tenant={@tenant} />
+
+      <.live_component module={ShopWeb.ConnectComponent} id="connect" tenant={@tenant} />
 
       <.live_component module={ShopWeb.OperationsComponent} id="operations" tenant={@tenant} />
 
@@ -529,21 +582,28 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.CheckoutOptionsComponent} id="checkout-more" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.CardFormComponent} id="card-form" tenant={@tenant} />
+
       <.live_component module={ShopWeb.SavedCardsComponent} id="saved-cards" tenant={@tenant} />
 
       <.live_component module={ShopWeb.BillsComponent} id="bills" tenant={@tenant} />
 
       <.live_component module={ShopWeb.LookupsComponent} id="lookups" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.RawCallComponent} id="raw-call" tenant={@tenant} />
+
       <section data-testid="read-checkout">
         <.section_title icon="hero-magnifying-glass" title="Read a checkout back" />
         <form
+          id="read-checkout-form"
+          phx-change="checkout_lookup"
           phx-submit="read_checkout"
           class="join w-full max-w-2xl"
           data-testid="read-checkout-form"
         >
           <input
             name="checkout_id"
+            value={@checkout_lookup}
             placeholder="cs_test_... (shown after each purchase)"
             class="input input-sm join-item min-w-0 flex-1"
             data-testid="read-checkout-input"
@@ -798,6 +858,8 @@ defmodule ShopWeb.ShopLive do
     do: socket
 
   defp close_other(socket, _payment_id), do: assign(socket, selected: nil)
+
+  defp refund_form(params), do: Map.merge(@refund_form, Map.take(params, Map.keys(@refund_form)))
 
   # One payment in the details panel: its row and webhook events from the database now, and the
   # payment as Stripe has it, read in the background.

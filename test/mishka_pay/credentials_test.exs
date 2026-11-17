@@ -40,6 +40,26 @@ defmodule MishkaPay.CredentialsTest do
     assert inspect(keys) =~ "site-a"
   end
 
+  test "a platform key answers each site's connected account, which must be a plain id" do
+    MishkaPay.Test.put_keys(
+      "acme",
+      %{secret_key: "sk_platform", account_id: " acct_1 "},
+      "site-b"
+    )
+
+    assert {:ok, %Credentials{account_id: "acct_1"}} = Credentials.fetch("acme", "site-b")
+
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_platform"}, "platform")
+    assert {:ok, %Credentials{account_id: nil}} = Credentials.fetch("acme", "platform")
+
+    for id <- ["acct_1\r\nx-other: 1", "acct 1", "", 7] do
+      MishkaPay.Test.put_keys("acme", %{secret_key: "sk_platform", account_id: id}, "site-b")
+
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :account_id} | _]}} =
+               Credentials.fetch("acme", "site-b")
+    end
+  end
+
   test "the first plugin that answers wins" do
     MishkaPay.Test.start_plugin!(FallbackKeys)
     MishkaPay.Test.start_plugin!(SiteKeys)
@@ -86,6 +106,33 @@ defmodule MishkaPay.CredentialsTest do
 
     assert {:error, %Errors.Invalid{errors: [%Validation{field: :refunds}]}} =
              Credentials.fetch("acme", "site-a")
+  end
+
+  test "older webhook secrets are kept beside the current one, checked and never shown" do
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a"})
+    assert {:ok, %{webhook_secrets: []} = keys} = Credentials.fetch("acme", "site-a")
+    assert Credentials.webhook_secrets(keys) == []
+
+    MishkaPay.Test.put_keys("acme", %{
+      secret_key: "sk_test_a",
+      webhook_secret: "whsec_new",
+      webhook_secrets: [" whsec_old ", "whsec_new"]
+    })
+
+    assert {:ok, keys} = Credentials.fetch("acme", "site-a")
+    assert Credentials.webhook_secrets(keys) == ["whsec_new", "whsec_old"]
+    refute inspect(keys) =~ "whsec"
+
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a", webhook_secrets: ["whsec_old"]})
+    assert {:ok, keys} = Credentials.fetch("acme", "site-a")
+    assert Credentials.webhook_secrets(keys) == ["whsec_old"]
+
+    for bad <- [["whsec_old", ""], ["whsec_old", 42], "whsec_old"] do
+      MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a", webhook_secrets: bad})
+
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :webhook_secrets}]}} =
+               Credentials.fetch("acme", "site-a")
+    end
   end
 
   defp watch_fetches,

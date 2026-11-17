@@ -10,11 +10,14 @@ defmodule MishkaPay.Errors.Declined do
     * `:provider`: the provider's id, such as `"stripe"`.
     * `:reason`: the provider's own short code, such as `"card_declined"`.
     * `:answer`: the provider's whole answer, for the log. Never shown to a buyer.
+    * `:request_id`: the provider's id of the request (Stripe's `Request-Id` header, PayPal's
+      debug id), when it gave one, for its support and the log. Never shown to a buyer.
+    * `:doc_url`: the provider's page about the decline, when it named one.
   """
 
   alias MishkaPay.Messages
 
-  use Splode.Error, fields: [:provider, :reason, :answer], class: :provider
+  use Splode.Error, fields: [:provider, :reason, :answer, :request_id, :doc_url], class: :provider
 
   @impl true
   def message(%{provider: provider, reason: nil}),

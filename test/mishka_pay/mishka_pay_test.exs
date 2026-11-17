@@ -99,6 +99,21 @@ defmodule MishkaPayTest do
   end
 
   describe "customers and the portal" do
+    test "a customer is deleted at the provider, and a provider without customers refuses before any call" do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :customer_delete, :stop]])
+
+      assert :ok = MishkaPay.delete_customer("acme", "acme_cus_1", "site-a")
+
+      assert_received {[:mishka_pay, :customer_delete, :stop], ^ref, _,
+                       %{provider: "acme", tenant: "site-a", outcome: :ok}}
+
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      assert {:error, %Errors.Unsupported{provider: "checkout_only", operation: :customer}} =
+               MishkaPay.delete_customer("checkout_only", "co_cus_1")
+    end
+
     test "a customer is made, changed, read and listed, and its portal opened" do
       assert {:ok,
               %MishkaPay.Customer{id: "acme_cus_1", email: "ava@example.com", reference: "user-1"}} =
@@ -134,6 +149,47 @@ defmodule MishkaPayTest do
                  customer_id: "acme_cus_1",
                  return_url: "https://shop.test/account"
                })
+    end
+
+    test "portal configurations are made, read and listed, and a session names one" do
+      assert {:ok, %MishkaPay.PortalConfiguration{id: "acme_bpc_1", subscription_cancel: :off}} =
+               MishkaPay.create_portal_configuration(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 name: "Teams",
+                 subscription_cancel: "off"
+               })
+
+      assert {:ok, %MishkaPay.PortalConfiguration{name: "Monthly"}} =
+               MishkaPay.update_portal_configuration(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 id: "acme_bpc_1",
+                 name: "Monthly"
+               })
+
+      assert {:ok, %MishkaPay.PortalConfiguration{default: true}} =
+               MishkaPay.fetch_portal_configuration("acme", "acme_bpc_1", "site-a")
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalConfiguration{}]}} =
+               MishkaPay.list_portal_configurations("acme", "site-a", active: true)
+
+      assert {:ok, %MishkaPay.PortalSession{configuration: "acme_bpc_1"}} =
+               MishkaPay.portal_session(%{
+                 provider: "acme",
+                 tenant: "site-a",
+                 customer_id: "acme_cus_1",
+                 return_url: "https://shop.test/account",
+                 configuration: "acme_bpc_1"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :id}]}} =
+               MishkaPay.update_portal_configuration(%{provider: "acme", name: "No id"})
+
+      MishkaPay.Test.start_plugin!(CheckoutOnly)
+
+      assert {:error, %Errors.Unsupported{operation: :portal}} =
+               MishkaPay.list_portal_configurations("checkout_only")
     end
 
     test "a call without its provider or id, and a portal with an unsafe return URL, are refused" do
@@ -611,6 +667,229 @@ defmodule MishkaPayTest do
 
       assert {:error, %Errors.Unsupported{operation: :subscription}} =
                MishkaPay.fetch_subscription("checkout_only", "sub_1")
+    end
+
+    test "a provider without subscription schedules refuses them, after the schedule is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :subscription_schedule}} =
+               MishkaPay.create_subscription_schedule(%{
+                 provider: "acme",
+                 subscription_id: "acme_sub_1"
+               })
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :subscription_schedule}} =
+               MishkaPay.list_subscription_schedules("acme", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :customer_id}]}} =
+               MishkaPay.create_subscription_schedule(%{
+                 provider: "acme",
+                 phases: [%{items: [%{id: "acme_price_1"}]}]
+               })
+    end
+
+    test "a raw call refuses a path that is not a plain API path, before the provider is asked" do
+      for path <- [
+            "//evil.com",
+            "https://evil.com/x",
+            "../v1/balance",
+            "/v1/../balance",
+            "/v1/balance?key=x",
+            "/v1/%2F%2Fevil.com",
+            "v1/balance"
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :path}]}} =
+                 MishkaPay.request(%{provider: "acme", tenant: "site-a", path: path}),
+               path
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :method}]}} =
+               MishkaPay.request(%{provider: "acme", path: "/v1/x", method: :head})
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.request(%{provider: "acme", path: "/v1/x", options: %{expand: ["A"]}})
+
+      assert {:error, %Errors.Invalid{}} =
+               MishkaPay.request(%{provider: "acme", path: "/v1/x", headers: %{"x" => "y"}})
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :raw_request}} =
+               MishkaPay.request(%{provider: "acme", tenant: "site-a", path: "/v1/balance"})
+    end
+
+    test "a raw call's idempotency key comes from its reference, method and path" do
+      call = fn attrs ->
+        {:ok, call} = MishkaPay.RawRequest.builder(Map.merge(%{provider: "acme"}, attrs))
+        MishkaPay.RawRequest.idempotency_key(call)
+      end
+
+      key = call.(%{method: :post, path: "/v1/customers", reference: "r1"})
+      assert "mishka_pay-raw-" <> _ = key
+      assert key == call.(%{method: "post", path: "/v1/customers", reference: "r1"})
+      refute key == call.(%{method: :post, path: "/v1/products", reference: "r1"})
+      refute key == call.(%{method: :post, path: "/v1/customers", reference: "r1", tenant: "b"})
+      assert call.(%{method: :post, path: "/v1/customers"}) == nil
+    end
+
+    test "a provider without usage billing refuses a usage cancel, after it is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :usage}} =
+               MishkaPay.cancel_usage(%{provider: "acme", event_name: "api", usage_id: "u1"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :usage_id}]}} =
+               MishkaPay.cancel_usage(%{provider: "acme", event_name: "api"})
+
+      assert {:error, %Errors.Unsupported{operation: :usage}} =
+               MishkaPay.reactivate_meter("acme", "m1", "site-a")
+    end
+
+    test "a provider without its own card form refuses intents, after the intent is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :intent}} =
+               MishkaPay.create_payment_intent(%{
+                 provider: "acme",
+                 amount: %{amount: "10", currency: "USD"}
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.create_payment_intent(%{provider: "acme"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :setup_future_usage}]}} =
+               MishkaPay.create_payment_intent(%{
+                 provider: "acme",
+                 amount: %{amount: "10", currency: "USD"},
+                 setup_future_usage: :sometimes
+               })
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :intent}} =
+               MishkaPay.confirm_setup_intent("acme", "s1", "site-a")
+    end
+
+    test "a provider without tax rates or a tax setup refuses them, after the rate is checked" do
+      rate = %{provider: "acme", display_name: "VAT", percentage: "19", inclusive: true}
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :tax_rate}} =
+               MishkaPay.create_tax_rate(rate)
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :percentage}]}} =
+               MishkaPay.create_tax_rate(%{rate | percentage: 19.5})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :percentage}]}} =
+               MishkaPay.create_tax_rate(%{rate | percentage: "101"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :inclusive}]}} =
+               MishkaPay.create_tax_rate(Map.delete(rate, :inclusive))
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :percentage}]}} =
+               MishkaPay.update_tax_rate(%{provider: "acme", id: "r1", percentage: "7"})
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :tax_setup}} =
+               MishkaPay.fetch_tax_settings("acme", "site-a")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :type}]}} =
+               MishkaPay.create_tax_registration(%{provider: "acme", country: "DE"})
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :place_of_supply_scheme}]}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "acme",
+                 country: "DE",
+                 type: "standard",
+                 place_of_supply_scheme: "sometimes"
+               })
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :tax_setup}} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "acme",
+                 country: "GB",
+                 type: "standard",
+                 place_of_supply_scheme: "inbound_goods"
+               })
+    end
+
+    test "a line's tax rates are a list of ids" do
+      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids}]}} =
+               MishkaPay.create_invoice_item(%{
+                 provider: "acme",
+                 customer_id: "c1",
+                 price_id: "p1",
+                 tax_rate_ids: "txr_1"
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids}]}} =
+               MishkaPay.create_invoice(%{
+                 provider: "acme",
+                 customer_id: "c1",
+                 items: [%{id: "p1"}],
+                 tax_rate_ids: [""]
+               })
+    end
+
+    test "a provider without connected accounts refuses them and their links" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
+               MishkaPay.list_connected_accounts("acme", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
+               MishkaPay.login_link("acme", "a1", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :transfer}} =
+               MishkaPay.list_transfers("acme", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :payout}} =
+               MishkaPay.cancel_payout("acme", "p1", "site-a")
+
+      for seller <- [
+            %{destination: "a1"},
+            %{on_behalf_of: "a1"},
+            %{application_fee: %{amount: "1", currency: "USD"}}
+          ] do
+        assert {:error, %Errors.Unsupported{provider: "acme", operation: :connect}} =
+                 MishkaPay.checkout(Map.merge(@checkout, seller))
+      end
+    end
+
+    test "a provider without fraud reviews refuses them" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :fraud}} =
+               MishkaPay.list_fraud_reviews("acme", "site-a")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :fraud}} =
+               MishkaPay.approve_fraud_review("acme", "r1", "site-a")
+    end
+
+    test "a provider without credit notes refuses them, after the note is checked" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
+               MishkaPay.list_credit_notes("acme", "site-a", invoice_id: "acme_in_1")
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :credit_note}} =
+               MishkaPay.create_credit_note(%{
+                 provider: "acme",
+                 invoice_id: "acme_in_1",
+                 amount: %{amount: "5", currency: "USD"}
+               })
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.preview_credit_note(%{provider: "acme", invoice_id: "acme_in_1"})
+    end
+
+    test "a provider that bills without keeping charges between bills refuses invoice items" do
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :invoice_item}} =
+               MishkaPay.list_invoice_items("acme", "site-a", customer_id: "acme_cus_1")
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :amount}]}} =
+               MishkaPay.create_invoice_item(%{provider: "acme", customer_id: "acme_cus_1"})
+    end
+
+    test "a provider with subscriptions but no list of them refuses a list and a search" do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:mishka_pay, :subscription_list, :stop],
+          [:mishka_pay, :subscription_search, :stop]
+        ])
+
+      assert {:error, %Errors.Unsupported{provider: "acme", operation: :subscription_list}} =
+               MishkaPay.list_subscriptions("acme", "site-a", customer_id: "acme_cus_1")
+
+      assert {:error, %Errors.Unsupported{operation: :subscription_list}} =
+               MishkaPay.search_subscriptions("acme", "site-a", status: :active)
+
+      for operation <- [:subscription_list, :subscription_search] do
+        assert_received {[:mishka_pay, ^operation, :stop], ^ref, _,
+                         %{provider: "acme", tenant: "site-a", outcome: :provider}}
+      end
     end
   end
 

@@ -55,7 +55,8 @@ defmodule ShopWeb.TestClocksComponent do
   @checks 90
 
   @impl true
-  def mount(socket), do: {:ok, assign(socket, loaded?: false, moving: MapSet.new())}
+  def mount(socket),
+    do: {:ok, assign(socket, loaded?: false, moving: MapSet.new(), scenario: "renews")}
 
   @impl true
   def update(%{check: clock_id, tries: tries}, socket), do: {:ok, check(socket, clock_id, tries)}
@@ -69,8 +70,14 @@ defmodule ShopWeb.TestClocksComponent do
     end
   end
 
+  # The situation picked is kept, so a refresh or a clock that moved does not reset it.
   @impl true
+  def handle_event("pick_scenario", %{"scenario" => scenario}, socket),
+    do: {:noreply, assign(socket, scenario: scenario)}
+
   def handle_event("start", %{"scenario" => scenario}, socket) do
+    socket = assign(socket, scenario: scenario)
+
     case scenario(scenario) do
       {:ok, name, spec} ->
         {:noreply, socket |> start(name, spec) |> load()}
@@ -128,9 +135,22 @@ defmodule ShopWeb.TestClocksComponent do
       </p>
       <.hint>MishkaPay.Providers.Stripe.TestClock</.hint>
 
-      <form phx-submit="start" phx-target={@myself} class="flex flex-wrap gap-2 items-end">
+      <form
+        id="clock-start-form"
+        phx-change="pick_scenario"
+        phx-submit="start"
+        phx-target={@myself}
+        class="flex flex-wrap gap-2 items-end"
+        data-testid="clock-start-form"
+      >
         <select name="scenario" class="select select-sm" data-testid="clock-start-scenario">
-          <option :for={{name, spec} <- scenarios()} value={name}>{spec.label}</option>
+          <option
+            :for={{name, spec} <- scenarios()}
+            value={name}
+            selected={Atom.to_string(name) == @scenario}
+          >
+            {spec.label}
+          </option>
         </select>
         <button
           class="btn btn-sm btn-primary"

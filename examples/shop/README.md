@@ -97,6 +97,23 @@ export STRIPE_WEBHOOK_SECRET=whsec_...   # the secret `stripe listen` prints
 
 `demo` is the site (tenant) the shop runs as; each site of a multi-site project has its own URL.
 
+After rolling the endpoint's secret in Stripe, put the new one in `STRIPE_WEBHOOK_SECRET` and the
+old one in `STRIPE_WEBHOOK_SECRET_OLD` (several with commas) until Stripe stops signing with it:
+both are accepted. In `.env` (one `NAME=value` per line, no comment after the value):
+
+```bash
+STRIPE_WEBHOOK_SECRET=whsec_new...
+STRIPE_WEBHOOK_SECRET_OLD=whsec_old...,whsec_older...
+```
+
+`.env` is read when the shop starts, and a variable set in the shell wins over it; restart
+`mix phx.server` after changing it. The Site card always says how many older secrets are still
+taken (`0` when none). The simulator offers "Signed with the secret before a roll" whenever there
+is one: with `STRIPE_WEBHOOK_SECRET_OLD` set, or when `STRIPE_WEBHOOK_SECRET` is not set at all
+and the simulator signs with its own secret, whose own old one stands in. With a `stripe listen`
+secret and no `STRIPE_WEBHOOK_SECRET_OLD` there is no old secret, so that situation is not
+offered.
+
 ## Where to look
 
 - `lib/shop/pay/`: the Ash resources (`Payment`, `WebhookEvent`, `Setting`), the plugins

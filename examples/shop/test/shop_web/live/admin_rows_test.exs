@@ -111,6 +111,32 @@ defmodule ShopWeb.AdminRowsTest do
            )
   end
 
+  test "the add form keeps the choice picked when another field changes, and sends it",
+       %{conn: conn} do
+    test = self()
+
+    StripeStub.stub(fn
+      "POST", "/v1/prices", params ->
+        send(test, {:price, params})
+        nil
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+    view |> element("[data-testid=admin-tab-price]") |> render_click()
+    form = "[data-testid=admin-add-form]"
+
+    view |> form(form, %{interval: "year"}) |> render_change()
+    view |> form(form, %{currency: "EUR"}) |> render_change()
+    assert has_element?(view, "[data-testid=admin-add-interval] option[value=year][selected]")
+
+    view |> form(form, %{product_id: "prod_1", amount: "9.99"}) |> render_submit()
+
+    assert_received {:price, %{"recurring" => %{"interval" => "year"}, "unit_amount" => "999"}}
+  end
+
   test "makes a bill, finalizes it, and marks it paid out of band", %{conn: conn} do
     StripeStub.stub(fn
       "POST", "/v1/invoices", %{"customer" => "cus_1"} -> invoice("draft")

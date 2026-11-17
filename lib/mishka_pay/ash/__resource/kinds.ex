@@ -487,6 +487,7 @@ if Code.ensure_loaded?(Ash) do
           ],
           accept: []
         ),
+        update(:remove, change.(:remove), [], accept: []),
         {:portal, :action,
          [
            returns: :struct,

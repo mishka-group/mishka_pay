@@ -77,4 +77,19 @@ defmodule ShopWeb.CurrenciesTest do
     assert has_element?(view, "[data-testid=currencies-error]")
     refute_received {:sent, _currency, _amount, _product}
   end
+
+  test "the currency picked stays picked after a price is made, and the next one sends it",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    form = "[data-testid=currencies-form]"
+
+    view |> form(form, %{currency: "MGA"}) |> render_change()
+    view |> form(form, %{amount: "10000"}) |> render_change()
+    view |> form(form) |> render_submit()
+    assert_received {:sent, "mga", "10000", "prod_c1"}
+    assert has_element?(view, "[data-testid=currencies-currency] option[value=MGA][selected]")
+
+    view |> form(form) |> render_submit()
+    assert_received {:sent, "mga", "10000", "prod_c1"}
+  end
 end

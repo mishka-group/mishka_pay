@@ -14,17 +14,42 @@ defmodule ShopWeb.CheckoutOptionsComponent do
 
   use ShopWeb, :live_component
 
-  import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
+  import ShopWeb.PayComponents,
+    only: [section_title: 1, hint: 1, stripe_form: 1, publishable_key: 2]
+
+  @form %{
+    "product" => nil,
+    "ui_mode" => "hosted",
+    "merchant_of_record" => "",
+    "submit_type" => "",
+    "q1_type" => "text",
+    "q2_type" => "text",
+    "q3_type" => "text"
+  }
 
   @impl true
-  def mount(socket), do: {:ok, assign(socket, embedded: nil, read: nil)}
+  def mount(socket),
+    do: {:ok, assign(socket, embedded: nil, read: nil, form: @form, readback_id: "")}
 
   @impl true
-  def update(assigns, socket),
-    do: {:ok, assign(socket, tenant: assigns.tenant, products: Shop.Catalog.all())}
+  def update(assigns, socket) do
+    products = Shop.Catalog.all()
+    first = Enum.at(products, 0, %{slug: nil}).slug
 
+    {:ok,
+     socket
+     |> assign(tenant: assigns.tenant, products: products)
+     |> update(:form, &Map.update!(&1, "product", fn slug -> slug || first end))}
+  end
+
+  # Everything typed or picked is kept, so a re-render (the checkout opening, a read back)
+  # shows the same choices and a second checkout sends them again.
   @impl true
+  def handle_event("draft", params, socket), do: {:noreply, keep(socket, params)}
+
   def handle_event("start", %{"product" => slug} = params, socket) do
+    socket = keep(socket, params)
+
     with %{} = product <- Shop.Catalog.fetch(slug),
          {:ok, keys} <- keys(params["ui_mode"], socket.assigns.tenant),
          {:ok, checkout} <- start_checkout(product, params, socket.assigns.tenant) do
@@ -38,7 +63,12 @@ defmodule ShopWeb.CheckoutOptionsComponent do
   def handle_event("close_embedded", _params, socket),
     do: {:noreply, assign(socket, embedded: nil)}
 
+  def handle_event("type_read", %{"checkout_id" => value}, socket),
+    do: {:noreply, assign(socket, readback_id: value)}
+
   def handle_event("read", %{"checkout_id" => value}, socket) do
+    socket = assign(socket, readback_id: value)
+
     with {:ok, id} <- checkout_id(value),
          {:ok, checkout} <- MishkaPay.fetch_checkout("stripe", id, socket.assigns.tenant) do
       {:noreply, assign(socket, read: checkout)}
@@ -60,6 +90,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
 
       <form
         id="checkout-more-form"
+        phx-change="draft"
         phx-submit="start"
         phx-target={@myself}
         class="rounded-box bg-base-200 p-4 space-y-4"
@@ -70,7 +101,11 @@ defmodule ShopWeb.CheckoutOptionsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Product</span>
             <select name="product" class="select select-sm" data-testid="more-product">
-              <option :for={product <- @products} value={product.slug}>
+              <option
+                :for={product <- @products}
+                value={product.slug}
+                selected={@form["product"] == product.slug}
+              >
                 {product.name} (${product.price}{if Shop.Catalog.plan?(product),
                   do: " / #{product.interval}"})
               </option>
@@ -79,32 +114,49 @@ defmodule ShopWeb.CheckoutOptionsComponent do
           <label class="fieldset">
             <span class="fieldset-legend">Where the buyer pays</span>
             <select name="ui_mode" class="select select-sm" data-testid="more-ui-mode">
-              <option value="hosted">On Stripe's page</option>
-              <option value="embedded">Embedded in this page</option>
+              <option value="hosted" selected={@form["ui_mode"] == "hosted"}>On Stripe's page</option>
+              <option value="embedded" selected={@form["ui_mode"] == "embedded"}>
+                Embedded in this page
+              </option>
             </select>
           </label>
           <label class="fieldset">
             <span class="fieldset-legend">Merchant of record, this checkout</span>
             <select name="merchant_of_record" class="select select-sm" data-testid="more-merchant">
-              <option value="">The site's setting</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
+              <option
+                :for={{value, label} <- [{"", "The site's setting"}, {"on", "On"}, {"off", "Off"}]}
+                value={value}
+                selected={@form["merchant_of_record"] == value}
+              >
+                {label}
+              </option>
             </select>
           </label>
           <label class="fieldset">
             <span class="fieldset-legend">Pay button says (one-time only)</span>
             <select name="submit_type" class="select select-sm" data-testid="more-submit-type">
-              <option value="">Stripe's choice</option>
-              <option value="pay">Pay</option>
-              <option value="book">Book</option>
-              <option value="donate">Donate</option>
-              <option value="auto">Auto</option>
+              <option
+                :for={
+                  {value, label} <- [
+                    {"", "Stripe's choice"},
+                    {"pay", "Pay"},
+                    {"book", "Book"},
+                    {"donate", "Donate"},
+                    {"auto", "Auto"}
+                  ]
+                }
+                value={value}
+                selected={@form["submit_type"] == value}
+              >
+                {label}
+              </option>
             </select>
           </label>
           <label class="fieldset sm:col-span-2">
             <span class="fieldset-legend">Description</span>
             <input
               name="description"
+              value={@form["description"]}
               placeholder="shown at Stripe on the payment"
               class="input input-sm"
               data-testid="more-description"
@@ -114,6 +166,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
             <span class="fieldset-legend">Card statement suffix</span>
             <input
               name="statement_suffix"
+              value={@form["statement_suffix"]}
               maxlength="22"
               placeholder="ORDER 42"
               class="input input-sm"
@@ -129,6 +182,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
                 type="checkbox"
                 name="phone"
                 value="true"
+                checked={@form["phone"] == "true"}
                 class="checkbox checkbox-sm"
                 data-testid="more-phone"
               /> Ask for a phone number
@@ -138,6 +192,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
                 type="checkbox"
                 name="terms"
                 value="true"
+                checked={@form["terms"] == "true"}
                 class="checkbox checkbox-sm"
                 data-testid="more-terms"
               /> Buyer accepts the terms
@@ -147,6 +202,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
                 type="checkbox"
                 name="pay_later"
                 value="true"
+                checked={@form["pay_later"] == "true"}
                 class="checkbox checkbox-sm"
                 data-testid="more-pay-later"
               /> Pay later: only hold the money (one-time only)
@@ -159,18 +215,30 @@ defmodule ShopWeb.CheckoutOptionsComponent do
           <div :for={n <- 1..3} class="grid gap-2 sm:grid-cols-4 items-end">
             <input
               name={"q#{n}_label"}
+              value={@form["q#{n}_label"]}
               placeholder={"Question #{n}, such as Name on the certificate"}
               class="input input-sm sm:col-span-2"
               data-testid={"more-q#{n}-label"}
             />
             <select name={"q#{n}_type"} class="select select-sm" data-testid={"more-q#{n}-type"}>
-              <option value="text">Text</option>
-              <option value="numeric">Numbers</option>
-              <option value="dropdown">Dropdown</option>
+              <option
+                :for={
+                  {value, label} <- [
+                    {"text", "Text"},
+                    {"numeric", "Numbers"},
+                    {"dropdown", "Dropdown"}
+                  ]
+                }
+                value={value}
+                selected={@form["q#{n}_type"] == value}
+              >
+                {label}
+              </option>
             </select>
             <div class="flex items-center gap-2">
               <input
                 name={"q#{n}_options"}
+                value={@form["q#{n}_options"]}
                 placeholder="Dropdown: Pro, Team"
                 class="input input-sm min-w-0 flex-1"
                 data-testid={"more-q#{n}-options"}
@@ -180,6 +248,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
                   type="checkbox"
                   name={"q#{n}_optional"}
                   value="true"
+                  checked={@form["q#{n}_optional"] == "true"}
                   class="checkbox checkbox-xs"
                   data-testid={"more-q#{n}-optional"}
                 /> optional
@@ -193,6 +262,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
             <span class="fieldset-legend">Plan trial, days</span>
             <input
               name="trial_days"
+              value={@form["trial_days"]}
               type="number"
               min="1"
               placeholder="the plan's own"
@@ -205,6 +275,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
               type="checkbox"
               name="no_card"
               value="true"
+              checked={@form["no_card"] == "true"}
               class="checkbox checkbox-sm"
               data-testid="more-no-card"
             /> Trial without a card
@@ -213,6 +284,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
             <span class="fieldset-legend">Ship to countries</span>
             <input
               name="shipping_countries"
+              value={@form["shipping_countries"]}
               placeholder="NL, DE, US"
               class="input input-sm"
               data-testid="more-shipping-countries"
@@ -222,6 +294,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
             <span class="fieldset-legend">Shipping rate name (one-time only)</span>
             <input
               name="ship_name"
+              value={@form["ship_name"]}
               placeholder="Standard post"
               class="input input-sm"
               data-testid="more-ship-name"
@@ -231,6 +304,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
             <span class="fieldset-legend">Shipping costs, USD</span>
             <input
               name="ship_amount"
+              value={@form["ship_amount"]}
               placeholder="4.95, or 0 for free"
               class="input input-sm"
               data-testid="more-ship-amount"
@@ -241,6 +315,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
             <div class="join">
               <input
                 name="ship_min"
+                value={@form["ship_min"]}
                 type="number"
                 min="1"
                 placeholder="2"
@@ -249,6 +324,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
               />
               <input
                 name="ship_max"
+                value={@form["ship_max"]}
                 type="number"
                 min="1"
                 placeholder="5"
@@ -288,52 +364,19 @@ defmodule ShopWeb.CheckoutOptionsComponent do
           </button>
         </div>
         <.hint>ui_mode: :embedded, Stripe.js createEmbeddedCheckoutPage</.hint>
-        <div
+        <.stripe_form
           id={"embedded-checkout-#{@embedded.id}"}
-          phx-hook=".EmbeddedCheckout"
-          phx-update="ignore"
-          data-client-secret={@embedded.client_secret}
-          data-publishable-key={@embedded.publishable_key}
+          mode="embedded_checkout"
+          client_secret={@embedded.client_secret}
+          publishable_key={@embedded.publishable_key}
           data-testid="embedded-checkout"
-        >
-        </div>
+        />
       </div>
-
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".EmbeddedCheckout">
-        // A hook, not LiveView.JS: Stripe's embedded checkout is an iframe that only Stripe.js can
-        // mount, with the checkout's client secret. The script loads once per page.
-        let stripeJs
-        const loadStripe = () => stripeJs ||= new Promise((resolve, reject) => {
-          if (window.Stripe) return resolve(window.Stripe)
-          const script = document.createElement("script")
-          script.src = "https://js.stripe.com/endive/stripe.js"
-          script.onload = () => resolve(window.Stripe)
-          script.onerror = () => { stripeJs = null; reject(new Error("Stripe.js did not load")) }
-          document.head.appendChild(script)
-        })
-
-        export default {
-          async mounted() {
-            const {clientSecret, publishableKey} = this.el.dataset
-            try {
-              const Stripe = await loadStripe()
-              const stripe = Stripe(publishableKey)
-              const fetchClientSecret = async () => clientSecret
-              const create = stripe.createEmbeddedCheckoutPage || stripe.initEmbeddedCheckout
-              this.checkout = await create.call(stripe, {fetchClientSecret})
-              if (this.el.isConnected) this.checkout.mount(this.el)
-            } catch (error) {
-              this.el.textContent = "Stripe's form could not load: " + error.message
-            }
-          },
-          destroyed() {
-            if (this.checkout && this.checkout.destroy) this.checkout.destroy()
-          }
-        }
-      </script>
 
       <div class="space-y-3" data-testid="checkout-readback">
         <form
+          id="checkout-readback-form"
+          phx-change="type_read"
           phx-submit="read"
           phx-target={@myself}
           class="join w-full max-w-2xl"
@@ -341,6 +384,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
         >
           <input
             name="checkout_id"
+            value={@readback_id}
             placeholder="cs_test_... to read back"
             class="input input-sm join-item min-w-0 flex-1"
             data-testid="readback-input"
@@ -537,16 +581,7 @@ defmodule ShopWeb.CheckoutOptionsComponent do
   end
 
   # An embedded checkout needs the site's publishable key for Stripe.js.
-  defp keys("embedded", tenant) do
-    case MishkaPay.Credentials.fetch("stripe", tenant) do
-      {:ok, %{publishable_key: key}} when is_binary(key) ->
-        {:ok, key}
-
-      _no_key ->
-        {:error,
-         "An embedded checkout needs the site's publishable key: put STRIPE_PUBLISHABLE_KEY=pk_test_... in examples/shop/.env."}
-    end
-  end
+  defp keys("embedded", tenant), do: publishable_key(tenant, "An embedded checkout")
 
   defp keys(_hosted, _tenant), do: {:ok, nil}
 
@@ -607,6 +642,11 @@ defmodule ShopWeb.CheckoutOptionsComponent do
   end
 
   defp blank_nil(_none), do: nil
+
+  defp keep(socket, params) do
+    typed = Map.reject(params, fn {key, _value} -> String.starts_with?(key, "_") end)
+    assign(socket, form: Map.merge(@form, typed))
+  end
 
   defp say(socket, kind, message) do
     send(self(), {:flash, kind, message})

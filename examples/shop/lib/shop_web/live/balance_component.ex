@@ -11,6 +11,13 @@ defmodule ShopWeb.BalanceComponent do
 
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
+  @balance_form %{
+    "direction" => "credit",
+    "amount" => "5.00",
+    "currency" => "USD",
+    "description" => ""
+  }
+
   @impl true
   def mount(socket) do
     {:ok,
@@ -19,6 +26,7 @@ defmodule ShopWeb.BalanceComponent do
        movements: nil,
        movements_next: nil,
        customer_id: "",
+       balance_form: @balance_form,
        customer_balance: nil,
        notice: nil,
        error: nil
@@ -42,12 +50,23 @@ defmodule ShopWeb.BalanceComponent do
   def handle_event("more_movements", _params, socket),
     do: {:noreply, movements(socket, socket.assigns.movements_next)}
 
-  def handle_event("customer_balance", %{"intent" => "list", "customer_id" => id}, socket) do
+  def handle_event("draft_customer_balance", params, socket),
+    do: {:noreply, keep(socket, params)}
+
+  def handle_event(
+        "customer_balance",
+        %{"intent" => "list", "customer_id" => id} = params,
+        socket
+      ) do
     {:noreply,
-     socket |> assign(customer_id: String.trim(id), notice: nil, error: nil) |> customer_balance()}
+     socket
+     |> keep(params)
+     |> assign(customer_id: String.trim(id), notice: nil, error: nil)
+     |> customer_balance()}
   end
 
   def handle_event("customer_balance", %{"customer_id" => id} = params, socket) do
+    socket = keep(socket, params)
     customer_id = String.trim(id)
     amount = String.trim(params["amount"] || "")
     signed = if params["direction"] == "credit", do: "-" <> amount, else: amount
@@ -74,6 +93,15 @@ defmodule ShopWeb.BalanceComponent do
       {:error, error} ->
         {:noreply, socket |> assign(customer_id: customer_id) |> failed(error)}
     end
+  end
+
+  # The balance form as typed, so listing the changes or a re-render keeps the way, the amount
+  # and the currency picked for the next change.
+  defp keep(socket, params) do
+    assign(socket,
+      customer_id: params["customer_id"] || socket.assigns.customer_id,
+      balance_form: Map.merge(@balance_form, Map.take(params, Map.keys(@balance_form)))
+    )
   end
 
   defp movements(socket, after_id) do
@@ -219,6 +247,7 @@ defmodule ShopWeb.BalanceComponent do
 
       <form
         id="customer-balance-form"
+        phx-change="draft_customer_balance"
         phx-submit="customer_balance"
         phx-target={@myself}
         class="card bg-base-200"
@@ -244,15 +273,19 @@ defmodule ShopWeb.BalanceComponent do
                 class="select select-sm"
                 data-testid="customer-balance-direction"
               >
-                <option value="credit">Credit (off next bills)</option>
-                <option value="debit">Debit (added to next bill)</option>
+                <option value="credit" selected={@balance_form["direction"] == "credit"}>
+                  Credit (off next bills)
+                </option>
+                <option value="debit" selected={@balance_form["direction"] == "debit"}>
+                  Debit (added to next bill)
+                </option>
               </select>
             </label>
             <label class="fieldset">
               <span class="fieldset-legend">Amount</span>
               <input
                 name="amount"
-                value="5.00"
+                value={@balance_form["amount"]}
                 type="number"
                 step="0.01"
                 min="0.01"
@@ -263,14 +296,20 @@ defmodule ShopWeb.BalanceComponent do
             <label class="fieldset">
               <span class="fieldset-legend">Currency</span>
               <select name="currency" class="select select-sm" data-testid="customer-balance-currency">
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
+                <option
+                  :for={currency <- ~w(USD EUR)}
+                  value={currency}
+                  selected={@balance_form["currency"] == currency}
+                >
+                  {currency}
+                </option>
               </select>
             </label>
             <label class="fieldset">
               <span class="fieldset-legend">Why</span>
               <input
                 name="description"
+                value={@balance_form["description"]}
                 placeholder="Sorry for the wait"
                 class="input input-sm"
                 data-testid="customer-balance-description"

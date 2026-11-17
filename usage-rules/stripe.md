@@ -1,8 +1,94 @@
 # Rules for Stripe in Mishka Pay
 
 `MishkaPay.Providers.Stripe` (id `"stripe"`) has every capability: `:checkout`, `:refund`,
-`:subscription`, `:webhook`. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
+`:subscription`, `:subscription_list`, `:webhook` and the rest. Its API version is pinned (`MishkaPay.Providers.Stripe.version/0`);
 `mix mishka_pay.stripe.check_version` fails when Stripe has published a newer one.
+
+## Raw calls
+
+- `MishkaPay.request/1` calls any `api.stripe.com` path (`"/v1/tax/settings"`) with the
+  tenant's key and answers Stripe's JSON as a map. `params:` nest as Stripe's form encoding
+  takes them (`%{"metadata" => %{"a" => "b"}}`).
+- `options: %{api_version: "2025-03-31.basil", expand: ["customer"]}` sends that
+  `Stripe-Version` and `expand[]` for this call only; typed calls always use the pinned version.
+- A write's `:reference` with its method and path makes the idempotency key; without one, a
+  write gets a fresh key that its retries reuse.
+
+## Connect: a platform and its sites
+
+- A platform (Mishka Cloud, a marketplace) keeps one Stripe secret key and gives each site its
+  own connected account (`acct_...`). The site's keys answer the platform's `secret_key` with
+  the site's `account_id`; every Stripe request for that tenant then carries
+  `Stripe-Account: acct_...`, so its payments, customers and refunds live on the site's account.
+  Keys without `account_id` are the platform itself.
+- The header comes only from the keys. No call, `RequestOptions` or `MishkaPay.request/1` can
+  set it: a raw call has no header field. An `account_id` that is not `acct_` and plain is
+  `Errors.Invalid` on `:account_id` before any request.
+- Webhooks: a tenant with `account_id` takes only events that name that account (Stripe's
+  top-level `account`); an event of the platform's own account or of another connected account
+  is refused with 400 (`BadSignature`, reason `:account`). Mishka Pay never routes an event to
+  another tenant: it keeps no map from account to site, and a message checked with one tenant's
+  secret must never act on another's data. A platform subscribes **one** Connect endpoint
+  ("Events from: Connected accounts") to its own tenant's URL (keys without `account_id`); each
+  event there names its `:account`, and the host's listener finds the site by it. Never point a
+  Connect endpoint at a site's URL when the platform has more than one connected account: it
+  receives every account's events, refuses the others, and Stripe retries them until it turns
+  the endpoint off.
+- `create_connected_account/1` is `POST /v1/accounts` with the platform's keys. Stripe's `type`
+  is deprecated on this API version: `:express` is sent as `controller` (Express dashboard, the
+  platform pays fees and answers for losses), `:standard` as a full dashboard, `:custom` as no
+  dashboard with the platform collecting requirements. Its `:reference` makes the idempotency key
+  and is kept in metadata. A platform that has not signed up for Connect in the Dashboard is
+  `Errors.Rejected` with code `"connect_not_set_up"`.
+- `account_link/1` is `POST /v1/account_links` (`account_onboarding` or `account_update`); its
+  URL runs out in minutes and works once, so make it per click and redirect at once. Both pages
+  are `https` (or `http` on `localhost`). Coming back to `return_url` does not mean the account
+  is ready: read it (`:details_submitted`, `:charges_enabled`, `:requirements_due`). `login_link/3`
+  works only for an Express account that finished onboarding.
+- `reject_connected_account/4` is for good; Stripe's reasons on this API version are `credit`,
+  `fraud_no_intent_to_fulfill`, `fraud_other`, `fraud_payment_method_casher`,
+  `fraud_payment_method_tester`, `terms_of_service` and `other` (the default). Account ids start
+  with `acct_`.
+- Stripe sends `account.updated` (onboarding moved on, a capability turned on or off) and
+  `account.application.deauthorized` (a Standard account left the platform) to the platform's
+  Connect endpoint; `event.account` names the account.
+
+## Connect: money between accounts
+
+- Two ways to sell for a seller. **Destination charge**: the platform's keys (no `account_id`)
+  and a checkout with `destination:` (and usually `on_behalf_of:`): the payment lives on the
+  platform and Stripe moves it on (`payment_intent_data[transfer_data][destination]`). **Direct
+  charge**: the site's keys name its `account_id`, so the checkout is made on the seller's own
+  account. Either way `application_fee:` is `application_fee_amount` (one-time) and
+  `application_fee_percent:` is `subscription_data[application_fee_percent]`; both go to the
+  platform. Mishka Pay makes PaymentIntents only through a checkout, so these are the only
+  places it sends them.
+- `create_transfer/1` is `POST /v1/transfers` from the platform's balance: `:reference` is
+  required, makes the idempotency key and is kept in metadata; `:source_charge_id` (`ch_...`)
+  is `source_transaction`, so the transfer waits for that sale's money. A destination that is
+  not the platform's is `Errors.Rejected` with code `"resource_missing"` (param `destination`).
+- `reverse_transfer/4` is `POST /v1/transfers/:id/reversals` with `expand[]=transfer`, so one
+  request answers the transfer after (`:amount_reversed`, `:reversed`). `refund_application_fee/4`
+  is `POST /v1/application_fees/:id/refunds` with `expand[]=fee`, the same way. Each with a
+  `:reference` is made once; the same reference on another transfer or fee is another call.
+- `list_payouts/3` (`status:` `:pending`, `:in_transit`, `:paid`, `:failed`, `:canceled`),
+  `fetch_payout/3` and `cancel_payout/3` act on the account the keys act for: the platform, or
+  with a site's `account_id` the seller's. Only a `:pending` payout can be canceled.
+- Ids: transfers `tr_`, payouts `po_`, application fees `fee_`, accounts `acct_`; a wrong kind is
+  `Errors.Invalid` before any request.
+- Stripe sends `transfer.created`, `.updated`, `.reversed`; `payout.created`, `.updated`,
+  `.paid`, `.failed`, `.canceled`, `.reconciliation_completed`; `application_fee.created`,
+  `.refunded`, `.refund.updated`. A seller's payout events reach the platform's Connect endpoint
+  with `event.account` set.
+
+## Retries and rate limits
+
+- A read, and a write with its idempotency key, is tried again on a network error and on 408,
+  429, 500, 502, 503 and 504. Stripe's `Stripe-Should-Retry` header wins over the status: `true`
+  retries even another status (a lock held a moment too long, 409), `false` never retries.
+- A 429 is `Errors.Rejected` with `status: 429` and Stripe's `Stripe-Rate-Limited-Reason` as
+  `:rate_limit_reason`; the same reason is in `[:mishka_pay, :request, :retry]` and
+  `[:mishka_pay, :request, :stop]` telemetry, so a dashboard can count limits by kind.
 
 ## Checkout
 
@@ -36,6 +122,37 @@
   request. An account whose default is Managed Payments is refused by Stripe:
   `Errors.Rejected` with code `"capture_invoice"`. Send `merchant_of_record: false` with it.
 
+## Stripe Elements: payment and setup intents
+
+- `create_payment_intent/1` is `POST /v1/payment_intents`, `create_setup_intent/1`
+  `POST /v1/setup_intents`, both with `automatic_payment_methods[enabled]` (the Dashboard's
+  payment methods; `automatic_payment_methods: false` is cards only). Their `:reference` makes
+  the idempotency key and is kept in the metadata (`:owner` too), so a paid intent reads back
+  through `fetch_payment/3` with its reference and owner, and its `payment_intent.*` webhooks sync
+  the Ash payment row like a checkout's.
+- The page loads `https://js.stripe.com/<version>/stripe.js`, makes
+  `stripe.elements({clientSecret})`, mounts `elements.create("payment")`, and calls
+  `stripe.confirmPayment({elements, redirect: "if_required", confirmParams: {return_url}})` (or
+  `confirmSetup`). The publishable key is the tenant's `publishable_key`.
+- `confirm_payment_intent/4` and `confirm_setup_intent/4` confirm on the server with a saved
+  payment method (`pm_...`); with the Dashboard's payment methods on, Stripe wants a
+  `return_url:` too. In tests use Stripe's test payment methods (`pm_card_visa`,
+  `pm_card_mastercard`); never send a card number.
+- `capture: :manual` holds the money: `:requires_capture` after the confirm, then
+  `capture_payment/4`, or `cancel_payment_intent/3` to let it go.
+- `cancel_payment_intent/3` cannot end an intent an invoice or a checkout made: Stripe answers 400
+  with no code, and Mishka Pay reads its words ("PaymentIntents created by invoices", "created by
+  Checkout") as `Errors.Rejected` with code `"intent_of_invoice"` (void the invoice instead) or
+  `"intent_of_checkout"` (expire the checkout instead, `expire_checkout/3`). Status, request id
+  and Stripe's own message stay on the error for the log. A payment row with a `checkout_id`
+  came from a checkout: offer the checkout's expiry, not the intent's cancel.
+- `update_payment_intent/1` sends only what it names; a changed `:amount` sends its currency
+  too. A paid or canceled intent cannot change (`Errors.Rejected`).
+- A declined card on a server confirm is `Errors.Declined` with the bank's reason; read in the
+  browser, the intent's `:failure_code` and `:failure_message` say why the last try failed.
+- Stripe lists Payment Intents integrations as not supported by Managed Payments: an intent is
+  never sold with Stripe as the merchant of record.
+
 ## Managed Payments (merchant of record)
 
 - With `merchant_of_record: true` (the checkout's own field, else the tenant's keys setting, else
@@ -57,8 +174,8 @@
 
 ## Ids and what is refused before any request
 
-- Ids are checked by prefix: payments `pi_`, checkouts `cs_`, subscriptions `sub_`, customers
-  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
+- Ids are checked by prefix: payments `pi_`, setup intents `seti_`, checkouts `cs_`, subscriptions `sub_`, customers
+  `cus_`, tax ids `txi_`, tax calculations `taxcalc_`, tax rates `txr_`, tax registrations `taxreg_`, shipping rates `shr_`, test clocks `clock_`, meters `mtr_`, credit notes `cn_`, early fraud warnings `issfr_`, reviews `prv_`, subscription schedules `sub_sched_`, features `feat_`, payouts `po_`. A wrong kind is an `Errors.Invalid` on the field, and no request is sent.
 - ISK, UGX and MGA go in whole units only (Stripe counts them differently from ISO 4217; Mishka
   Pay converts both ways). HUF and TWD charge with two decimals. BHD, JOD, KWD, OMR and TND only
   with a last decimal of 0. Anything else is an `Errors.Invalid` on `:amount` before any request.
@@ -94,6 +211,22 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   `"cancellation_policy"`, `"uncategorized_file"`) take only a `file_...` id; anything else is
   `Errors.Invalid` before any request.
 
+## Radar: early fraud warnings and reviews
+
+- An early fraud warning (`issfr_...`) is `GET /v1/radar/early_fraud_warnings`, filtered by
+  `payment_id:` (`pi_`) or `charge_id:`. Stripe makes one when a card issuer reports fraud,
+  never on request; in a sandbox the test card `4000 0000 0000 5423`, paid on a checkout page,
+  makes one a moment later (the API takes no card number, and has no token for it).
+- `:actionable` is true while the payment is neither refunded nor disputed: a full refund then
+  usually stops the dispute and its fee.
+- `list_fraud_reviews/3` is `GET /v1/reviews`, which lists only open reviews (`prv_...`).
+  Radar opens one only where the account has a review rule (Radar for Fraud Teams);
+  `approve_fraud_review/3` is `POST /v1/reviews/:id/approve`. Refunding the payment closes a
+  review as refunded.
+- Stripe sends `radar.early_fraud_warning.created`, `.updated`, `review.opened` and
+  `review.closed`; each names its payment (the event's `:payment_id`), which the Ash payment
+  listener reads again, and the warning or review as `:object_id`.
+
 ## Files
 
 - `upload_file/1` posts to `https://files.stripe.com/v1/files` as `multipart/form-data`, not to
@@ -105,6 +238,57 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - A file id works in one request only: upload again for another dispute.
 - `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
   `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
+
+## Invoice items
+
+- An invoice item (`ii_...`) is `POST /v1/invoiceitems`, the same line `create_invoice/1` adds for
+  each item of a draft; without `:invoice_id` Stripe keeps it pending and puts it on the
+  customer's next invoice, a subscription's renewal too. Its `:reference` makes the idempotency
+  key and is kept in its metadata.
+- A change cannot move an item to another customer or bill, and an item on a finalized invoice
+  cannot change or be deleted (`Errors.Rejected`). A changed `:amount` is in the item's own
+  currency. `:amount` reads back as the price of one, `:total` as all of it.
+- `list_invoice_items/3` filters by `customer_id:`, `invoice_id:` and `pending: true`.
+
+## Credit notes
+
+- A credit note (`cn_...`) is `POST /v1/credit_notes` on a finalized invoice; a draft cannot
+  take one. Its `:reference` makes the idempotency key and is kept in its metadata.
+  `preview_credit_note/1` is `GET /v1/credit_notes/preview` with the same fields.
+- `:amount` credits the whole bill, `:lines` each line: a line of the bill by its id (`il_...`,
+  an `MishkaPay.InvoiceLine`'s `:id`) with a `:quantity` or an `:amount`, or a line of its own
+  (`:name`, `:unit_amount`, `:quantity`).
+- On an open bill the note lowers what is due (`type: :pre_payment`). On a paid one
+  (`:post_payment`) `:refund_amount` + `:credit_amount` + `:out_of_band_amount` must make the
+  note's amount; a bill paid by hand has no charge to refund, so use the other two.
+- `void_credit_note/3` works only while the note's bill is still open; on a paid bill Stripe
+  refuses it (`Errors.Rejected`).
+- A note's lines carry no currency: `list_credit_note_lines/4` reads the note first (two
+  requests).
+- Stripe sends `credit_note.created`, `.updated` and `.voided`; the event's `:object_id` is the
+  note.
+
+## Subscription schedules
+
+- A schedule (`sub_sched_...`) is `POST /v1/subscription_schedules`. This API version has no
+  phase `iterations`: Mishka Pay sends a phase's `:iterations` and `:interval` as its `duration`.
+- `from_subscription` takes nothing else, metadata neither: a schedule made from a subscription
+  with a `:reference` or `:metadata` gets them in a second request (`POST
+  /v1/subscription_schedules/:id`). The reference makes the idempotency key either way.
+- A phase item is a Stripe price (`price_...`); a schedule's first phase starts now unless
+  `:start_at` is given. A changed running schedule needs its current phase with its start date;
+  the trial a phase had stays only with its `:trial_end_at`.
+- A phase that starts with a trial needs no saved card: the subscription is `:trialing`.
+- Test what time does with a test clock on the customer (`MishkaPay.Providers.Stripe.TestClock`).
+
+## Listing subscriptions
+
+- `list_subscriptions/3` is `GET /v1/subscriptions` (`customer`, `price`, `status`); without
+  `status:` Stripe leaves canceled ones out. Each comes with its customer, but Stripe expands four
+  levels at most, so a listed item has its `:product_id` and the price's nickname, not the
+  product's name: `fetch_subscription/3` reads one with its names.
+- `search_subscriptions/3` is Stripe's search (`GET /v1/subscriptions/search`, `status` and
+  `metadata` fields); its index lags up to a minute, and `:next` is Stripe's `next_page`.
 
 ## Subscription changes
 
@@ -129,9 +313,36 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - An account without Stripe Tax turned on answers `Errors.Rejected` with code
   `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
   it on but with no registration where the buyer is counts a tax of zero.
-- Stripe Tax must be turned on in the Dashboard (origin address, registrations) before
-  `automatic_tax` counts anything. A price's `tax_behavior` can be set once on a price that had
+- Stripe Tax must be turned on (head office, registrations) before `automatic_tax` counts
+  anything: `update_tax_settings/1` sets the head office and defaults, `create_tax_registration/1`
+  the registrations; `fetch_tax_settings/2` says `:pending` with the `:missing_fields` until then. A price's `tax_behavior` can be set once on a price that had
   none; otherwise make a new price.
+
+## Tax rates, registrations and settings
+
+- A tax rate (`txr_...`) is `POST /v1/tax_rates`; its `:reference` makes the idempotency key and
+  is kept in its metadata. Its percentage and `inclusive` never change, and it is never deleted:
+  `update_tax_rate/1` with `active: false` archives it, and the lines that have it keep it.
+- A checkout's line sends its `:tax_rate_ids` as `line_items[][tax_rates]`, an invoice item as
+  `tax_rates`, a draft bill as `default_tax_rates` (for every line without its own), a schedule's
+  phase item as `tax_rates`. Stripe takes none on a catalog price or a payment link, and none
+  with automatic tax (the checkout's, or the site's `automatic_tax: true`): each is
+  `Errors.Invalid` on `:tax_rate_ids` before any request.
+- A tax registration (`taxreg_...`) is `POST /v1/tax/registrations`: the `:type` and `:state`
+  go under `country_options[<country>]` (Canada's provincial one as
+  `province_standard[province]`); a US registration and Canada's `"province_standard"` need
+  `:state`, refused before any request without it, and any other registration refuses one.
+  A `"standard"` registration may say its `:place_of_supply_scheme`, sent as
+  `standard[place_of_supply_scheme]`: in an EU country `:standard`, `:small_seller` or
+  `:inbound_goods`; in the other countries whose standard registration has one (GB, NO, CH,
+  AU, JP, IS and others) `:standard` or `:inbound_goods`.
+  `MishkaPay.Providers.Stripe.place_of_supply_schemes/2` gives the list for a country and kind;
+  any other scheme, kind or country is `Errors.Invalid` before any request.
+  `expire_tax_registration/4` sets `expires_at` (`now` unless `at:`); Stripe never deletes one.
+  A second registration of the same kind in a country is `Errors.Rejected`.
+- `fetch_tax_settings/2` and `update_tax_settings/1` are `GET` and `POST /v1/tax/settings`:
+  `:head_office` is `head_office[address]`, `:tax_code` and `:tax_behavior` are `defaults`.
+- Stripe sends `tax_rate.created` and `.updated`; the event's `:object_id` is the rate.
 
 ## Catalog and lists
 
@@ -145,8 +356,16 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 - The customer's `reference` is kept in its metadata as `mishka_pay_reference` and comes back as
   `:reference`; `:default_payment_method` is the customer's invoice default.
+- `delete_customer/3` is `DELETE /v1/customers/:id`: for good, and Stripe cancels the customer's
+  subscriptions at once. A second delete of the same id is `Errors.Rejected` with code
+  `"resource_missing"`; reading it is `"customer_deleted"`.
 - The portal works without a saved portal configuration in the Dashboard (Stripe's default one);
-  pass `configuration: "bpc_..."` to use another.
+  pass `configuration: "bpc_..."` to use another. Another kind of id is `Errors.Invalid` on
+  `:configuration` before any request.
+- `create_portal_configuration/1` is `POST /v1/billing_portal/configurations`: `:plans` is
+  `features.subscription_update.products` (a product, Stripe's id or the host's own, and its
+  `price_...` ids), which Stripe answers only expanded; Mishka Pay asks for it on every read.
+  A configuration is never deleted: `active: false` turns it off.
 - Stripe sends `customer.created`, `customer.updated` and `customer.deleted`, and
   `customer.tax_id.created`, `.updated` and `.deleted` for a customer's tax ids; the event's
   `:customer_id` names the customer, and the Ash customer listener syncs the row on each.
@@ -191,6 +410,13 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
   is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
   corrects usage reported by mistake.
+- `cancel_usage/1` is a meter event adjustment (`POST /v1/billing/meter_event_adjustments`,
+  `type: cancel`) of the report's identifier (the `MishkaPay.Usage`'s `:id`), within 24 hours of
+  the report; its idempotency key comes from the event name and identifier, so it cancels once.
+  Its `:status` is `:pending` until Stripe has taken the report out. Later, report the value
+  again below zero.
+- `update_meter/1` changes the display name only (`POST /v1/billing/meters/:id`);
+  `reactivate_meter/3` turns a deactivated meter on again.
 - `usage_summary/6` counts whole minutes: `from` rounds down, `to` rounds up. Stripe counts a
   report a little after it comes in, so a summary read at once may not show it yet.
 - A metered price is a recurring price with `meter_id`: Stripe's `recurring[usage_type]=metered`

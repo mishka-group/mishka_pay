@@ -14,6 +14,7 @@ defmodule ShopWeb.PaymentLinksComponent do
   import ShopWeb.PayComponents, only: [section_title: 1, hint: 1]
 
   @page 5
+  @buyer_form %{"reference" => "", "email" => ""}
 
   @impl true
   def mount(socket),
@@ -24,6 +25,8 @@ defmodule ShopWeb.PaymentLinksComponent do
          next: nil,
          open: nil,
          buyer_url: nil,
+         buyer_form: @buyer_form,
+         change_form: nil,
          new?: false,
          loaded?: false,
          page_size: @page
@@ -60,13 +63,25 @@ defmodule ShopWeb.PaymentLinksComponent do
   def handle_event("more", _params, socket), do: {:noreply, page(socket, socket.assigns.next)}
 
   def handle_event("open", %{"id" => id}, socket) do
+    socket = assign(socket, buyer_url: nil, buyer_form: @buyer_form, change_form: nil)
+
     case socket.assigns.open do
-      ^id -> {:noreply, assign(socket, open: nil, buyer_url: nil)}
-      _other -> {:noreply, assign(socket, open: id, buyer_url: nil)}
+      ^id -> {:noreply, assign(socket, open: nil)}
+      _other -> {:noreply, assign(socket, open: id)}
     end
   end
 
+  # The open link's two forms keep what is typed or picked: making a buyer's address must not
+  # reset a change not saved yet, nor the other way round.
+  def handle_event("draft_buyer", params, socket),
+    do: {:noreply, assign(socket, buyer_form: buyer_form(params))}
+
+  def handle_event("draft_link_change", params, socket),
+    do: {:noreply, assign(socket, change_form: change_form(params))}
+
   def handle_event("change", %{"link" => id} = params, socket) do
+    socket = assign(socket, change_form: change_form(params))
+
     attrs =
       %{
         provider: "stripe",
@@ -83,6 +98,7 @@ defmodule ShopWeb.PaymentLinksComponent do
         {:noreply,
          socket
          |> replace(link)
+         |> assign(change_form: nil)
          |> say(
            :info,
            "Link #{if link.active, do: "is on", else: "is off"}, and saved on Stripe."
@@ -94,6 +110,8 @@ defmodule ShopWeb.PaymentLinksComponent do
   end
 
   def handle_event("buyer_url", %{"link" => id} = params, socket) do
+    socket = assign(socket, buyer_form: buyer_form(params))
+
     link = Enum.find(socket.assigns.links, &(&1.id == id))
 
     opts =
@@ -185,6 +203,8 @@ defmodule ShopWeb.PaymentLinksComponent do
         :if={@open == link.id}
         link={link}
         buyer_url={@buyer_url}
+        buyer_form={@buyer_form}
+        change_form={@change_form}
         myself={@myself}
       />
     </section>
@@ -351,6 +371,8 @@ defmodule ShopWeb.PaymentLinksComponent do
 
   attr :link, :map, required: true
   attr :buyer_url, :string, default: nil
+  attr :buyer_form, :map, required: true
+  attr :change_form, :map, default: nil
   attr :myself, :any, required: true
 
   defp link_card(assigns) do
@@ -375,6 +397,8 @@ defmodule ShopWeb.PaymentLinksComponent do
         <p class="text-sm opacity-70">{options(@link)}</p>
 
         <form
+          id={"link-buyer-form-#{@link.id}"}
+          phx-change="draft_buyer"
           phx-submit="buyer_url"
           phx-target={@myself}
           class="rounded-box bg-base-100 p-4"
@@ -388,6 +412,7 @@ defmodule ShopWeb.PaymentLinksComponent do
               <span class="fieldset-legend">Your order or user id</span>
               <input
                 name="reference"
+                value={@buyer_form["reference"]}
                 placeholder="order-42"
                 class="input input-sm"
                 data-testid="link-buyer-reference"
@@ -395,7 +420,13 @@ defmodule ShopWeb.PaymentLinksComponent do
             </label>
             <label class="fieldset">
               <span class="fieldset-legend">Buyer's email</span>
-              <input name="email" type="email" class="input input-sm" data-testid="link-buyer-email" />
+              <input
+                name="email"
+                type="email"
+                value={@buyer_form["email"]}
+                class="input input-sm"
+                data-testid="link-buyer-email"
+              />
             </label>
             <button class="btn btn-sm" data-testid="link-buyer-submit">Make the address</button>
           </div>
@@ -411,6 +442,8 @@ defmodule ShopWeb.PaymentLinksComponent do
         </form>
 
         <form
+          id={"link-change-form-#{@link.id}"}
+          phx-change="draft_link_change"
           phx-submit="change"
           phx-target={@myself}
           class="rounded-box bg-base-100 p-4"
@@ -423,8 +456,12 @@ defmodule ShopWeb.PaymentLinksComponent do
             <label class="fieldset">
               <span class="fieldset-legend">State</span>
               <select name="active" class="select select-sm" data-testid="link-change-active">
-                <option value="true" selected={@link.active}>On</option>
-                <option value="false" selected={!@link.active}>Off</option>
+                <option value="true" selected={changing(@change_form, @link, "active") == "true"}>
+                  On
+                </option>
+                <option value="false" selected={changing(@change_form, @link, "active") == "false"}>
+                  Off
+                </option>
               </select>
             </label>
             <label class="fieldset">
@@ -433,7 +470,7 @@ defmodule ShopWeb.PaymentLinksComponent do
                 name="max_purchases"
                 type="number"
                 min="1"
-                value={@link.max_purchases}
+                value={changing(@change_form, @link, "max_purchases")}
                 class="input input-sm"
                 data-testid="link-change-max"
               />
@@ -442,7 +479,7 @@ defmodule ShopWeb.PaymentLinksComponent do
               <span class="fieldset-legend">Message once off</span>
               <input
                 name="inactive_message"
-                value={@link.inactive_message}
+                value={changing(@change_form, @link, "inactive_message")}
                 class="input input-sm"
                 data-testid="link-change-message"
               />
@@ -460,6 +497,14 @@ defmodule ShopWeb.PaymentLinksComponent do
     </div>
     """
   end
+
+  defp buyer_form(params), do: Map.merge(@buyer_form, Map.take(params, Map.keys(@buyer_form)))
+  defp change_form(params), do: Map.take(params, ~w(active max_purchases inactive_message))
+
+  # A change field as picked since the link was opened, or as the link has it.
+  defp changing(nil, link, "active"), do: to_string(link.active)
+  defp changing(nil, link, field), do: Map.get(link, String.to_existing_atom(field))
+  defp changing(form, _link, field), do: form[field]
 
   defp first_page(socket), do: socket |> assign(links: []) |> page(nil)
 

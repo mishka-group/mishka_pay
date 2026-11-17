@@ -23,6 +23,7 @@ defmodule MishkaPay.Subscription do
       `MishkaPay.cancel_subscription/4`); `:cancel_at`, `:canceled_at`: when it ends, or ended.
     * `:trial_end`: when the trial ends, for one in trial.
     * `:latest_invoice_id`: its newest invoice (`MishkaPay.list_invoices/3` lists them all).
+    * `:schedule_id`: the `MishkaPay.SubscriptionSchedule` that runs it, when one does.
     * `:reference`, `:metadata`: the caller's own id from the checkout, and extra pairs;
       `:owner`: who it is for, as the checkout named them (`MishkaPay.Checkout`).
     * `:created_at`: when the provider made it.
@@ -30,12 +31,13 @@ defmodule MishkaPay.Subscription do
 
   use GuardedStruct
 
-  @statuses "Atom[incomplete::incomplete_expired::trialing::active::past_due::unpaid::paused::canceled]"
+  @statuses ~w(incomplete incomplete_expired trialing active past_due unpaid paused canceled)a
+  @status_enum "Atom[#{Enum.join(@statuses, "::")}]"
 
   guardedstruct authorized_fields: true do
     field :provider, String.t(), enforce: true, derives: "validate(not_nil_value, string)"
     field :id, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
-    field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@statuses})"
+    field :status, atom(), enforce: true, derives: "validate(not_nil_value, enum=#{@status_enum})"
     field :items, list(), structs: MishkaPay.Price, default: []
     field :customer_id, String.t(), derives: "validate(string)"
     field :customer_email, String.t(), derives: "validate(string)"
@@ -47,6 +49,7 @@ defmodule MishkaPay.Subscription do
     field :canceled_at, DateTime.t(), derives: "validate(struct)"
     field :trial_end, DateTime.t(), derives: "validate(struct)"
     field :latest_invoice_id, String.t(), derives: "validate(string)"
+    field :schedule_id, String.t(), derives: "validate(string)"
 
     field :pause_behavior, :void | :keep_as_draft | :mark_uncollectible,
       derives: "validate(enum=Atom[void::keep_as_draft::mark_uncollectible])",
@@ -58,6 +61,13 @@ defmodule MishkaPay.Subscription do
     dynamic_field :metadata
     field :created_at, DateTime.t(), derives: "validate(struct)"
   end
+
+  @doc """
+  Every status a subscription can be in, as `:status` names them: what
+  `MishkaPay.list_subscriptions/3` and `MishkaPay.search_subscriptions/3` filter by.
+  """
+  @spec statuses() :: [atom()]
+  def statuses, do: @statuses
 
   # A provider names the behavior as a string.
   @doc false
