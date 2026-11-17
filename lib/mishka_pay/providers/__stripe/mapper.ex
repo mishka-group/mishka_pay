@@ -2390,7 +2390,22 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
-  defp usage_value(%Decimal{} = value), do: Decimal.to_string(value, :normal)
+  @doc """
+  How long a usage value is as Stripe reads it: `{digits, places}`, its digits without leading
+  zeros and those after the decimal point, of the value as it is sent (trailing zeros after the
+  point dropped).
+  """
+  @spec usage_size(integer() | Decimal.t()) :: {non_neg_integer(), non_neg_integer()}
+  def usage_size(value) do
+    [whole | fraction] = value |> usage_value() |> String.trim_leading("-") |> String.split(".")
+    places = fraction |> Enum.join() |> String.length()
+    {String.length(String.trim_leading(whole, "0")) + places, places}
+  end
+
+  # A decimal goes without the zeros that end its fraction: `1.50` is sent as `1.5`.
+  defp usage_value(%Decimal{} = value),
+    do: value |> Decimal.normalize() |> Decimal.to_string(:normal)
+
   defp usage_value(value), do: Integer.to_string(value)
 
   @doc "The usage with Stripe's answer: its `identifier` as the report's id."

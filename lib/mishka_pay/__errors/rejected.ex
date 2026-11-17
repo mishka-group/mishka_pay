@@ -30,7 +30,10 @@ defmodule MishkaPay.Errors.Rejected do
       made, which only its invoice (voided) or its checkout (expired) can end;
       `"account_invalid"` a connected account (the keys' `:account_id`) the key has no access to,
       or that does not exist; `"connect_not_set_up"` a connected account asked of a platform that
-      has not signed up for Connect.
+      has not signed up for Connect; `"failed_tax_calculation"` a sale whose tax the provider
+      could not count (its tax service failed, not the address);
+      `"dispute_evidence_page_limit_exceeded"` dispute evidence longer than the card network
+      takes.
     * `:message`: its own words, for the log. People see `Exception.message/1` instead, which never
       repeats them (they can name keys and ids).
     * `:request_id`: the provider's id of the request that failed (Stripe's `Request-Id` header,
@@ -89,6 +92,10 @@ defmodule MishkaPay.Errors.Rejected do
 
   def message(%{code: "tax_id_invalid"}), do: Messages.text(:tax_id_invalid)
   def message(%{code: "tax_not_set_up"}), do: Messages.text(:tax_not_set_up)
+  def message(%{code: "failed_tax_calculation"}), do: Messages.text(:tax_calculation_failed)
+
+  def message(%{code: "dispute_evidence_page_limit_exceeded"}),
+    do: Messages.text(:evidence_page_limit)
 
   def message(%{code: "managed_payments_shipping"}),
     do: Messages.text(:managed_payments_shipping)

@@ -2158,8 +2158,27 @@ defmodule MishkaPay.Providers.Stripe do
     identifier = ProviderKit.idempotency_key("usage", usage.tenant, usage.reference)
 
     with :ok <- stripe_id(usage.customer_id, "cus_", :customer_id),
-         :ok <- usage_time(usage.at) do
+         :ok <- usage_time(usage.at),
+         :ok <- usage_digits(usage.value) do
       send_usage(usage, identifier, keys)
+    end
+  end
+
+  # Stripe refuses a value of more than 15 digits, or more than 12 after the decimal point, which
+  # its counting (in doubles) cannot keep exactly; leading zeros are not counted.
+  @usage_digits 15
+  @usage_places 12
+
+  defp usage_digits(value) do
+    case Mapper.usage_size(value) do
+      {digits, places} when digits <= @usage_digits and places <= @usage_places ->
+        :ok
+
+      _too_long ->
+        invalid(
+          :value,
+          Messages.text(:stripe_usage_digits, digits: @usage_digits, places: @usage_places)
+        )
     end
   end
 
@@ -2841,6 +2860,14 @@ defmodule MishkaPay.Providers.Stripe do
   defp answer({:ok, %Req.Response{status: status, body: %{} = body}}) when status in 200..299,
     do: {:ok, body}
 
+  # A tax Stripe could not count can come with a 402 (paying a bill), but no bank declined it.
+  defp answer(
+         {:ok,
+          %Req.Response{status: 402, body: %{"error" => %{"code" => "failed_tax_calculation"}}} =
+            response}
+       ),
+       do: rejected(response)
+
   defp answer({:ok, %Req.Response{status: 402, body: %{"error" => error}} = response}) do
     {:error,
      Errors.Declined.exception(
@@ -2852,8 +2879,15 @@ defmodule MishkaPay.Providers.Stripe do
      )}
   end
 
-  defp answer({:ok, %Req.Response{status: status, body: body} = response}) do
+  defp answer({:ok, %Req.Response{} = response}), do: rejected(response)
+
+  defp answer({:error, _unreachable} = error), do: error
+
+  defp rejected(%Req.Response{status: status, body: body} = response) do
     error = error_of(body)
+
+    limit_reason =
+      response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
 
     {:error,
      Errors.Rejected.exception(
@@ -2864,12 +2898,9 @@ defmodule MishkaPay.Providers.Stripe do
        message: error["message"],
        request_id: request_id(response),
        doc_url: error["doc_url"],
-       rate_limit_reason:
-         response |> Req.Response.get_header("stripe-rate-limited-reason") |> List.first()
+       rate_limit_reason: limit_reason
      )}
   end
-
-  defp answer({:error, _unreachable} = error), do: error
 
   defp error_of(%{"error" => %{} = error}), do: error
   defp error_of(_other), do: %{}

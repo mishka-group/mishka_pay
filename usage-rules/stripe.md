@@ -239,6 +239,11 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Dispute evidence is PDF, JPEG or PNG, up to 5 MB, and its first bytes must match its
   `content_type`; anything else is `Errors.Invalid` before any request. Stripe keeps it 9 months.
 - Stripe takes all of a dispute's files together up to 4.5 MB (and 19 pages for Mastercard).
+- `update_dispute/1` evidence past the card network's page limit (Stripe estimates the pages of
+  the text and files together, and the limit differs by dispute) is `Errors.Rejected` with code
+  `"dispute_evidence_page_limit_exceeded"` and a plain message, whether `submit` is set or not.
+  Mishka Pay cannot count the pages before the request (Stripe's estimate is its own, and it asks
+  integrations not to read the limit from its words): shorten the text or send fewer pages.
 - A file id works in one request only: upload again for another dispute.
 - `MishkaPay.File`'s `:url` needs the secret key. `file_link/4` makes a public
   `https://files.stripe.com/links/...` address; `expires_at:` must be still to come.
@@ -332,7 +337,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   reference makes the idempotency key, and Stripe wants it unique across all transactions. A
   calculation can be recorded for 90 days (`:expires_at`).
 - An account without Stripe Tax turned on answers `Errors.Rejected` with code
-  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`. An account with
+  `"tax_not_set_up"`; an address Stripe cannot place, `"tax_location_invalid"`; a tax Stripe could
+  not count (its own failure; Stripe says to contact its support if it keeps happening),
+  `"failed_tax_calculation"`, never `Errors.Declined` even when paying a bill answers 402. An account with
   it on but with no registration where the buyer is counts a tax of zero.
 - Stripe Tax must be turned on (head office, registrations) before `automatic_tax` counts
   anything: `update_tax_settings/1` sets the head office and defaults, `create_tax_registration/1`
@@ -431,6 +438,11 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
   is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
   corrects usage reported by mistake.
+- Stripe takes a value of at most 15 digits, at most 12 of them after the decimal point (its
+  counting is in doubles). Leading zeros are not counted, and a `Decimal` is sent without the
+  zeros that end its fraction (`1.50` as `1.5`); zeros that end a whole number are counted
+  (`1000000000000000` is 16 digits). Anything longer is `Errors.Invalid` on `:value` before any
+  request, streamed or not.
 - `stream: true` on a report sends it through Stripe's meter event stream (API v2), for high
   volume: up to 10,000 reports a second in live mode (a sandbox takes it too, at the sandbox's
   own limits). Mishka Pay first makes a meter event session (`POST

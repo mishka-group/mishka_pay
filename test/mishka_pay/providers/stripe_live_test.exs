@@ -1672,6 +1672,29 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     refute second == first
     refute_received {:sent, "/v2/billing/meter_event_session", _status}
     assert_received {:sent, "/v2/billing/meter_event_stream", _status}
+
+    # Stripe counts digits as Mishka Pay does: sixteen are refused, zeros that end a whole number
+    # too, and more than twelve after the point. Sent raw, past Mishka Pay's own check.
+    raw = fn value ->
+      MishkaPay.request(%{
+        provider: "stripe",
+        method: :post,
+        path: "/v1/billing/meter_events",
+        params: %{
+          "event_name" => event,
+          "payload" => %{"stripe_customer_id" => customer_id, "value" => value}
+        }
+      })
+    end
+
+    for value <- ["1234567890123456", "1000000000000000", "0.1234567890123"],
+        do: assert({:error, %Errors.Rejected{status: 400}} = raw.(value))
+
+    for value <- ["123456789012345", "123.123456789012", "0012345678901234.5"],
+        do: assert({:ok, %{"identifier" => _}} = raw.(value))
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :value}]}} =
+             MishkaPay.report_usage(%{usage | value: 1_234_567_890_123_456})
   end
 
   test "a meter counts a customer's usage once per reference, a metered price bills it, and the meter is turned off",

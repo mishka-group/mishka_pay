@@ -1114,6 +1114,45 @@ defmodule MishkaPay.Providers.StripeTest do
       end
     end
 
+    test "a tax Stripe could not count and evidence past the page limit are plain rejections" do
+      refuse = fn status, code ->
+        MishkaPay.Test.stub_http(fn conn ->
+          conn
+          |> Plug.Conn.put_status(status)
+          |> Req.Test.json(%{
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => code,
+              "message" => "Stripe's own words about acct_123."
+            }
+          })
+        end)
+      end
+
+      # Paying a bill answers 402 when the tax fails, but no bank declined anything.
+      for status <- [400, 402] do
+        refuse.(status, "failed_tax_calculation")
+
+        assert {:error, %Errors.Rejected{status: ^status, code: "failed_tax_calculation"} = error} =
+                 MishkaPay.calculate_tax(@tax)
+
+        assert Exception.message(error) ==
+                 MishkaPay.Messages.text(:tax_calculation_failed)
+      end
+
+      refuse.(400, "dispute_evidence_page_limit_exceeded")
+
+      assert {:error, %Errors.Rejected{code: "dispute_evidence_page_limit_exceeded"} = error} =
+               MishkaPay.update_dispute(%{
+                 provider: "stripe",
+                 dispute_id: "du_1",
+                 evidence: %{"uncategorized_text" => String.duplicate("a long story ", 500)}
+               })
+
+      assert Exception.message(error) == MishkaPay.Messages.text(:evidence_page_limit)
+      refute Exception.message(error) =~ "acct_"
+    end
+
     test "a tax calculation that cannot be right is refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
       [line, other] = @tax.items
@@ -3333,7 +3372,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok, %MishkaPay.Usage{id: ^identifier}} =
                MishkaPay.report_usage(Map.put(usage, :value, Decimal.new("-3.50")))
 
-      assert_received {:sent, %{"payload[value]" => "-3.50"} = again, [^identifier]}
+      assert_received {:sent, %{"payload[value]" => "-3.5"} = again, [^identifier]}
       refute Map.has_key?(again, "timestamp")
 
       assert {:ok, %MishkaPay.Usage{id: nil, value: 1}} =
@@ -3342,6 +3381,30 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, without, [client_key]}
       refute Map.has_key?(without, "identifier")
       refute client_key == identifier
+
+      # Fifteen digits go, twelve after the point; leading zeros and the zeros that end a
+      # fraction are not counted (Stripe's own counting, checked on a sandbox).
+      for value <- [
+            123_456_789_012_345,
+            "-123456789012345",
+            "123.123456789012",
+            "0012345678901234.5",
+            "1.500000000000000000",
+            "0.000000000001"
+          ] do
+        assert {:ok, %MishkaPay.Usage{}} = MishkaPay.report_usage(Map.put(usage, :value, value))
+        assert_received {:sent, _sent, _key}
+      end
+
+      for value <- [1_000_000_000_000_000, "1234.123456789012", "0.1234567890123"] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :value} = error]}} =
+                 MishkaPay.report_usage(Map.put(usage, :value, value))
+
+        assert error.message ==
+                 MishkaPay.Messages.text(:stripe_usage_digits, digits: 15, places: 12)
+      end
+
+      refute_received {:sent, _sent, _key}
     end
 
     test "a streamed report takes a session token once, then goes as JSON to the meter event stream" do
@@ -3637,6 +3700,10 @@ defmodule MishkaPay.Providers.StripeTest do
             {MishkaPay.report_usage(Map.put(usage, :customer_id, "cs_1")), :customer_id},
             {MishkaPay.report_usage(Map.put(usage, :at, DateTime.add(now, -36, :day))), :at},
             {MishkaPay.report_usage(Map.put(usage, :at, DateTime.add(now, 10, :minute))), :at},
+            {MishkaPay.report_usage(Map.put(usage, :value, 1_234_567_890_123_456)), :value},
+            {MishkaPay.report_usage(
+               Map.merge(usage, %{value: "1234567890.123456", stream: true})
+             ), :value},
             {MishkaPay.usage_summary("stripe", "mtr_1", "cus_1", now, now), :to},
             {MishkaPay.usage_summary("stripe", "evt_1", "cus_1", now, DateTime.add(now, 60)),
              :meter_id},
