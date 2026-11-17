@@ -48,12 +48,15 @@ defmodule ShopWeb.SubscriptionsComponentTest do
     resumes = Date.utc_today() |> Date.add(30) |> Date.to_iso8601()
 
     view |> form(form, %{"behavior" => "keep_as_draft"}) |> render_change()
+    assert has_element?(view, "[data-testid=pause-resumes-at][phx-debounce=blur]")
     view |> form(form, %{"resumes_at" => resumes}) |> render_change()
 
     assert has_element?(
              view,
              "[data-testid=pause-behavior] option[value=keep_as_draft][selected]"
            )
+
+    assert has_element?(view, "[data-testid=pause-resumes-at][value='#{resumes}']")
 
     view |> form(form) |> render_submit()
 

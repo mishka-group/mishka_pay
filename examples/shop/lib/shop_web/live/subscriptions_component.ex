@@ -7,6 +7,9 @@ defmodule ShopWeb.SubscriptionsComponent do
   `ShopWeb.SubscriptionFinderComponent` lists and searches Stripe's own subscriptions; "Open" on
   one keeps it here. The page sends it each changed subscription (`changed`) and a subscription to
   open (`open`).
+
+  The pause form's date reports its value when it is left (`phx-debounce="blur"`), so a
+  re-render never lands in the middle of typing it.
   """
 
   use ShopWeb, :live_component
@@ -689,6 +692,7 @@ defmodule ShopWeb.SubscriptionsComponent do
               <input
                 name="resumes_at"
                 type="date"
+                phx-debounce="blur"
                 value={@pause_form["resumes_at"]}
                 class="input input-sm"
                 data-testid="pause-resumes-at"

@@ -10,6 +10,10 @@ defmodule ShopWeb.SubscriptionScheduleComponent do
   (`MishkaPay.cancel_subscription_schedule/4`: the subscription ends now).
 
   Nothing is read until asked: "Show the schedule" reads it in the background.
+
+  The date field reports its value when it is left (`phx-debounce="blur"`), not on each key: a
+  browser's date field answers each key with a whole date, and a re-render of that half-typed
+  date would mix it with the next keys.
   """
 
   use ShopWeb, :live_component
@@ -170,6 +174,7 @@ defmodule ShopWeb.SubscriptionScheduleComponent do
           <input
             type="date"
             name="date"
+            phx-debounce="blur"
             value={@form["date"]}
             class="input input-sm"
             data-testid="schedule-date"

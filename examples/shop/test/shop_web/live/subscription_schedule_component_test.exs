@@ -145,6 +145,23 @@ defmodule ShopWeb.SubscriptionScheduleComponentTest do
                      %{"phases" => %{"1" => %{"items" => %{"0" => %{"price" => "price_team"}}}}}}
   end
 
+  test "the date is sent once it is left, not on each key, and stays through other changes",
+       %{conn: conn} do
+    team_plan()
+    StripeRoutes.stub(%{{"GET", "/v1/subscriptions/sub_ada"} => subscription(nil)})
+
+    view = open_subscription(conn)
+    view |> element("[data-testid=schedule-open]") |> render_click()
+    form = "[data-testid=schedule-form]"
+    date = Date.utc_today() |> Date.add(10) |> Date.to_iso8601()
+
+    assert has_element?(view, "[data-testid=schedule-date][phx-debounce=blur]")
+
+    view |> form(form, %{"date" => date}) |> render_change()
+    view |> form(form, %{"price_id" => "price_team"}) |> render_change()
+    assert has_element?(view, "[data-testid=schedule-date][value='#{date}']")
+  end
+
   test "a date gone by or no periods is refused before Stripe is asked", %{conn: conn} do
     team_plan()
     StripeRoutes.stub(%{{"GET", "/v1/subscriptions/sub_ada"} => subscription(nil)})
