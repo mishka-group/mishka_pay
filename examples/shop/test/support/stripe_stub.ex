@@ -37,10 +37,12 @@ defmodule ShopWeb.StripeStub do
      %{"error" => %{"type" => "invalid_request_error", "message" => message, "code" => code}}}
   end
 
-  # A form body as params; a file upload (multipart) only by its parts' names.
+  # A form body as params, an API v2 JSON body as its map; a file upload (multipart) only by its
+  # parts' names.
   defp form(conn, body) do
     case Plug.Conn.get_req_header(conn, "content-type") do
       ["application/x-www-form-urlencoded" <> _rest] -> Plug.Conn.Query.decode(body)
+      ["application/json" <> _rest] -> JSON.decode!(body)
       ["multipart/form-data" <> _rest] -> %{"multipart" => body}
       _other -> %{}
     end

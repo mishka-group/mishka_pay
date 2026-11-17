@@ -80,12 +80,14 @@ defmodule MishkaPay.Support.StripeMock do
 
   @doc """
   A `MishkaPay.Test.stub_http/1` plug for the tests against a real test account: it forwards an
-  upload to `https://files.stripe.com`, the host it was made for, and anything else to
+  upload to `https://files.stripe.com` and a meter event stream report to
+  `https://meter-events.stripe.com`, the hosts they were made for, and anything else to
   `https://api.stripe.com`.
   """
   @spec forward_live(Plug.Conn.t()) :: Plug.Conn.t()
-  def forward_live(%Plug.Conn{host: "files.stripe.com"} = conn),
-    do: forward(conn, "https://files.stripe.com")
+  def forward_live(%Plug.Conn{host: host} = conn)
+      when host in ["files.stripe.com", "meter-events.stripe.com"],
+      do: forward(conn, "https://" <> host)
 
   def forward_live(conn), do: forward(conn, "https://api.stripe.com")
 

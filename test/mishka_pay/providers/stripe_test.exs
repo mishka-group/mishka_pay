@@ -3344,6 +3344,125 @@ defmodule MishkaPay.Providers.StripeTest do
       refute client_key == identifier
     end
 
+    test "a streamed report takes a session token once, then goes as JSON to the meter event stream" do
+      test_pid = self()
+      secret = "sk_test_stream_#{System.unique_integer([:positive])}"
+      MishkaPay.Test.put_keys("stripe", %{secret_key: secret, account_id: "acct_seller"})
+      expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        headers = Map.new(conn.req_headers)
+        send(test_pid, {:sent, conn.host, conn.request_path, headers, JSON.decode!(body)})
+
+        case conn.request_path do
+          "/v2/billing/meter_event_session" ->
+            Req.Test.json(conn, %{
+              "object" => "v2.billing.meter_event_session",
+              "authentication_token" => "token_#{System.unique_integer([:positive])}",
+              "expires_at" => expires
+            })
+
+          "/v2/billing/meter_event_stream" ->
+            Req.Test.json(conn, %{})
+        end
+      end)
+
+      at = DateTime.utc_now() |> DateTime.add(-3600) |> DateTime.truncate(:second)
+
+      usage = %{
+        provider: "stripe",
+        event_name: "tokens",
+        customer_id: "cus_1",
+        value: Decimal.new("2.5"),
+        at: at,
+        reference: "r-stream",
+        stream: true
+      }
+
+      assert {:ok, %MishkaPay.Usage{id: identifier, stream: true}} =
+               MishkaPay.report_usage(usage)
+
+      assert_received {:sent, "api.stripe.com", "/v2/billing/meter_event_session", session, %{}}
+      assert session["authorization"] == "Bearer " <> secret
+      assert session["stripe-version"] == Stripe.version()
+      assert session["stripe-context"] == "acct_seller"
+      refute Map.has_key?(session, "stripe-account")
+
+      assert_received {:sent, "meter-events.stripe.com", "/v2/billing/meter_event_stream",
+                       %{"authorization" => "Bearer token_" <> token} = stream,
+                       %{"events" => [event]}}
+
+      assert stream["stripe-version"] == Stripe.version()
+      assert stream["idempotency-key"] == identifier
+      assert stream["content-type"] =~ "application/json"
+
+      assert event == %{
+               "event_name" => "tokens",
+               "identifier" => identifier,
+               "payload" => %{"stripe_customer_id" => "cus_1", "value" => "2.5"},
+               "timestamp" => DateTime.to_iso8601(at)
+             }
+
+      # The token is kept; a report without a reference gets an identifier of its own.
+      assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _ = own}} =
+               MishkaPay.report_usage(Map.drop(usage, [:reference, :at]))
+
+      refute own == identifier
+      refute_received {:sent, _host, "/v2/billing/meter_event_session", _headers, _body}
+
+      assert_received {:sent, _host, "/v2/billing/meter_event_stream",
+                       %{"authorization" => "Bearer token_" <> ^token}, %{"events" => [kept]}}
+
+      assert kept["identifier"] == own
+      refute Map.has_key?(kept, "timestamp")
+    end
+
+    test "a stream token Stripe no longer takes is replaced once; a second refusal is plain" do
+      test_pid = self()
+      secret = "sk_test_expired_#{System.unique_integer([:positive])}"
+      MishkaPay.Test.put_keys("stripe", %{secret_key: secret})
+      expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(test_pid, {:sent, conn.request_path})
+
+        case conn.request_path do
+          "/v2/billing/meter_event_session" ->
+            Req.Test.json(conn, %{"authentication_token" => "token_x", "expires_at" => expires})
+
+          "/v2/billing/meter_event_stream" ->
+            conn
+            |> Plug.Conn.put_status(401)
+            |> Req.Test.json(%{
+              "error" => %{
+                "type" => "invalid_request_error",
+                "code" => "billing_meter_event_session_expired",
+                "message" => "The temporary session token has expired."
+              }
+            })
+        end
+      end)
+
+      usage = %{provider: "stripe", event_name: "tokens", customer_id: "cus_1", stream: true}
+
+      assert {:error,
+              %Errors.Rejected{status: 401, code: "billing_meter_event_session_expired"} = error} =
+               MishkaPay.report_usage(usage)
+
+      refute Exception.message(error) =~ "temporary session token"
+
+      for path <- [
+            "/v2/billing/meter_event_session",
+            "/v2/billing/meter_event_stream",
+            "/v2/billing/meter_event_session",
+            "/v2/billing/meter_event_stream"
+          ],
+          do: assert_received({:sent, ^path})
+
+      refute_received {:sent, _path}
+    end
+
     test "a usage window goes to Stripe in whole minutes, and an empty one counts 0" do
       test_pid = self()
 

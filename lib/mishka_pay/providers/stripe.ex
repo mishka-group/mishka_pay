@@ -111,7 +111,10 @@ defmodule MishkaPay.Providers.Stripe do
       report's reference makes its `identifier`; Stripe takes reports from the last 35 days and
       up to 5 minutes ahead, and counts summaries from and to whole minutes. A cancel is a meter
       event adjustment (`type: cancel`) of one identifier, within 24 hours of the report; the
-      identifier makes its idempotency key.
+      identifier makes its idempotency key. A report with `stream: true` goes through the API v2
+      meter event stream instead: a meter event session's token, kept in
+      `MishkaPay.Helpers.TokenCache` until shortly before it runs out, then the report as JSON to
+      `meter-events.stripe.com`, which Stripe checks after it answers.
     * `create_feature/2`, `attach_feature/3` and `list_entitlements/2` use Entitlements: features
       (`feat_...`) on products, and the active entitlements of a customer.
     * `fetch_fraud_warning/2` and `list_fraud_warnings/2` read Radar's early fraud warnings
@@ -177,7 +180,9 @@ defmodule MishkaPay.Providers.Stripe do
 
   `config :mishka_pay, MishkaPay.Providers.Stripe, base_url: "http://localhost:12111"` points it at
   another address, such as Stripe's own mock server in tests. Uploads go to `files_url` when it is
-  set, else to `base_url` when that is set, else to `https://files.stripe.com`.
+  set, else to `base_url` when that is set, else to `https://files.stripe.com`; streamed usage
+  reports (`stream: true`) to `meter_events_url` the same way, else to
+  `https://meter-events.stripe.com`.
   """
 
   use MishkaPay.Provider,
@@ -246,6 +251,7 @@ defmodule MishkaPay.Providers.Stripe do
     SubscriptionSchedule
   }
 
+  alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.Stripe.Mapper
 
   @version "2026-10-28.endive"
@@ -256,6 +262,7 @@ defmodule MishkaPay.Providers.Stripe do
   @reference "mishka_pay_reference"
   @base_url "https://api.stripe.com"
   @files_url "https://files.stripe.com"
+  @meter_events_url "https://meter-events.stripe.com"
 
   # What Stripe takes for each purpose of a file: its most bytes and its types, with the first
   # bytes of each type (docs.stripe.com/file-upload).
@@ -2151,8 +2158,16 @@ defmodule MishkaPay.Providers.Stripe do
     identifier = ProviderKit.idempotency_key("usage", usage.tenant, usage.reference)
 
     with :ok <- stripe_id(usage.customer_id, "cus_", :customer_id),
-         :ok <- usage_time(usage.at),
-         {:ok, answer} <-
+         :ok <- usage_time(usage.at) do
+      send_usage(usage, identifier, keys)
+    end
+  end
+
+  defp send_usage(%MishkaPay.Usage{stream: true} = usage, identifier, keys),
+    do: stream_usage(usage, identifier || new_identifier(), keys, 1)
+
+  defp send_usage(usage, identifier, keys) do
+    with {:ok, answer} <-
            request(
              :post,
              "/v1/billing/meter_events",
@@ -2163,6 +2178,108 @@ defmodule MishkaPay.Providers.Stripe do
       {:ok, Mapper.usage(answer, usage)}
     end
   end
+
+  defp new_identifier,
+    do: "mishka_pay-usage-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+
+  # Stripe's meter event stream (API v2): a session token, kept until shortly before it runs out,
+  # then the report as JSON to `meter-events.stripe.com`. Stripe checks it after it answers, so
+  # the answer has no identifier: the report's own is its id, made here when there is no
+  # reference. A token Stripe no longer takes (401) is dropped and the report sent once more
+  # with a new one.
+  defp stream_usage(usage, identifier, keys, tries_left) do
+    with {:ok, token} <- meter_session(keys) do
+      case v2_request(
+             :post,
+             meter_events_url(),
+             "/v2/billing/meter_event_stream",
+             %{"events" => [Mapper.usage_event(usage, identifier)]},
+             token,
+             key: identifier
+           ) do
+        {:ok, _accepted} ->
+          {:ok, %{usage | id: identifier}}
+
+        {:error, %Errors.Rejected{status: 401}} when tries_left > 0 ->
+          TokenCache.drop(meter_session_key(keys))
+          stream_usage(usage, identifier, keys, tries_left - 1)
+
+        {:error, _refused} = error ->
+          error
+      end
+    end
+  end
+
+  # One session per secret key and connected account; the key itself is never kept, only its hash.
+  defp meter_session(keys) do
+    TokenCache.get(meter_session_key(keys), fn ->
+      with :ok <- maybe_id(Map.get(keys, :account_id), "acct_", :account_id),
+           {:ok, session} <-
+             v2_request(
+               :post,
+               base_url(false),
+               "/v2/billing/meter_event_session",
+               %{},
+               keys.secret_key,
+               account_id: Map.get(keys, :account_id)
+             ) do
+        session_token(session)
+      end
+    end)
+  end
+
+  defp meter_session_key(keys),
+    do:
+      {:stripe_meter_session, :crypto.hash(:sha256, keys.secret_key), Map.get(keys, :account_id)}
+
+  defp session_token(%{"authentication_token" => token, "expires_at" => expires_at})
+       when is_binary(token) do
+    case DateTime.from_iso8601(to_string(expires_at)) do
+      {:ok, at, _offset} -> {:ok, token, max(DateTime.diff(at, DateTime.utc_now()), 1)}
+      _unreadable -> {:ok, token, 60}
+    end
+  end
+
+  defp session_token(_other),
+    do: {:error, Errors.Rejected.exception(provider: "stripe", code: "meter_session_unreadable")}
+
+  defp meter_events_url do
+    config = Application.get_env(:mishka_pay, __MODULE__, [])
+    config[:meter_events_url] || Keyword.get(config, :base_url, @meter_events_url)
+  end
+
+  # A request to Stripe's API v2: a JSON body, the pinned `Stripe-Version`, and a connected
+  # account in `Stripe-Context` (API v2's name for `Stripe-Account`). Its errors have the same
+  # shape as v1's, so they are read the same way.
+  defp v2_request(method, base_url, path, body, bearer, opts) do
+    headers =
+      case opts[:account_id] do
+        nil -> %{"stripe-version" => @version}
+        account_id -> %{"stripe-version" => @version, "stripe-context" => account_id}
+      end
+
+    %{
+      provider: "stripe",
+      method: method,
+      base_url: base_url,
+      path: path,
+      auth: {:bearer, bearer},
+      headers: headers,
+      json: body,
+      idempotency_header: "idempotency-key",
+      idempotency_key: opts[:key],
+      retry_header: "stripe-should-retry",
+      limit_header: "stripe-rate-limited-reason"
+    }
+    |> Client.request()
+    |> v2_answer()
+  end
+
+  # The stream answers an empty object, or no body at all.
+  defp v2_answer({:ok, %Req.Response{status: status, body: body}}) when status in 200..299,
+    do: {:ok, (is_map(body) && body) || %{}}
+
+  defp v2_answer(other), do: answer(other)
 
   # Stripe takes usage from the last 35 days, and up to 5 minutes ahead for clocks that drift.
   defp usage_time(nil), do: :ok

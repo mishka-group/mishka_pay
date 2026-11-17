@@ -50,6 +50,14 @@ defmodule ShopWeb.UsageTest do
         send(test, {:reported, payload})
         %{"identifier" => params["identifier"], "event_name" => "api_call"}
 
+      "POST", "/v2/billing/meter_event_session", _params ->
+        expires = DateTime.utc_now() |> DateTime.add(900) |> DateTime.to_iso8601()
+        %{"authentication_token" => "token_shop", "expires_at" => expires}
+
+      "POST", "/v2/billing/meter_event_stream", %{"events" => [event]} ->
+        send(test, {:streamed, event})
+        %{}
+
       "GET", "/v1/billing/meters/mtr_1/event_summaries", %{"customer" => "cus_1"} ->
         StripeStub.list([
           %{"aggregated_value" => 7, "start_time" => 1_790_000_000, "end_time" => 1_790_003_600}
@@ -115,6 +123,30 @@ defmodule ShopWeb.UsageTest do
     assert_received {:cancelled, "api_call", "mishka_pay-usage-" <> _}
     assert has_element?(view, "[data-testid=usage-cancel-status]", "pending")
     refute has_element?(view, "[data-testid=usage-cancel]")
+  end
+
+  test "a high-volume report goes through Stripe's meter event stream", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    view
+    |> form("[data-testid=usage-report-form]", %{
+      event_name: "api_call",
+      customer_id: "cus_1",
+      value: "4",
+      reference: "use-stream",
+      stream: "true"
+    })
+    |> render_submit()
+
+    assert_received {:streamed,
+                     %{
+                       "event_name" => "api_call",
+                       "identifier" => "mishka_pay-usage-" <> _,
+                       "payload" => %{"stripe_customer_id" => "cus_1", "value" => "4"}
+                     }}
+
+    refute_received {:reported, _payload}
+    assert has_element?(view, "[data-testid=usage-reported]", "cus_1")
   end
 
   test "reports usage, reads the summary, and makes a metered price", %{conn: conn} do

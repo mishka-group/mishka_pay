@@ -431,6 +431,20 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe takes a report's `:at` within the last 35 days and up to 5 minutes ahead; anything else
   is `Errors.Invalid` on `:at` before any request. A value may have decimals, and a negative one
   corrects usage reported by mistake.
+- `stream: true` on a report sends it through Stripe's meter event stream (API v2), for high
+  volume: up to 10,000 reports a second in live mode (a sandbox takes it too, at the sandbox's
+  own limits). Mishka Pay first makes a meter event session (`POST
+  /v2/billing/meter_event_session` with the secret key) and keeps its token in
+  `MishkaPay.Helpers.TokenCache` until a minute before it runs out (Stripe's tokens last 15
+  minutes), then posts the report as JSON to
+  `https://meter-events.stripe.com/v2/billing/meter_event_stream` with that token. A token Stripe
+  no longer takes (401) is dropped and the report sent once more with a new one. A site acting
+  for a connected account sends it as `Stripe-Context` (API v2's `Stripe-Account`).
+- A streamed report is checked by Stripe after it answers: a wrong customer or event name is not
+  an error in the answer but a `v1.billing.meter.error_report_triggered` thin event later. Its
+  `:id` is its identifier (the reference's, or one Mishka Pay makes), so `cancel_usage/1` takes
+  it like any other. Without `stream:` a report goes to `POST /v1/billing/meter_events`, which
+  checks it before answering.
 - `cancel_usage/1` is a meter event adjustment (`POST /v1/billing/meter_event_adjustments`,
   `type: cancel`) of the report's identifier (the `MishkaPay.Usage`'s `:id`), within 24 hours of
   the report; its idempotency key comes from the event name and identifier, so it cancels once.

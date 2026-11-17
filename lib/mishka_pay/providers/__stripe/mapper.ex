@@ -2373,6 +2373,23 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
+  @doc """
+  One event of `POST /v2/billing/meter_event_stream` (JSON): the customer and the value in its
+  payload, its `identifier`, and when it happened as an ISO 8601 time.
+  """
+  @spec usage_event(MishkaPay.Usage.t(), String.t()) :: map()
+  def usage_event(usage, identifier) do
+    reject_nil(%{
+      "event_name" => usage.event_name,
+      "identifier" => identifier,
+      "payload" => %{
+        "stripe_customer_id" => usage.customer_id,
+        "value" => usage_value(usage.value)
+      },
+      "timestamp" => usage.at && DateTime.to_iso8601(usage.at)
+    })
+  end
+
   defp usage_value(%Decimal{} = value), do: Decimal.to_string(value, :normal)
   defp usage_value(value), do: Integer.to_string(value)
 

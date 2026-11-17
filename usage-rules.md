@@ -153,7 +153,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_payment_link(attrs)`, `fetch_payment_link/3`, `update_payment_link/1`, `list_payment_links/3` | `%MishkaPay.PaymentLink{url: url}` |
 | `MishkaPay.create_meter(attrs)` (`MishkaPay.Meter`), `fetch_meter/3`, `update_meter(%{provider:, id:, name:})`, `list_meters(provider, tenant, status: :active)`, `deactivate_meter/3`, `reactivate_meter/3` | `%MishkaPay.Meter{}` that counts usage; a provider never deletes one, and only its name changes |
 | `MishkaPay.create_price(%{..., interval: :month, meter_id: id})` | a `%MishkaPay.Price{}` billed by the usage its meter counted |
-| `MishkaPay.report_usage(attrs)` (`MishkaPay.Usage`: `:event_name`, `:customer_id`, `:value`, `:at`, `:reference`) | `%MishkaPay.Usage{id: id}`; the same reference never counts twice |
+| `MishkaPay.report_usage(attrs)` (`MishkaPay.Usage`: `:event_name`, `:customer_id`, `:value`, `:at`, `:reference`, `:stream`) | `%MishkaPay.Usage{id: id}`; the same reference never counts twice; `stream: true` sends it through the provider's high-volume path (Stripe's meter event stream) |
 | `MishkaPay.cancel_usage(%{provider:, tenant:, event_name:, usage_id: usage.id})` (`MishkaPay.UsageCancellation`) | `%MishkaPay.UsageCancellation{status: :pending \| :complete}`: a report sent by mistake taken out of the count, once |
 | `MishkaPay.usage_summary(provider, meter_id, customer_id, from, to, tenant)` | `%MishkaPay.UsageSummary{value: n}`: what the meter counted in the window |
 | `MishkaPay.create_feature(attrs)` (`MishkaPay.Feature`), `attach_feature(provider, product_id, feature_id, tenant)` | `%MishkaPay.Feature{}`; a buyer of the product is entitled to it |

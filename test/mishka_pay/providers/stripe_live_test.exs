@@ -1622,6 +1622,58 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   defp archive(key, %MishkaPay.Product{id: id}),
     do: cleanup(key, &Stripe.update_product(%MishkaPay.Product{id: id, active: false}, &1))
 
+  test "a report sent through Stripe's meter event stream takes a session token first",
+       %{key: key} do
+    run = run_id()
+    event = "mishka_pay_stream_#{run}"
+
+    {:ok, %MishkaPay.Meter{id: meter_id}} =
+      MishkaPay.create_meter(%{provider: "stripe", name: "Stream #{run}", event_name: event})
+
+    {:ok, %MishkaPay.Customer{id: customer_id}} =
+      MishkaPay.create_customer(%{provider: "stripe", email: "stream-#{run}@example.com"})
+
+    on_exit(fn ->
+      cleanup(key, &Stripe.deactivate_meter(meter_id, &1))
+      cleanup(key, &delete_customer(customer_id, &1))
+    end)
+
+    usage = %{
+      provider: "stripe",
+      event_name: event,
+      customer_id: customer_id,
+      value: 2,
+      reference: "stream-#{run}",
+      stream: true
+    }
+
+    test = self()
+    handler = "stream-#{run}"
+
+    :telemetry.attach(
+      handler,
+      [:mishka_pay, :request, :stop],
+      fn _event, _measure, meta, _config -> send(test, {:sent, meta.path, meta.status}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, %MishkaPay.Usage{id: "mishka_pay-usage-" <> _ = first}} =
+             MishkaPay.report_usage(usage)
+
+    assert_received {:sent, "/v2/billing/meter_event_session", 200}
+    assert_received {:sent, "/v2/billing/meter_event_stream", status} when status in 200..299
+
+    # The session's token is kept: the next report goes straight to the stream.
+    assert {:ok, %MishkaPay.Usage{id: second}} =
+             MishkaPay.report_usage(%{usage | reference: nil, value: "0.5"})
+
+    refute second == first
+    refute_received {:sent, "/v2/billing/meter_event_session", _status}
+    assert_received {:sent, "/v2/billing/meter_event_stream", _status}
+  end
+
   test "a meter counts a customer's usage once per reference, a metered price bills it, and the meter is turned off",
        %{key: key} do
     run = run_id()
