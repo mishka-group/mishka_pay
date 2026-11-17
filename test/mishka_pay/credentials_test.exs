@@ -88,6 +88,33 @@ defmodule MishkaPay.CredentialsTest do
              Credentials.fetch("acme", "site-a")
   end
 
+  test "older webhook secrets are kept beside the current one, checked and never shown" do
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a"})
+    assert {:ok, %{webhook_secrets: []} = keys} = Credentials.fetch("acme", "site-a")
+    assert Credentials.webhook_secrets(keys) == []
+
+    MishkaPay.Test.put_keys("acme", %{
+      secret_key: "sk_test_a",
+      webhook_secret: "whsec_new",
+      webhook_secrets: [" whsec_old ", "whsec_new"]
+    })
+
+    assert {:ok, keys} = Credentials.fetch("acme", "site-a")
+    assert Credentials.webhook_secrets(keys) == ["whsec_new", "whsec_old"]
+    refute inspect(keys) =~ "whsec"
+
+    MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a", webhook_secrets: ["whsec_old"]})
+    assert {:ok, keys} = Credentials.fetch("acme", "site-a")
+    assert Credentials.webhook_secrets(keys) == ["whsec_old"]
+
+    for bad <- [["whsec_old", ""], ["whsec_old", 42], "whsec_old"] do
+      MishkaPay.Test.put_keys("acme", %{secret_key: "sk_test_a", webhook_secrets: bad})
+
+      assert {:error, %Errors.Invalid{errors: [%Validation{field: :webhook_secrets}]}} =
+               Credentials.fetch("acme", "site-a")
+    end
+  end
+
   defp watch_fetches,
     do: :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :credentials, :stop]])
 

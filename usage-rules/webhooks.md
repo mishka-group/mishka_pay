@@ -13,6 +13,15 @@ plug Plug.Parsers, ...
 - Mounted with `forward` after the parsers instead, keep the raw body with
   `body_reader: {MishkaPay.Webhook, :read_body, ["/pay/webhooks"]}` in `Plug.Parsers`.
 - The tenant's keys answer the `webhook_secret` (Stripe: `whsec_...`; PayPal: the webhook id).
+- Rolling a Stripe secret: Stripe keeps signing with the old one for a while (up to a day). Put
+  the new secret in `webhook_secret` and the old one in `webhook_secrets` (a list); a message
+  passes when any of them verifies it, each compared in constant time. Drop the old one when the
+  window ends. PayPal has no shared secret and ignores `webhook_secrets`.
+
+  ```elixir
+  %{secret_key: key, webhook_secret: s.stripe_webhook_secret,
+    webhook_secrets: List.wrap(s.stripe_webhook_secret_old)}
+  ```
 
 ## What it answers
 

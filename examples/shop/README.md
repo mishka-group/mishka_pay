@@ -97,6 +97,11 @@ export STRIPE_WEBHOOK_SECRET=whsec_...   # the secret `stripe listen` prints
 
 `demo` is the site (tenant) the shop runs as; each site of a multi-site project has its own URL.
 
+After rolling the endpoint's secret in Stripe, put the new one in `STRIPE_WEBHOOK_SECRET` and the
+old one in `STRIPE_WEBHOOK_SECRET_OLD` (several with commas) until Stripe stops signing with it:
+both are accepted. The Site card says how many older secrets are still taken, and the simulator's
+"Signed with the secret before a roll" shows one passing.
+
 ## Where to look
 
 - `lib/shop/pay/`: the Ash resources (`Payment`, `WebhookEvent`, `Setting`), the plugins

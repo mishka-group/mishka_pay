@@ -73,6 +73,7 @@ defmodule MishkaPay.Messages do
           | :shipping_days
           | :managed_payments_shipping
           | :shipping_countries
+          | :webhook_secrets
           | :stripe_shipping_five
           | :one_time_only
           | :recurring_only
@@ -382,6 +383,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The fewest days of a delivery estimate must not be more than the most days"
+      )
+
+  defp msgid(:webhook_secrets),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The webhook_secrets field must be a list of secrets, none of them empty"
       )
 
   defp msgid(:shipping_countries),

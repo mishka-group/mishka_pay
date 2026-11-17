@@ -34,6 +34,12 @@ defmodule MishkaPay.Credentials do
     * `:automatic_tax`: `true` has the provider count the tax of this tenant's checkouts and
       payment links from the buyer's address (Stripe Tax); a checkout's own `:automatic_tax` still
       wins.
+    * `:webhook_secrets`: other webhook secrets still accepted beside `:webhook_secret`, while a
+      rolled secret runs out. Stripe keeps signing with the old secret for a while after a roll
+      (up to a day), so a site lists the old one here and puts the new one in
+      `:webhook_secret`; a message passes when any of them verifies it. Drop the old one once
+      Stripe stops using it. Only for providers that check a shared secret (Stripe); PayPal checks
+      its messages by `:webhook_secret`, the webhook id, alone.
     * `:refunds`: how this tenant refunds a payment. `:once` (the default): one refund, whole or
       in part, and a buyer who wants it again makes a new purchase. `:many`: part refunds until
       the payment is used up, as the provider itself allows; each refund then needs its own
@@ -81,6 +87,12 @@ defmodule MishkaPay.Credentials do
       validator: {__MODULE__, :refunds}
 
     field :webhook_secret, String.t(), derives: "sanitize(trim) validate(string)"
+
+    field :webhook_secrets, [String.t()],
+      default: [],
+      derives: "validate(list)",
+      validator: {__MODULE__, :secret_list}
+
     dynamic_field :extra
   end
 
@@ -196,6 +208,28 @@ defmodule MishkaPay.Credentials do
        ]}
     )
   end
+
+  @doc """
+  Every webhook secret `keys` accept: `:webhook_secret` first, then `:webhook_secrets`, each once,
+  without empty ones. `[]` when the keys have none.
+  """
+  @spec webhook_secrets(t()) :: [String.t()]
+  def webhook_secrets(%__MODULE__{webhook_secret: secret, webhook_secrets: secrets}),
+    do: [secret | secrets] |> Enum.reject(&(&1 in [nil, ""])) |> Enum.uniq()
+
+  @doc false
+  def secret_list(field, nil), do: {:ok, field, []}
+
+  def secret_list(field, secrets) when is_list(secrets) do
+    trimmed = Enum.map(secrets, &(is_binary(&1) && String.trim(&1)))
+
+    case Enum.all?(trimmed, &(is_binary(&1) and &1 != "")) do
+      true -> {:ok, field, trimmed}
+      false -> {:error, field, MishkaPay.Messages.text(:webhook_secrets)}
+    end
+  end
+
+  def secret_list(field, _other), do: {:error, field, MishkaPay.Messages.text(:webhook_secrets)}
 
   # A plugin that reads its keys from JSON or settings answers the mode as a string.
   @doc false

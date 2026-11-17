@@ -69,8 +69,12 @@ defmodule MishkaPay.Check do
     end
   end
 
-  defp secret(%{webhook_secret: secret}) when is_binary(secret) and secret != "", do: :ok
-  defp secret(_keys), do: {:error, "the keys have no webhook_secret: webhooks cannot be checked"}
+  defp secret(keys) do
+    case Credentials.webhook_secrets(keys) do
+      [] -> {:error, "the keys have no webhook_secret: webhooks cannot be checked"}
+      _secrets -> :ok
+    end
+  end
 
   defp endpoint(_provider, _tenant, nil), do: []
 

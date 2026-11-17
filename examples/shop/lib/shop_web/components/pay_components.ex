@@ -115,6 +115,13 @@ defmodule ShopWeb.PayComponents do
             <dt class="opacity-70">Webhook secret</dt>
             <dd data-testid="site-webhook-secret">
               {if @local_webhook_secret?, do: "the simulator's own", else: "from stripe listen"}
+              <span
+                :if={@keys.webhook_secrets != []}
+                class="block text-xs opacity-70"
+                data-testid="site-webhook-old-secrets"
+              >
+                + {length(@keys.webhook_secrets)} from before a roll, still accepted
+              </span>
             </dd>
             <dt class="opacity-70">Refunds</dt>
             <dd data-testid="site-refunds">{@keys.refunds}</dd>
@@ -1073,6 +1080,10 @@ defmodule ShopWeb.PayComponents do
   defp simulated_meaning(:good),
     do:
       "Stored once in the inbox and worked as a job: the row shows processed, or the error once its tries run out."
+
+  defp simulated_meaning(:rolled_secret),
+    do:
+      "Taken: after a roll Stripe signs with the old secret for a while, and the site still lists it (webhook_secrets)."
 
   defp simulated_meaning(:bad_signature),
     do: "Refused and never stored: the signature does not match the site's secret."

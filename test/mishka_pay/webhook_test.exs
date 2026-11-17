@@ -114,6 +114,42 @@ defmodule MishkaPay.WebhookTest do
     assert post("/pay/webhooks/stripe/site-a", body, both).status == 200
   end
 
+  test "after a roll, a message signed with the old secret or the new one passes; with neither it is refused",
+       %{ref: ref} do
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_a", webhook_secret: "whsec_new", webhook_secrets: ["whsec_old"]},
+      "site-a"
+    )
+
+    body = payload()
+
+    for secret <- ["whsec_old", "whsec_new"] do
+      assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: secret)).status == 200
+      assert_received {:webhook_event, %Event{id: "evt_123"}}
+    end
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: @secret)).status == 400
+    assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, %{status: 400, outcome: :mismatch}}
+    refute_received {:webhook_event, _event}
+  end
+
+  test "keys with only older secrets still check messages, and keys with none refuse them" do
+    body = payload()
+
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: "sk_test_a", webhook_secrets: ["whsec_old"]},
+      "site-a"
+    )
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: "whsec_old")).status ==
+             200
+
+    MishkaPay.Test.put_keys("stripe", %{secret_key: "sk_test_a"}, "site-a")
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 400
+  end
+
   test "a listener that cannot take the event makes Stripe send it again", %{ref: ref} do
     body = payload(%{"type" => "listener.fails"})
 

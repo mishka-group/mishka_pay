@@ -72,8 +72,9 @@ defmodule MishkaPay.Providers.Stripe do
       (`cbtxn_...`): below zero is credit.
 
     * `verify_webhook/3` checks the `Stripe-Signature` header: an HMAC-SHA256 of
-      `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, compared in constant time
-      with every `v1` signature in it, signed within the last five minutes
+      `"<timestamp>.<raw body>"` with the tenant's `webhook_secret`, or any of its
+      `webhook_secrets` while a rolled secret runs out, compared in constant time with every
+      `v1` signature in it, signed within the last five minutes
       (`config :mishka_pay, MishkaPay.Providers.Stripe, webhook_tolerance: seconds`), and from the
       same mode (live or test) as the tenant's keys.
 
@@ -1461,11 +1462,11 @@ defmodule MishkaPay.Providers.Stripe do
 
   @impl MishkaPay.Provider
   def verify_webhook(payload, headers, keys) when is_binary(payload) do
-    with {:ok, secret} <- webhook_secret(keys),
+    with {:ok, secrets} <- webhook_secrets(keys),
          {:ok, header} <- signature_header(headers),
          {:ok, timestamp, signatures} <- parse_signature(header),
          :ok <- fresh(timestamp),
-         :ok <- signed(payload, timestamp, signatures, secret),
+         :ok <- signed(payload, timestamp, signatures, secrets),
          {:ok, %{} = event} <- decode(payload),
          :ok <- same_mode(event, keys) do
       Mapper.event(event)
@@ -1484,17 +1485,20 @@ defmodule MishkaPay.Providers.Stripe do
       |> :crypto.mac(:sha256, secret, "#{timestamp}.#{payload}")
       |> Base.encode16(case: :lower)
 
-  defp webhook_secret(%{webhook_secret: secret}) when is_binary(secret) and secret != "",
-    do: {:ok, secret}
+  defp webhook_secrets(keys) do
+    case MishkaPay.Credentials.webhook_secrets(keys) do
+      [] ->
+        {:error,
+         Errors.MissingCredentials.exception(
+           provider: "stripe",
+           tenant: keys.tenant,
+           reason: :no_webhook_secret
+         )}
 
-  defp webhook_secret(keys),
-    do:
-      {:error,
-       Errors.MissingCredentials.exception(
-         provider: "stripe",
-         tenant: keys.tenant,
-         reason: :no_webhook_secret
-       )}
+      secrets ->
+        {:ok, secrets}
+    end
+  end
 
   defp signature_header(headers) do
     case for({name, value} <- headers, String.downcase(name) == "stripe-signature", do: value) do
@@ -1530,10 +1534,16 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  defp signed(payload, timestamp, signatures, secret) do
-    expected = signature(payload, timestamp, secret)
+  # Each of the tenant's secrets (a rolled one and the new one) against every v1 signature, each
+  # comparison in constant time.
+  defp signed(payload, timestamp, signatures, secrets) do
+    verified? =
+      Enum.any?(secrets, fn secret ->
+        expected = signature(payload, timestamp, secret)
+        Enum.any?(signatures, &Plug.Crypto.secure_compare(&1, expected))
+      end)
 
-    case Enum.any?(signatures, &Plug.Crypto.secure_compare(&1, expected)) do
+    case verified? do
       true -> :ok
       false -> bad(:mismatch)
     end
