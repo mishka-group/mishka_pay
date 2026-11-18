@@ -114,6 +114,103 @@ defmodule MishkaPay.StructsTest do
     end
   end
 
+  # The parent of each nested struct, what it takes at least, and the field that holds the child.
+  # PortalSession.Configuration stays a module of its own: PortalSession already has a
+  # `:configuration` field, the id of one.
+  @parents [
+    {Balance, %{provider: "stripe"}, Balance.Transaction},
+    {Balance, %{provider: "stripe"}, Balance.Payout},
+    {Customer, %{provider: "stripe", id: "cus_1"}, Customer.BalanceTransaction},
+    {Customer, %{provider: "stripe", id: "cus_1"}, Customer.TaxId},
+    {Customer, %{provider: "stripe", id: "cus_1"}, Customer.PaymentMethod},
+    {File, %{provider: "stripe", id: "file_1"}, File.Link},
+    {File, %{provider: "stripe", id: "file_1"}, File.Upload},
+    {Usage, %{provider: "stripe", event_name: "api_call", customer_id: "cus_1"}, Usage.Summary},
+    {Usage, %{provider: "stripe", event_name: "api_call", customer_id: "cus_1"},
+     Usage.Cancellation},
+    {Payment, %{provider: "stripe", id: "pay_1", status: :paid, amount: @eur},
+     Payment.FraudReview},
+    {Payment, %{provider: "stripe", id: "pay_1", status: :paid, amount: @eur},
+     Payment.FraudWarning},
+    {Feature, %{provider: "stripe", id: "feat_1"}, Feature.Entitlement},
+    {Dispute, %{provider: "stripe", id: "dp_1"}, Dispute.Evidence},
+    {ConnectedAccount, %{provider: "stripe"}, ConnectedAccount.Link},
+    {Coupon, %{provider: "stripe", id: "SPRING", percent_off: 10, duration: :once},
+     Coupon.PromotionCode},
+    {Invoice, %{provider: "stripe", id: "in_1"}, Invoice.Draft},
+    {Invoice, %{provider: "stripe", id: "in_1"}, Invoice.Item},
+    {Subscription, %{provider: "stripe", id: "sub_1", status: :active}, Subscription.Change},
+    {Subscription, %{provider: "stripe", id: "sub_1", status: :active}, Subscription.Schedule},
+    {TaxCalculation,
+     %{provider: "stripe", customer_id: "cus_1", items: [%{reference: "sku-1", amount: @eur}]},
+     TaxCalculation.Transaction},
+    {TaxSettings, %{provider: "stripe"}, TaxSettings.Registration}
+  ]
+
+  defp child_field(child),
+    do: child |> Module.split() |> List.last() |> Macro.underscore() |> String.to_atom()
+
+  describe "a struct nested in its parent as a sub_field" do
+    test "is empty (nil) on the parent when not given" do
+      for {parent, attrs, child} <- @parents do
+        assert {:ok, built} = parent.builder(attrs), inspect({parent, child})
+        assert Map.fetch!(built, child_field(child)) == nil, inspect({parent, child})
+      end
+    end
+
+    test "is built from a map on the parent, as the child struct" do
+      for {parent, attrs, child} <- @parents do
+        {^child, child_attrs, _field, _bad} = List.keyfind(@nested, child, 0)
+        field = child_field(child)
+
+        assert {:ok, built} = parent.builder(Map.put(attrs, field, child_attrs)),
+               inspect({parent, child})
+
+        assert %^child{} = Map.fetch!(built, field), inspect({parent, child})
+      end
+    end
+
+    test "refuses a bad value of its own on the parent, on the nested field" do
+      for {parent, attrs, child} <- @parents do
+        {^child, child_attrs, bad_field, bad} = List.keyfind(@nested, child, 0)
+        field = child_field(child)
+
+        assert {:error, errors} =
+                 parent.builder(Map.put(attrs, field, Map.put(child_attrs, bad_field, bad))),
+               inspect({parent, child})
+
+        assert Enum.any?(errors, &(&1.field == field)), inspect({parent, child, errors})
+      end
+    end
+
+    test "keeps its moduledoc, written as the sub_field's doc" do
+      for {child, attrs, _field, _bad} <- @nested do
+        assert {:ok, %^child{}} = child.builder(attrs)
+
+        assert {:docs_v1, _, _, _, %{"en" => doc}, _, _} = Code.fetch_docs(child),
+               inspect(child)
+
+        assert doc =~ "guarded_struct", inspect(child)
+      end
+    end
+  end
+
+  describe "a file's bytes" do
+    test "stay out of inspect/1" do
+      {:ok, upload} =
+        MishkaPay.File.Upload.builder(%{
+          provider: "stripe",
+          purpose: :dispute_evidence,
+          filename: "receipt.pdf",
+          content_type: "application/pdf",
+          content: "SECRET-BYTES"
+        })
+
+      refute inspect(upload) =~ "SECRET-BYTES"
+      assert inspect(upload) =~ "receipt.pdf"
+    end
+  end
+
   describe "a list sub_field" do
     test "a credit note's lines are CreditNote.Lines, checked one by one" do
       assert {:ok, %CreditNote{lines: [%CreditNote.Lines{invoice_line_id: "il_1", quantity: 1}]}} =
