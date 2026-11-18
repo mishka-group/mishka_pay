@@ -18,6 +18,13 @@ jobs:
     uses: mishka-group/mishka_cms/.github/workflows/mishka-ci.yml@ci-v1
     with:
       credence-task: mishka_pay.credence
+      # The demo shop is built against this checkout, so a change to the library that breaks it
+      # fails here.
+      extra-checks: |
+        cd examples/shop
+        mix deps.get
+        MIX_ENV=test mix compile --warnings-as-errors
+        MIX_ENV=test mix format --check-formatted
       sobelow: true
       # Postgres for the Ash layer's tests, its schema made from the test resources, and Stripe's
       # own mock server for the :stripe_mock tests; the run fails if it is not up.
