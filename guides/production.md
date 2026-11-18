@@ -1,5 +1,7 @@
 # Production checklist
 
+> On the web, with more detail: [Settings to check before going live](https://mishka.tools/pay/docs/keys-and-options#settings-to-check-before-going-live).
+
 - **Live keys only in production.** Each site's keys plugin answers `mode: :live` with `sk_live_`
   keys; test clocks and the cleanup task refuse live keys.
 - **Webhooks per site.** One Stripe endpoint per site, `https://your-host/pay/webhooks/stripe/<site>`,

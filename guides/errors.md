@@ -1,5 +1,7 @@
 # Errors
 
+> On the web, with more detail: [Errors and telemetry](https://mishka.tools/pay/docs/errors-and-telemetry).
+
 Every call answers `{:ok, struct}` or `{:error, error}`, where `error` is a `MishkaPay.Errors`
 (Splode) exception. Show people `MishkaPay.Ash.message(error)` (with Ash) or
 `Exception.message(error)`: plain sentences that never repeat a provider's own words, which can

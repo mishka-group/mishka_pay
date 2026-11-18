@@ -1,5 +1,7 @@
 # Telemetry
 
+> On the web, with more detail: [Telemetry events](https://mishka.tools/pay/docs/errors-and-telemetry#telemetry-events).
+
 Every event carries `:provider`; none carries a key or a buyer's details.
 
 | Event | When | Metadata |

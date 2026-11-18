@@ -1,5 +1,7 @@
 # The Ash layer
 
+> On the web, with more detail: [Keep payments in Ash resources and Mishka CMS](https://mishka.tools/pay/docs/ash-and-cms).
+
 With Ash, Mishka Pay keeps payments, subscriptions, customers and disputes in your own resources,
 read again from the provider whenever a webhook says something changed, and stores every webhook
 in an inbox worked by AshOban with retries.

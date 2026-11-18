@@ -1,5 +1,7 @@
 # Getting started
 
+> On the web, with more detail: [Get Started](https://mishka.tools/pay/docs).
+
 ## Install
 
 ```bash

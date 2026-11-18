@@ -1,5 +1,7 @@
 # Webhooks
 
+> On the web, with more detail: [Receive and verify webhooks](https://mishka.tools/pay/docs/webhooks).
+
 `MishkaPay.Webhook` takes each provider's signed messages at
 `/pay/webhooks/<provider>/<tenant>`, checks the signature with that tenant's `webhook_secret`, and
 hands a `MishkaPay.Event` to the `mishka_pay:webhook:received` listeners. It must come before

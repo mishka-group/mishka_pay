@@ -1,5 +1,7 @@
 # Testing
 
+> On the web, with more detail: [Test code that takes payments](https://mishka.tools/pay/docs/test-your-payments).
+
 ```elixir
 # test/test_helper.exs (mix igniter.install mishka_pay writes it)
 MishkaPay.Test.setup!()

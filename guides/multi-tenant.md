@@ -1,5 +1,7 @@
 # Many sites
 
+> On the web, with more detail: [Keep sites apart](https://mishka.tools/pay/docs/ash-and-cms#keep-sites-apart).
+
 Mishka Pay is built for one install that serves many sites, as Mishka CMS does. Inside Mishka CMS
 the core starts mishka_installer's registry before any extension, and Mishka Pay's application
 starts its providers itself (listed in its `plugins/0`, as every CMS package does), so an
