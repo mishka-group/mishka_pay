@@ -15,12 +15,6 @@
 
 </div>
 
-> [!NOTE]
-> **Mishka Pay is young.** This is its first release, `0.0.1-alpha.1`. Calls and options may
-> still change before `0.0.1`. Test on a sandbox, and read the
-> [CHANGELOG](https://github.com/mishka-group/mishka_pay/blob/master/CHANGELOG.md) before you
-> upgrade.
-
 ## 📖 What is Mishka Pay?
 
 Mishka Pay is a payment SDK for Elixir and Phoenix. Checkouts, payments, refunds, subscriptions,
@@ -86,7 +80,7 @@ broadcasts. To set it up by hand, add the package to `mix.exs`. A pre-release is
 when you name it:
 
 ```elixir
-{:mishka_pay, "~> 0.0.1-alpha.1"}
+{:mishka_pay, "~> 0.0.1"}
 ```
 
 Give it a sandbox key and sell:
