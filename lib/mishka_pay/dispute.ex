@@ -41,6 +41,38 @@ defmodule MishkaPay.Dispute do
     field :refundable, boolean(), derives: "validate(boolean)"
     dynamic_field :metadata
     field :created_at, DateTime.t(), derives: "validate(struct)"
+
+    sub_field :evidence, struct(),
+      authorized_fields: true,
+      doc: """
+      The answer to a `MishkaPay.Dispute`, given to `MishkaPay.update_dispute/1`. A guarded_struct.
+
+        * `:provider`, `:tenant`, `:dispute_id`: which dispute, with whose keys.
+        * `:evidence`: what the seller shows, under the provider's own field names, string keys to
+          string values: at Stripe `"product_description"`, `"customer_email_address"`,
+          `"service_date"`, `"uncategorized_text"` and the rest of its dispute evidence. A field that
+          holds a document takes the `:id` of a file uploaded with `MishkaPay.upload_file/1`: at
+          Stripe `"receipt"`, `"customer_communication"`, `"service_documentation"`,
+          `"shipping_documentation"`, `"uncategorized_file"` and the other file fields take a
+          `file_...` id, and anything else there is refused before any request.
+        * `:submit`: `true` sends it to the bank now; left out or `false`, the provider keeps it to
+          add more before the due date.
+        * `:metadata`: extra pairs kept on the dispute.
+      """ do
+      field :provider, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+
+      field :tenant, term()
+
+      field :dispute_id, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+
+      dynamic_field :evidence, validator: {MishkaPay.Checkout, :metadata}
+      field :submit, boolean(), derives: "validate(boolean)"
+      dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
+    end
   end
 
   @doc "The statuses a dispute can have, as atoms."

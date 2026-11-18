@@ -348,7 +348,7 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:invoice`. Makes a draft bill with its items, and answers it."
-  @callback create_invoice(MishkaPay.InvoiceDraft.t(), MishkaPay.Credentials.t()) ::
+  @callback create_invoice(MishkaPay.Invoice.Draft.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:invoice`. Opens a draft for payment: it gets its number and can be paid."
@@ -379,12 +379,12 @@ defmodule MishkaPay.Provider do
   With `:invoice_item`. Adds a charge for `:customer_id`, on draft bill `:invoice_id` or waiting
   for the next bill, and answers it with its `:id`.
   """
-  @callback create_invoice_item(MishkaPay.InvoiceItem.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+  @callback create_invoice_item(MishkaPay.Invoice.Item.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.Item.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:invoice_item`. Changes the fields set on the item whose `:id` it carries."
-  @callback update_invoice_item(MishkaPay.InvoiceItem.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+  @callback update_invoice_item(MishkaPay.Invoice.Item.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Invoice.Item.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:invoice_item`. Removes an item that is not on a finalized bill."
   @callback delete_invoice_item(invoice_item_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -402,13 +402,13 @@ defmodule MishkaPay.Provider do
   with its `:phases`, and answers it with its `:id` and phase dates.
   """
   @callback create_subscription_schedule(
-              MishkaPay.SubscriptionSchedule.t(),
+              MishkaPay.Subscription.Schedule.t(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:subscription_schedule`. Reads one schedule again, with its phases."
   @callback fetch_subscription_schedule(schedule_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:subscription_schedule`. One page of schedules, newest first; only `:customer_id`'s, or
@@ -422,13 +422,13 @@ defmodule MishkaPay.Provider do
   `:metadata`) on the schedule whose `:id` it carries.
   """
   @callback update_subscription_schedule(
-              MishkaPay.SubscriptionSchedule.t(),
+              MishkaPay.Subscription.Schedule.t(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:subscription_schedule`. Ends the schedule; its subscription goes on alone."
   @callback release_subscription_schedule(schedule_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:subscription_schedule`. Ends the schedule and its subscription now; `:invoice_now` bills
@@ -438,7 +438,7 @@ defmodule MishkaPay.Provider do
               schedule_id :: String.t(),
               opts :: keyword(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:credit_note`. Makes a credit note on `:invoice_id` for `:amount` or `:lines`, and
@@ -466,7 +466,7 @@ defmodule MishkaPay.Provider do
   @callback list_credit_notes(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
-  @doc "With `:credit_note`. One page of a credit note's lines (`MishkaPay.CreditNoteLine`)."
+  @doc "With `:credit_note`. One page of a credit note's lines (`MishkaPay.CreditNote.Lines`)."
   @callback list_credit_note_lines(
               credit_note_id :: String.t(),
               opts :: keyword(),
@@ -528,7 +528,7 @@ defmodule MishkaPay.Provider do
   With `:subscription_change`. Changes a subscription's plan or quantity as the change says,
   bills the difference its way, and answers the subscription after.
   """
-  @callback change_subscription(MishkaPay.SubscriptionChange.t(), MishkaPay.Credentials.t()) ::
+  @callback change_subscription(MishkaPay.Subscription.Change.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Subscription.t()} | {:error, Splode.Error.t()}
 
   @doc """
@@ -536,7 +536,7 @@ defmodule MishkaPay.Provider do
   without changing anything.
   """
   @callback preview_subscription_change(
-              MishkaPay.SubscriptionChange.t(),
+              MishkaPay.Subscription.Change.t(),
               MishkaPay.Credentials.t()
             ) :: {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
 
@@ -604,8 +604,8 @@ defmodule MishkaPay.Provider do
               :ok | {:error, Splode.Error.t()}
 
   @doc "With `:tax_id`. Adds a tax id to the customer it names (`:customer_id`), and answers it."
-  @callback create_tax_id(MishkaPay.TaxId.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.TaxId.t()} | {:error, Splode.Error.t()}
+  @callback create_tax_id(MishkaPay.Customer.TaxId.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Customer.TaxId.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:tax_id`. One page of the tax ids of customer `:customer_id`."
   @callback list_tax_ids(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -623,7 +623,7 @@ defmodule MishkaPay.Provider do
               calculation_id :: String.t(),
               reference :: String.t(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.TaxTransaction.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.TaxCalculation.Transaction.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:shipping`. Makes a shipping rate and answers it with its `:id`."
   @callback create_shipping_rate(MishkaPay.ShippingRate.t(), MishkaPay.Credentials.t()) ::
@@ -704,8 +704,11 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:tax_setup`. Registers the seller to collect tax in a country, and answers it."
-  @callback create_tax_registration(MishkaPay.TaxRegistration.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+  @callback create_tax_registration(
+              MishkaPay.TaxSettings.Registration.t(),
+              MishkaPay.Credentials.t()
+            ) ::
+              {:ok, MishkaPay.TaxSettings.Registration.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:tax_setup`. One page of the seller's tax registrations; `:status` is `:active` (the
@@ -719,7 +722,7 @@ defmodule MishkaPay.Provider do
               registration_id :: String.t(),
               at :: DateTime.t() | nil,
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.TaxSettings.Registration.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:tax_setup`. Reads the site's tax settings."
   @callback fetch_tax_settings(MishkaPay.Credentials.t()) ::
@@ -742,19 +745,19 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:portal`. Makes a portal setup and answers it with its `:id`."
   @callback create_portal_configuration(
-              MishkaPay.PortalConfiguration.t(),
+              MishkaPay.PortalSession.Configuration.t(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:portal`. Changes the fields set on the portal setup whose `:id` it carries."
   @callback update_portal_configuration(
-              MishkaPay.PortalConfiguration.t(),
+              MishkaPay.PortalSession.Configuration.t(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:portal`. Reads one portal setup."
   @callback fetch_portal_configuration(configuration_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:portal`. One page of portal setups, newest first; only `:active` ones, or the
@@ -769,14 +772,14 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:payment_method`. Reads one saved payment method again."
   @callback fetch_payment_method(payment_method_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.PaymentMethod.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Customer.PaymentMethod.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:payment_method`. Takes a payment method off its customer for good, and answers it
   after, with no `:customer_id`.
   """
   @callback detach_payment_method(payment_method_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.PaymentMethod.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Customer.PaymentMethod.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:payment_method`. Makes a saved payment method the one a customer's invoices and
@@ -805,12 +808,12 @@ defmodule MishkaPay.Provider do
               :ok | {:error, Splode.Error.t()}
 
   @doc "With `:discount`. Makes a promotion code for a coupon and answers it with its `:id`."
-  @callback create_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
+  @callback create_promotion_code(MishkaPay.Coupon.PromotionCode.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:discount`. Reads one promotion code again."
   @callback fetch_promotion_code(promotion_code_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:discount`. One page of promotion codes, newest first; only those with `:code`, of
@@ -863,7 +866,7 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:dispute`. Adds evidence to a dispute, and sends it with `:submit`."
-  @callback update_dispute(MishkaPay.DisputeEvidence.t(), MishkaPay.Credentials.t()) ::
+  @callback update_dispute(MishkaPay.Dispute.Evidence.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:dispute`. Accepts the loss: the dispute closes as lost."
@@ -872,7 +875,7 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:fraud`. Reads one early fraud warning."
   @callback fetch_fraud_warning(warning_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.FraudWarning.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Payment.FraudWarning.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:fraud`. One page of early fraud warnings, newest first; only those about `:payment_id`
@@ -883,7 +886,7 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:fraud`. Reads one review, open or closed."
   @callback fetch_fraud_review(review_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:fraud`. One page of the reviews still open, newest first."
   @callback list_fraud_reviews(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -891,10 +894,10 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:fraud`. Lets an open review's payment through, and answers the review closed."
   @callback approve_fraud_review(review_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:file`. Uploads a file, after checking the provider takes its type and size."
-  @callback upload_file(MishkaPay.FileUpload.t(), MishkaPay.Credentials.t()) ::
+  @callback upload_file(MishkaPay.File.Upload.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:file`. Reads one file the provider keeps."
@@ -903,7 +906,7 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:file`. Makes a public link to a file; `:expires_at` ends it."
   @callback file_link(file_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.File.Link.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:payment_link`. Makes a payment link and answers it with its `:id` and `:url`."
   @callback create_payment_link(MishkaPay.PaymentLink.t(), MishkaPay.Credentials.t()) ::
@@ -922,8 +925,8 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.PaymentLink.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:discount`. Turns a promotion code off or on again (`:active`), and its metadata."
-  @callback update_promotion_code(MishkaPay.PromotionCode.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.PromotionCode.t()} | {:error, Splode.Error.t()}
+  @callback update_promotion_code(MishkaPay.Coupon.PromotionCode.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:usage`. Makes a meter that counts usage reported under its event name."
   @callback create_meter(MishkaPay.Meter.t(), MishkaPay.Credentials.t()) ::
@@ -953,8 +956,8 @@ defmodule MishkaPay.Provider do
   With `:usage`. Takes back one usage report by its id (`:usage_id`) under `:event_name`, once
   for each report, and answers it with its `:status`.
   """
-  @callback cancel_usage(MishkaPay.UsageCancellation.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.UsageCancellation.t()} | {:error, Splode.Error.t()}
+  @callback cancel_usage(MishkaPay.Usage.Cancellation.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Usage.Cancellation.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:usage`. Reports one use by a customer, once for each reference."
   @callback report_usage(MishkaPay.Usage.t(), MishkaPay.Credentials.t()) ::
@@ -965,7 +968,7 @@ defmodule MishkaPay.Provider do
   `DateTime`, `:to` after `:from`).
   """
   @callback usage_summary(meter_id :: String.t(), opts :: keyword(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Usage.Summary.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:entitlement`. Makes a feature a product can give."
   @callback create_feature(MishkaPay.Feature.t(), MishkaPay.Credentials.t()) ::
@@ -995,9 +998,9 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:customer_balance`. Changes a customer's balance: below zero gives credit."
   @callback adjust_customer_balance(
-              MishkaPay.CustomerBalanceTransaction.t(),
+              MishkaPay.Customer.BalanceTransaction.t(),
               MishkaPay.Credentials.t()
-            ) :: {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+            ) :: {:ok, MishkaPay.Customer.BalanceTransaction.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:customer_balance`. One page of the changes to `:customer_id`'s balance, newest first."
   @callback list_customer_balance(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -1037,12 +1040,12 @@ defmodule MishkaPay.Provider do
             ) :: {:ok, MishkaPay.ConnectedAccount.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:connect`. Makes a one-time onboarding or update link for a connected account."
-  @callback account_link(MishkaPay.AccountLink.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  @callback account_link(MishkaPay.ConnectedAccount.Link.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.ConnectedAccount.Link.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:connect`. Makes a one-time link into a connected account's own dashboard."
   @callback login_link(account_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.ConnectedAccount.Link.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:connect`. Reads one application fee, the platform's cut of a seller's sale."
   @callback fetch_application_fee(fee_id :: String.t(), MishkaPay.Credentials.t()) ::
@@ -1089,7 +1092,7 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:payout`. Reads one payout of the account the keys act for."
   @callback fetch_payout(payout_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
 
   @doc "With `:payout`. One page of payouts, newest first; only those of `:status` when given."
   @callback list_payouts(opts :: keyword(), MishkaPay.Credentials.t()) ::
@@ -1097,7 +1100,7 @@ defmodule MishkaPay.Provider do
 
   @doc "With `:payout`. Stops a payout that is still pending; its money stays in the balance."
   @callback cancel_payout(payout_id :: String.t(), MishkaPay.Credentials.t()) ::
-              {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+              {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with

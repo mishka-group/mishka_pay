@@ -41,11 +41,9 @@ defmodule MishkaPay.Support.Acme do
     Page,
     Payment,
     PaymentLink,
-    PortalConfiguration,
     PortalSession,
     Price,
     Product,
-    PromotionCode,
     Refund,
     Subscription
   }
@@ -255,16 +253,26 @@ defmodule MishkaPay.Support.Acme do
        }}
 
   @impl MishkaPay.Provider
-  def create_portal_configuration(%PortalConfiguration{} = config, %{secret_key: "sk_acme"}),
-    do: {:ok, %{config | id: "acme_bpc_1", active: true, default: false}}
+  def create_portal_configuration(%PortalSession.Configuration{} = config, %{
+        secret_key: "sk_acme"
+      }),
+      do: {:ok, %{config | id: "acme_bpc_1", active: true, default: false}}
 
   @impl MishkaPay.Provider
-  def update_portal_configuration(%PortalConfiguration{} = config, %{secret_key: "sk_acme"}),
-    do: {:ok, config}
+  def update_portal_configuration(%PortalSession.Configuration{} = config, %{
+        secret_key: "sk_acme"
+      }),
+      do: {:ok, config}
 
   @impl MishkaPay.Provider
   def fetch_portal_configuration("acme_bpc_" <> _ = id, %{secret_key: "sk_acme"}),
-    do: PortalConfiguration.builder(%{provider: "acme", id: id, active: true, default: true})
+    do:
+      PortalSession.Configuration.builder(%{
+        provider: "acme",
+        id: id,
+        active: true,
+        default: true
+      })
 
   @impl MishkaPay.Provider
   def list_portal_configurations(_opts, %{secret_key: "sk_acme"} = keys) do
@@ -302,13 +310,13 @@ defmodule MishkaPay.Support.Acme do
   def delete_coupon(_id, %{secret_key: "sk_acme"}), do: :ok
 
   @impl MishkaPay.Provider
-  def create_promotion_code(%PromotionCode{} = code, %{secret_key: "sk_acme"}),
+  def create_promotion_code(%Coupon.PromotionCode{} = code, %{secret_key: "sk_acme"}),
     do: {:ok, %{code | id: "acme_promo_1", code: code.code || "ACME10", active: true}}
 
   @impl MishkaPay.Provider
   def fetch_promotion_code(id, %{secret_key: "sk_acme"}),
     do:
-      PromotionCode.builder(%{
+      Coupon.PromotionCode.builder(%{
         provider: "acme",
         id: id,
         code: "ACME10",
@@ -323,7 +331,8 @@ defmodule MishkaPay.Support.Acme do
   end
 
   @impl MishkaPay.Provider
-  def update_promotion_code(%PromotionCode{} = code, %{secret_key: "sk_acme"}), do: {:ok, code}
+  def update_promotion_code(%Coupon.PromotionCode{} = code, %{secret_key: "sk_acme"}),
+    do: {:ok, code}
 
   @impl MishkaPay.Provider
   def create_product(%Product{} = product, %{secret_key: "sk_acme"}),

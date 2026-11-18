@@ -112,15 +112,12 @@ defmodule MishkaPay do
     Messages,
     Page,
     PaymentLink,
-    PaymentMethod,
     PortalSession,
     Price,
     Product,
-    PromotionCode,
     Provider,
     ProviderKit,
-    Refund,
-    TaxId
+    Refund
   }
 
   alias MishkaPay.Helpers.Plugins
@@ -459,7 +456,7 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Adds a business buyer's tax id to customer `customer_id` from `attrs` (see `MishkaPay.TaxId`):
+  Adds a business buyer's tax id to customer `customer_id` from `attrs` (see `MishkaPay.Customer.TaxId`):
   its `:type`, such as `"eu_vat"`, and its `:value`. The provider prints it on the customer's
   invoices, and checks it against a government register for the kinds it can
   (`:verification`).
@@ -467,7 +464,7 @@ defmodule MishkaPay do
       MishkaPay.create_tax_id("stripe", "cus_123", %{type: "eu_vat", value: "DE123456789"}, site_id)
   """
   @spec create_tax_id(String.t(), String.t(), map(), term()) ::
-          {:ok, TaxId.t()} | {:error, Splode.Error.t()}
+          {:ok, Customer.TaxId.t()} | {:error, Splode.Error.t()}
   def create_tax_id(provider, customer_id, attrs, tenant \\ nil)
       when is_binary(provider) and is_binary(customer_id) and is_map(attrs) do
     attrs = %{
@@ -478,12 +475,12 @@ defmodule MishkaPay do
       value: field(attrs, :value)
     }
 
-    made(:tax_id_create, :tax_id, attrs, TaxId, [:type, :value], :create_tax_id)
+    made(:tax_id_create, :tax_id, attrs, Customer.TaxId, [:type, :value], :create_tax_id)
   end
 
   @doc """
   One page of customer `customer_id`'s tax ids at `provider` (`MishkaPay.Page` of
-  `MishkaPay.TaxId`), with `limit:` and `after:`.
+  `MishkaPay.Customer.TaxId`), with `limit:` and `after:`.
   """
   @spec list_tax_ids(String.t(), String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -565,7 +562,7 @@ defmodule MishkaPay do
   reports. A calculation can be recorded until its `:expires_at`.
   """
   @spec record_tax(String.t(), String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.TaxTransaction.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.TaxCalculation.Transaction.t()} | {:error, Splode.Error.t()}
   def record_tax(provider, calculation_id, reference, tenant \\ nil)
       when is_binary(provider) and is_binary(calculation_id) and is_binary(reference) do
     case String.trim(reference) do
@@ -628,26 +625,26 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Registers the seller to collect tax in a country, from `attrs` (see `MishkaPay.TaxRegistration`):
+  Registers the seller to collect tax in a country, from `attrs` (see `MishkaPay.TaxSettings.Registration`):
   its `:country` and `:type`, a `:state` where the kind needs one, the `:place_of_supply_scheme`
   of a standard registration, and when it starts and ends.
   The provider's tax counting then charges tax there.
   """
   @spec create_tax_registration(map()) ::
-          {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.TaxSettings.Registration.t()} | {:error, Splode.Error.t()}
   def create_tax_registration(attrs) when is_map(attrs) do
     made(
       :tax_registration_create,
       :tax_setup,
       attrs,
-      MishkaPay.TaxRegistration,
+      MishkaPay.TaxSettings.Registration,
       [:provider, :country, :type],
       :create_tax_registration
     )
   end
 
   @doc """
-  One page of the seller's tax registrations (`MishkaPay.Page` of `MishkaPay.TaxRegistration`):
+  One page of the seller's tax registrations (`MishkaPay.Page` of `MishkaPay.TaxSettings.Registration`):
   `status:` `:active` (the provider's default), `:scheduled`, `:expired` or `:all`, plus `limit:`
   and `after:`.
   """
@@ -668,7 +665,7 @@ defmodule MishkaPay do
   charging tax there. A registration is never deleted. Answers it after.
   """
   @spec expire_tax_registration(String.t(), String.t(), term(), keyword()) ::
-          {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.TaxSettings.Registration.t()} | {:error, Splode.Error.t()}
   def expire_tax_registration(provider, registration_id, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(registration_id) do
     capable(
@@ -708,7 +705,7 @@ defmodule MishkaPay do
   @doc """
   Opens the provider's billing page for one customer (see `MishkaPay.PortalSession`): `:provider`,
   `:tenant`, `:customer_id`, `:return_url`, and `:configuration`, the `:id` of a
-  `MishkaPay.PortalConfiguration` (the provider's default one when left out). Redirect the buyer
+  `MishkaPay.PortalSession.Configuration` (the provider's default one when left out). Redirect the buyer
   to the answer's `:url`.
   """
   @spec portal_session(map()) :: {:ok, PortalSession.t()} | {:error, Splode.Error.t()}
@@ -723,7 +720,7 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Makes a setup of the customer portal from `attrs` (see `MishkaPay.PortalConfiguration`): what
+  Makes a setup of the customer portal from `attrs` (see `MishkaPay.PortalSession.Configuration`): what
   buyers may do there (cancel, switch plan and to which prices, change their card or details, see
   their bills) and the page's header. A portal session uses it by its `:id` (`:configuration`).
 
@@ -733,13 +730,13 @@ defmodule MishkaPay do
         plans: [%{product_id: "prod_team", price_ids: ["price_monthly", "price_yearly"]}]})
   """
   @spec create_portal_configuration(map()) ::
-          {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
   def create_portal_configuration(attrs) when is_map(attrs) do
     made(
       :portal_configuration_create,
       :portal,
       attrs,
-      MishkaPay.PortalConfiguration,
+      MishkaPay.PortalSession.Configuration,
       [:provider],
       :create_portal_configuration
     )
@@ -750,13 +747,13 @@ defmodule MishkaPay do
   turns it off; a provider never deletes one.
   """
   @spec update_portal_configuration(map()) ::
-          {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
   def update_portal_configuration(attrs) when is_map(attrs) do
     made(
       :portal_configuration_update,
       :portal,
       attrs,
-      MishkaPay.PortalConfiguration,
+      MishkaPay.PortalSession.Configuration,
       [:provider, :id],
       :update_portal_configuration
     )
@@ -764,7 +761,7 @@ defmodule MishkaPay do
 
   @doc "Reads portal setup `configuration_id` from `provider`, with `tenant`'s keys."
   @spec fetch_portal_configuration(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.PortalConfiguration.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
   def fetch_portal_configuration(provider, configuration_id, tenant \\ nil)
       when is_binary(provider) and is_binary(configuration_id) do
     capable(
@@ -778,7 +775,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of portal setups at `provider`, newest first (`MishkaPay.Page` of
-  `MishkaPay.PortalConfiguration`): `active:` only those on (or off), `default: true` only the one
+  `MishkaPay.PortalSession.Configuration`): `active:` only those on (or off), `default: true` only the one
   a session without `:configuration` uses, plus `limit:` and `after:`.
   """
   @spec list_portal_configurations(String.t(), term(), keyword()) ::
@@ -795,7 +792,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of the payment methods customer `customer_id:` saved at `provider`
-  (`MishkaPay.Page` of `MishkaPay.PaymentMethod`), plus `limit:` and `after:`. A checkout in
+  (`MishkaPay.Page` of `MishkaPay.Customer.PaymentMethod`), plus `limit:` and `after:`. A checkout in
   `mode: :setup` saves one.
   """
   @spec list_payment_methods(String.t(), term(), keyword()) ::
@@ -817,7 +814,7 @@ defmodule MishkaPay do
 
   @doc "Reads saved payment method `payment_method_id` again from `provider`, with its card."
   @spec fetch_payment_method(String.t(), String.t(), term()) ::
-          {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+          {:ok, Customer.PaymentMethod.t()} | {:error, Splode.Error.t()}
   def fetch_payment_method(provider, payment_method_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payment_method_id) do
     capable(
@@ -834,7 +831,7 @@ defmodule MishkaPay do
   can no longer be charged or saved again. Answers it after, with no `:customer_id`.
   """
   @spec detach_payment_method(String.t(), String.t(), term()) ::
-          {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+          {:ok, Customer.PaymentMethod.t()} | {:error, Splode.Error.t()}
   def detach_payment_method(provider, payment_method_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payment_method_id) do
     capable(
@@ -906,14 +903,15 @@ defmodule MishkaPay do
     capable(:discount, :coupon_delete, provider, tenant, & &1.delete_coupon(coupon_id, &2))
   end
 
-  @doc "Makes a promotion code from `attrs` (see `MishkaPay.PromotionCode`) at `attrs.provider`."
-  @spec create_promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  @doc "Makes a promotion code from `attrs` (see `MishkaPay.Coupon.PromotionCode`) at `attrs.provider`."
+  @spec create_promotion_code(map()) ::
+          {:ok, Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
   def create_promotion_code(attrs) when is_map(attrs) do
     made(
       :promotion_code_create,
       :discount,
       attrs,
-      PromotionCode,
+      Coupon.PromotionCode,
       [:provider, :coupon_id],
       :create_promotion_code
     )
@@ -921,7 +919,7 @@ defmodule MishkaPay do
 
   @doc "Reads promotion code `promotion_code_id` again from `provider`, with `tenant`'s keys."
   @spec fetch_promotion_code(String.t(), String.t(), term()) ::
-          {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+          {:ok, Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
   def fetch_promotion_code(provider, promotion_code_id, tenant \\ nil)
       when is_binary(provider) and is_binary(promotion_code_id) do
     capable(
@@ -954,13 +952,14 @@ defmodule MishkaPay do
   Changes promotion code `attrs.id` at `attrs.provider`: `active: false` turns it off, `true` on
   again; `:metadata` too. Its code, coupon and limits stay as made.
   """
-  @spec update_promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  @spec update_promotion_code(map()) ::
+          {:ok, Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
   def update_promotion_code(attrs) when is_map(attrs) do
     made(
       :promotion_code_update,
       :discount,
       attrs,
-      PromotionCode,
+      Coupon.PromotionCode,
       [:provider, :id],
       :update_promotion_code
     )
@@ -1150,13 +1149,13 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Answers a dispute with evidence (see `MishkaPay.DisputeEvidence`): kept to add more, or sent to
+  Answers a dispute with evidence (see `MishkaPay.Dispute.Evidence`): kept to add more, or sent to
   the bank with `submit: true`. Answers the dispute after.
   """
   @spec update_dispute(map()) :: {:ok, MishkaPay.Dispute.t()} | {:error, Splode.Error.t()}
   def update_dispute(attrs) when is_map(attrs) do
     span(:dispute_update, attrs, fn ->
-      with {:ok, evidence} <- Errors.from_builder(MishkaPay.DisputeEvidence.builder(attrs)),
+      with {:ok, evidence} <- Errors.from_builder(MishkaPay.Dispute.Evidence.builder(attrs)),
            {:ok, module} <- Provider.capable(evidence.provider, :dispute),
            {:ok, keys} <- Credentials.fetch(evidence.provider, evidence.tenant) do
         module.update_dispute(evidence, keys)
@@ -1173,18 +1172,18 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Reads early fraud warning `warning_id` (`MishkaPay.FraudWarning`): a card issuer saying a
+  Reads early fraud warning `warning_id` (`MishkaPay.Payment.FraudWarning`): a card issuer saying a
   payment looks like fraud, before any dispute.
   """
   @spec fetch_fraud_warning(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.FraudWarning.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Payment.FraudWarning.t()} | {:error, Splode.Error.t()}
   def fetch_fraud_warning(provider, warning_id, tenant \\ nil)
       when is_binary(provider) and is_binary(warning_id) do
     capable(:fraud, :fraud_warning, provider, tenant, & &1.fetch_fraud_warning(warning_id, &2))
   end
 
   @doc """
-  One page of early fraud warnings, newest first (`MishkaPay.Page` of `MishkaPay.FraudWarning`):
+  One page of early fraud warnings, newest first (`MishkaPay.Page` of `MishkaPay.Payment.FraudWarning`):
   `payment_id:` or `charge_id:` only those about one payment, plus `limit:` and `after:`. A
   warning that is `:actionable` can still be headed off: refund its payment in full.
   """
@@ -1200,16 +1199,16 @@ defmodule MishkaPay do
     )
   end
 
-  @doc "Reads review `review_id` (`MishkaPay.FraudReview`), open or closed."
+  @doc "Reads review `review_id` (`MishkaPay.Payment.FraudReview`), open or closed."
   @spec fetch_fraud_review(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
   def fetch_fraud_review(provider, review_id, tenant \\ nil)
       when is_binary(provider) and is_binary(review_id) do
     capable(:fraud, :fraud_review, provider, tenant, & &1.fetch_fraud_review(review_id, &2))
   end
 
   @doc """
-  One page of the reviews still open, newest first (`MishkaPay.Page` of `MishkaPay.FraudReview`):
+  One page of the reviews still open, newest first (`MishkaPay.Page` of `MishkaPay.Payment.FraudReview`):
   payments the provider's fraud rules hold for the seller, plus `limit:` and `after:`.
   """
   @spec list_fraud_reviews(String.t(), term(), keyword()) ::
@@ -1229,7 +1228,7 @@ defmodule MishkaPay do
   review, closed. To turn it down instead, refund the payment.
   """
   @spec approve_fraud_review(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
   def approve_fraud_review(provider, review_id, tenant \\ nil)
       when is_binary(provider) and is_binary(review_id) do
     capable(
@@ -1242,13 +1241,13 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Uploads a file from `attrs` (see `MishkaPay.FileUpload`): a receipt, a download log or a
+  Uploads a file from `attrs` (see `MishkaPay.File.Upload`): a receipt, a download log or a
   screenshot that answers a dispute. Answers it as a `MishkaPay.File`; put its `:id` in the
   dispute's evidence with `update_dispute/1`.
   """
   @spec upload_file(map()) :: {:ok, MishkaPay.File.t()} | {:error, Splode.Error.t()}
   def upload_file(attrs) when is_map(attrs),
-    do: made(:file_upload, :file, attrs, MishkaPay.FileUpload, [], :upload_file)
+    do: made(:file_upload, :file, attrs, MishkaPay.File.Upload, [], :upload_file)
 
   @doc "Reads file `file_id` from `provider`, with `tenant`'s keys."
   @spec fetch_file(String.t(), String.t(), term()) ::
@@ -1259,12 +1258,12 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Makes a public link to file `file_id` (`MishkaPay.FileLink`), an address a site can show to a
+  Makes a public link to file `file_id` (`MishkaPay.File.Link`), an address a site can show to a
   person without any key. `expires_at:` (a `DateTime` still to come) ends it; without it, it
   never ends.
   """
   @spec file_link(String.t(), String.t(), term(), keyword()) ::
-          {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.File.Link.t()} | {:error, Splode.Error.t()}
   def file_link(provider, file_id, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(file_id) do
     capable(:file, :file_link, provider, tenant, & &1.file_link(file_id, opts, &2))
@@ -1336,7 +1335,7 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Takes back a usage report sent by mistake, from `attrs` (see `MishkaPay.UsageCancellation`):
+  Takes back a usage report sent by mistake, from `attrs` (see `MishkaPay.Usage.Cancellation`):
   the meter's `:event_name` and the report's `:usage_id` (the `:id` `report_usage/1` answered).
   The same cancel sent again is one cancel. A provider takes a report back only for a while
   (Stripe: 24 hours); after that, report the value again below zero.
@@ -1346,17 +1345,17 @@ defmodule MishkaPay do
                                usage_id: usage.id})
   """
   @spec cancel_usage(map()) ::
-          {:ok, MishkaPay.UsageCancellation.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Usage.Cancellation.t()} | {:error, Splode.Error.t()}
   def cancel_usage(attrs) when is_map(attrs) do
-    made(:usage_cancel, :usage, attrs, MishkaPay.UsageCancellation, [:provider], :cancel_usage)
+    made(:usage_cancel, :usage, attrs, MishkaPay.Usage.Cancellation, [:provider], :cancel_usage)
   end
 
   @doc """
   What meter `meter_id` counted for `customer_id` from `from` to `to` (`DateTime`s, `to` not
-  included), as one `MishkaPay.UsageSummary`. A use reported a moment ago may not be counted yet.
+  included), as one `MishkaPay.Usage.Summary`. A use reported a moment ago may not be counted yet.
   """
   @spec usage_summary(String.t(), String.t(), String.t(), DateTime.t(), DateTime.t(), term()) ::
-          {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Usage.Summary.t()} | {:error, Splode.Error.t()}
   def usage_summary(provider, meter_id, customer_id, from, to, tenant \\ nil)
       when is_binary(provider) and is_binary(meter_id) and is_binary(customer_id) and
              is_struct(from, DateTime) and is_struct(to, DateTime) do
@@ -1400,7 +1399,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of the features customer `customer_id` may use now (`MishkaPay.Page` of
-  `MishkaPay.Entitlement`), plus `limit:` and `after:`. Check access by their `:lookup_key`.
+  `MishkaPay.Feature.Entitlement`), plus `limit:` and `after:`. Check access by their `:lookup_key`.
   """
   @spec list_entitlements(String.t(), String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -1421,7 +1420,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of the movements of the seller's balance, newest first (`MishkaPay.Page` of
-  `MishkaPay.BalanceTransaction`): `payout_id:` those one payout paid out, `type:` only one kind
+  `MishkaPay.Balance.Transaction`): `payout_id:` those one payout paid out, `type:` only one kind
   (the provider's name, such as `"charge"`), plus `limit:` and `after:`.
   """
   @spec list_balance_transactions(String.t(), term(), keyword()) ::
@@ -1440,10 +1439,10 @@ defmodule MishkaPay do
   Changes customer `customer_id`'s balance by `money` (a `Money`, or a map with `:amount` and
   `:currency`): below zero gives credit taken off their next bills, above zero adds a debit.
   `description:` says why; `reference:` makes it happen once. Answers the
-  `MishkaPay.CustomerBalanceTransaction` with the balance after.
+  `MishkaPay.Customer.BalanceTransaction` with the balance after.
   """
   @spec adjust_customer_balance(String.t(), String.t(), Money.t() | map(), term(), keyword()) ::
-          {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Customer.BalanceTransaction.t()} | {:error, Splode.Error.t()}
   def adjust_customer_balance(provider, customer_id, money, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(customer_id) do
     attrs = %{
@@ -1459,7 +1458,7 @@ defmodule MishkaPay do
       :customer_balance_adjust,
       :customer_balance,
       attrs,
-      MishkaPay.CustomerBalanceTransaction,
+      MishkaPay.Customer.BalanceTransaction,
       [:provider],
       :adjust_customer_balance
     )
@@ -1467,7 +1466,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of the changes to customer `customer_id`'s balance, newest first (`MishkaPay.Page` of
-  `MishkaPay.CustomerBalanceTransaction`), plus `limit:` and `after:`.
+  `MishkaPay.Customer.BalanceTransaction`), plus `limit:` and `after:`.
   """
   @spec list_customer_balance(String.t(), String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -1581,17 +1580,18 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Makes a one-time link (`MishkaPay.AccountLink`) that sends a seller to the provider's pages for
+  Makes a one-time link (`MishkaPay.ConnectedAccount.Link`) that sends a seller to the provider's pages for
   their connected account: `:account_id`, `:type` (`:onboarding` or `:update`), `:refresh_url`
   and `:return_url`. Redirect the seller to its `:url` at once; it runs out in minutes.
   """
-  @spec account_link(map()) :: {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  @spec account_link(map()) ::
+          {:ok, MishkaPay.ConnectedAccount.Link.t()} | {:error, Splode.Error.t()}
   def account_link(attrs) when is_map(attrs) do
     made(
       :account_link,
       :connect,
       attrs,
-      MishkaPay.AccountLink,
+      MishkaPay.ConnectedAccount.Link,
       [:provider, :account_id],
       :account_link
     )
@@ -1599,10 +1599,10 @@ defmodule MishkaPay do
 
   @doc """
   Makes a one-time link into connected account `account_id`'s own dashboard at the provider
-  (`MishkaPay.AccountLink`, `type: :login`), for a seller who finished onboarding.
+  (`MishkaPay.ConnectedAccount.Link`, `type: :login`), for a seller who finished onboarding.
   """
   @spec login_link(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.ConnectedAccount.Link.t()} | {:error, Splode.Error.t()}
   def login_link(provider, account_id, tenant \\ nil)
       when is_binary(provider) and is_binary(account_id) do
     capable(:connect, :login_link, provider, tenant, & &1.login_link(account_id, &2))
@@ -1700,18 +1700,18 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Reads payout `payout_id` (`MishkaPay.Payout`) of the account `tenant`'s keys act for: the
+  Reads payout `payout_id` (`MishkaPay.Balance.Payout`) of the account `tenant`'s keys act for: the
   platform's own, or the connected account they name.
   """
   @spec fetch_payout(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
   def fetch_payout(provider, payout_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payout_id) do
     capable(:payout, :payout, provider, tenant, & &1.fetch_payout(payout_id, &2))
   end
 
   @doc """
-  One page of payouts, newest first (`MishkaPay.Page` of `MishkaPay.Payout`): `status:` only
+  One page of payouts, newest first (`MishkaPay.Page` of `MishkaPay.Balance.Payout`): `status:` only
   `:pending`, `:in_transit`, `:paid`, `:failed` or `:canceled` ones, plus `limit:` and `after:`.
   """
   @spec list_payouts(String.t(), term(), keyword()) ::
@@ -1736,7 +1736,7 @@ defmodule MishkaPay do
 
   @doc "Stops payout `payout_id` while it is still `:pending`; answers it `:canceled`."
   @spec cancel_payout(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
   def cancel_payout(provider, payout_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payout_id) do
     capable(:payout, :payout_cancel, provider, tenant, & &1.cancel_payout(payout_id, &2))
@@ -1801,13 +1801,13 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Makes a draft bill for a customer from `attrs` (see `MishkaPay.InvoiceDraft`), with its items,
+  Makes a draft bill for a customer from `attrs` (see `MishkaPay.Invoice.Draft`), with its items,
   and answers it as a `MishkaPay.Invoice`. Open it with `finalize_invoice/3`.
   """
   @spec create_invoice(map()) :: {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
   def create_invoice(attrs) when is_map(attrs) do
     span(:invoice_create, attrs, fn ->
-      with {:ok, draft} <- Errors.from_builder(MishkaPay.InvoiceDraft.builder(attrs)),
+      with {:ok, draft} <- Errors.from_builder(MishkaPay.Invoice.Draft.builder(attrs)),
            {:ok, module} <- Provider.capable(draft.provider, :invoice),
            {:ok, keys} <- Credentials.fetch(draft.provider, draft.tenant) do
         module.create_invoice(draft, keys)
@@ -1864,7 +1864,7 @@ defmodule MishkaPay do
     do: capable(:invoice, operation, provider, tenant, call)
 
   @doc """
-  Adds a charge for a customer from `attrs` (see `MishkaPay.InvoiceItem`): a catalog
+  Adds a charge for a customer from `attrs` (see `MishkaPay.Invoice.Item`): a catalog
   `:price_id`, or a `:name` and `:amount`, with a `:quantity`. Without `:invoice_id` it waits and
   goes on the customer's next bill (a renewal or a one-off bill); with it, on that draft bill.
 
@@ -1873,7 +1873,7 @@ defmodule MishkaPay do
                                       reference: "setup-" <> account.id})
   """
   @spec create_invoice_item(map()) ::
-          {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Invoice.Item.t()} | {:error, Splode.Error.t()}
   def create_invoice_item(attrs) when is_map(attrs) do
     needed = [:provider, :customer_id]
 
@@ -1881,7 +1881,7 @@ defmodule MishkaPay do
       :invoice_item_create,
       :invoice_item,
       attrs,
-      MishkaPay.InvoiceItem,
+      MishkaPay.Invoice.Item,
       needed,
       :create_invoice_item
     )
@@ -1893,14 +1893,14 @@ defmodule MishkaPay do
   `:customer_id` or `:invoice_id` here is refused.
   """
   @spec update_invoice_item(map()) ::
-          {:ok, MishkaPay.InvoiceItem.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Invoice.Item.t()} | {:error, Splode.Error.t()}
   def update_invoice_item(%{} = attrs) do
     in_place(attrs, [:customer_id, :invoice_id], :invoice_item_moves, fn ->
       made(
         :invoice_item_update,
         :invoice_item,
         attrs,
-        MishkaPay.InvoiceItem,
+        MishkaPay.Invoice.Item,
         [:provider],
         :update_invoice_item
       )
@@ -1937,7 +1937,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of invoice items at `provider`, newest first (`MishkaPay.Page` of
-  `MishkaPay.InvoiceItem`): `customer_id:` one customer's, `invoice_id:` those on one bill,
+  `MishkaPay.Invoice.Item`): `customer_id:` one customer's, `invoice_id:` those on one bill,
   `pending: true` only those still waiting for a bill, plus `limit:` and `after:`.
   """
   @spec list_invoice_items(String.t(), term(), keyword()) ::
@@ -2043,7 +2043,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of credit note `credit_note_id`'s lines (`MishkaPay.Page` of
-  `MishkaPay.CreditNoteLine`), plus `limit:` and `after:`.
+  `MishkaPay.CreditNote.Lines`), plus `limit:` and `after:`.
   """
   @spec list_credit_note_lines(String.t(), String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
@@ -2062,7 +2062,7 @@ defmodule MishkaPay do
   Calls any path of the provider's own API with the tenant's keys, for what Mishka Pay has no
   typed call for yet, and answers the provider's decoded answer as it is (a map). `attrs` is a
   `MishkaPay.RawRequest`: `:method`, `:path` (from the root, never an address), `:params`, a
-  `:reference` that makes a write's idempotency key, and `:options` (`MishkaPay.RequestOptions`:
+  `:reference` that makes a write's idempotency key, and `:options` (`MishkaPay.RawRequest.Options`:
   `:api_version`, `:expand`). It goes through the same retries, idempotency keys and telemetry as
   every typed call, and an error is the same `MishkaPay.Errors` one.
 
@@ -2243,7 +2243,7 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Changes a running subscription (see `MishkaPay.SubscriptionChange`): a new plan
+  Changes a running subscription (see `MishkaPay.Subscription.Change`): a new plan
   (`:price_id`), a new quantity, or both, billed the way `:proration` says. Answers the
   subscription after. Preview it first with `preview_subscription_change/1`.
   """
@@ -2262,7 +2262,7 @@ defmodule MishkaPay do
           {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
   def preview_subscription_change(attrs) when is_map(attrs) do
     attrs =
-      case MishkaPay.SubscriptionChange.prorates?(attrs) do
+      case MishkaPay.Subscription.change_prorates?(attrs) do
         true -> Map.put_new_lazy(attrs, :proration_date, &DateTime.utc_now/0)
         false -> attrs
       end
@@ -2336,7 +2336,7 @@ defmodule MishkaPay do
   end
 
   @doc """
-  Makes a subscription schedule from `attrs` (see `MishkaPay.SubscriptionSchedule`): from a
+  Makes a subscription schedule from `attrs` (see `MishkaPay.Subscription.Schedule`): from a
   running `:subscription_id`, or for a `:customer_id` with its `:phases`. Its `:reference` makes
   it once. The provider needs `:subscription_schedule`.
 
@@ -2346,21 +2346,21 @@ defmodule MishkaPay do
                  %{items: [%{id: full.id}], iterations: 9, interval: :month}]})
   """
   @spec create_subscription_schedule(map()) ::
-          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
   def create_subscription_schedule(attrs) when is_map(attrs) do
     made(
       :subscription_schedule_create,
       :subscription_schedule,
       attrs,
-      MishkaPay.SubscriptionSchedule,
-      [:provider | MishkaPay.SubscriptionSchedule.needs(attrs)],
+      MishkaPay.Subscription.Schedule,
+      [:provider | MishkaPay.Subscription.schedule_needs(attrs)],
       :create_subscription_schedule
     )
   end
 
   @doc "Reads subscription schedule `schedule_id` again from `provider`, with its phases."
   @spec fetch_subscription_schedule(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
   def fetch_subscription_schedule(provider, schedule_id, tenant \\ nil)
       when is_binary(provider) and is_binary(schedule_id) do
     capable(
@@ -2374,7 +2374,7 @@ defmodule MishkaPay do
 
   @doc """
   One page of subscription schedules at `provider`, newest first (`MishkaPay.Page` of
-  `MishkaPay.SubscriptionSchedule`): `customer_id:` one customer's, `scheduled: true` only those
+  `MishkaPay.Subscription.Schedule`): `customer_id:` one customer's, `scheduled: true` only those
   not started yet, plus `limit:` and `after:`.
   """
   @spec list_subscription_schedules(String.t(), term(), keyword()) ::
@@ -2394,17 +2394,17 @@ defmodule MishkaPay do
   Changes subscription schedule `attrs.id` at `attrs.provider`: only what is given. `:phases`
   replaces the phases from the current one on (the current one with the start it has);
   `:end_behavior` and `:proration` (how this change is billed) as on
-  `MishkaPay.SubscriptionSchedule`. Its customer and subscription stay.
+  `MishkaPay.Subscription.Schedule`. Its customer and subscription stay.
   """
   @spec update_subscription_schedule(map()) ::
-          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
   def update_subscription_schedule(%{} = attrs) do
     in_place(attrs, [:customer_id, :subscription_id], :schedule_moves, fn ->
       made(
         :subscription_schedule_update,
         :subscription_schedule,
         attrs,
-        MishkaPay.SubscriptionSchedule,
+        MishkaPay.Subscription.Schedule,
         [:provider],
         :update_subscription_schedule
       )
@@ -2416,7 +2416,7 @@ defmodule MishkaPay do
   as it is now, without the phases still to come.
   """
   @spec release_subscription_schedule(String.t(), String.t(), term()) ::
-          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
   def release_subscription_schedule(provider, schedule_id, tenant \\ nil)
       when is_binary(provider) and is_binary(schedule_id) do
     capable(
@@ -2434,7 +2434,7 @@ defmodule MishkaPay do
   provider's default.
   """
   @spec cancel_subscription_schedule(String.t(), String.t(), term(), keyword()) ::
-          {:ok, MishkaPay.SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Subscription.Schedule.t()} | {:error, Splode.Error.t()}
   def cancel_subscription_schedule(provider, schedule_id, tenant \\ nil, opts \\ [])
       when is_binary(provider) and is_binary(schedule_id) do
     capable(
@@ -2467,7 +2467,7 @@ defmodule MishkaPay do
 
   defp changed(operation, attrs, callback) do
     span(operation, attrs, fn ->
-      with {:ok, change} <- Errors.from_builder(MishkaPay.SubscriptionChange.builder(attrs)),
+      with {:ok, change} <- Errors.from_builder(MishkaPay.Subscription.Change.builder(attrs)),
            {:ok, module} <- Provider.capable(change.provider, :subscription_change),
            {:ok, keys} <- Credentials.fetch(change.provider, change.tenant) do
         apply(module, callback, [change, keys])

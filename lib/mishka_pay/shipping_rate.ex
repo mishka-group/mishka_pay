@@ -62,39 +62,4 @@ defmodule MishkaPay.ShippingRate do
 
   defp invalid(field, message),
     do: {:error, %{field: field, action: :shipping, message: MishkaPay.Messages.text(message)}}
-
-  @doc """
-  A checkout's shipping choice as a rate: a provider's rate id (`"shr_..."`) or a map of a new
-  one, built and checked. For `MishkaPay.Checkout`'s `:shipping_rates`.
-  """
-  @spec rates(atom(), term()) :: {:ok, atom(), [t()] | nil} | {:error, atom(), String.t()}
-  def rates(field, nil), do: {:ok, field, nil}
-
-  def rates(field, rates) when is_list(rates) do
-    rates
-    |> Enum.reduce_while({:ok, []}, fn rate, {:ok, acc} ->
-      case built(rate) do
-        {:ok, rate} -> {:cont, {:ok, [rate | acc]}}
-        :error -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, built} -> {:ok, field, Enum.reverse(built)}
-      :error -> {:error, field, MishkaPay.Messages.text(:shipping_needs)}
-    end
-  end
-
-  def rates(field, _other), do: {:error, field, MishkaPay.Messages.text(:shipping_needs)}
-
-  defp built(%__MODULE__{} = rate), do: {:ok, rate}
-  defp built(id) when is_binary(id), do: built(%{id: id})
-
-  defp built(%{} = rate) do
-    case builder(rate) do
-      {:ok, rate} -> {:ok, rate}
-      {:error, _errors} -> :error
-    end
-  end
-
-  defp built(_other), do: :error
 end

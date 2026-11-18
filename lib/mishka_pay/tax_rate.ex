@@ -10,7 +10,7 @@ defmodule MishkaPay.TaxRate do
   and `MishkaPay.list_tax_rates/3`, and changed with `MishkaPay.update_tax_rate/1`.
 
   A rate goes on a line by its id: `:tax_rate_ids` of a checkout's item (`MishkaPay.Price`), of an
-  invoice item (`MishkaPay.InvoiceItem`), or of a whole draft bill (`MishkaPay.InvoiceDraft`).
+  invoice item (`MishkaPay.Invoice.Item`), or of a whole draft bill (`MishkaPay.Invoice.Draft`).
 
   What the caller gives:
 
@@ -89,19 +89,4 @@ defmodule MishkaPay.TaxRate do
       _not_a_percentage -> {:error, field, MishkaPay.Messages.text(:tax_percentage)}
     end
   end
-
-  @doc """
-  Checks the tax rate ids a line or a bill takes (`:tax_rate_ids`): a list of non-empty strings.
-  """
-  @spec ids(atom(), term()) :: {:ok, atom(), [String.t()] | nil} | {:error, atom(), String.t()}
-  def ids(field, nil), do: {:ok, field, nil}
-
-  def ids(field, ids) when is_list(ids) do
-    case Enum.all?(ids, &(is_binary(&1) and String.trim(&1) != "")) do
-      true -> {:ok, field, Enum.map(ids, &String.trim/1)}
-      false -> {:error, field, MishkaPay.Messages.text(:tax_rate_ids)}
-    end
-  end
-
-  def ids(field, _other), do: {:error, field, MishkaPay.Messages.text(:tax_rate_ids)}
 end

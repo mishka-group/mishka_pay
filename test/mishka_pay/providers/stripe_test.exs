@@ -82,7 +82,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       keys = %{secret_key: "sk_test_123"}
 
-      options = %MishkaPay.RequestOptions{
+      options = %MishkaPay.RawRequest.Options{
         api_version: "2025-03-31.basil",
         expand: ["data.customer"]
       }
@@ -97,7 +97,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:ok, %{"object" => "customer"}} =
                Stripe.request(:post, "/v1/customers", %{"email" => "a@shop.test"}, keys,
-                 request_options: %MishkaPay.RequestOptions{expand: ["invoice_settings"]}
+                 request_options: %MishkaPay.RawRequest.Options{expand: ["invoice_settings"]}
                )
 
       assert_received {:sent, "POST", %{"stripe-version" => version}, ""}
@@ -252,7 +252,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, "POST", "/v1/accounts/acct_123/reject"}
 
       assert {:ok,
-              %MishkaPay.AccountLink{
+              %MishkaPay.ConnectedAccount.Link{
                 type: :onboarding,
                 account_id: "acct_123",
                 url: "https://" <> _,
@@ -268,7 +268,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert_received {:sent, "POST", "/v1/account_links"}
 
-      assert {:ok, %MishkaPay.AccountLink{type: :login, url: "https://" <> _}} =
+      assert {:ok, %MishkaPay.ConnectedAccount.Link{type: :login, url: "https://" <> _}} =
                MishkaPay.login_link("stripe", "acct_123", "site-v1")
 
       assert_received {:sent, "POST", "/v1/accounts/acct_123/login_links"}
@@ -492,7 +492,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert JSON.decode!(close) == %{"applied_configurations" => ["recipient", "merchant"]}
 
       assert {:ok,
-              %MishkaPay.AccountLink{
+              %MishkaPay.ConnectedAccount.Link{
                 url: "https://connect.stripe.com/setup/e/acct_v2/x",
                 expires_at: %DateTime{}
               }} =
@@ -518,7 +518,7 @@ defmodule MishkaPay.Providers.StripeTest do
              }
 
       # A login link is Stripe's v1 path, for an account made with either API.
-      assert {:ok, %MishkaPay.AccountLink{type: :login}} =
+      assert {:ok, %MishkaPay.ConnectedAccount.Link{type: :login}} =
                MishkaPay.login_link("stripe", "acct_v2", "site-a")
 
       assert_received {:stripe, "POST", "/v1/accounts/acct_v2/login_links", _q, _b, _h}
@@ -679,16 +679,18 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert_received {:sent, "POST", "/v1/transfers/tr_123/reversals", _}
 
-      assert {:ok, %MishkaPay.Payout{id: "po_123", status: :in_transit, automatic: true}} =
+      assert {:ok, %MishkaPay.Balance.Payout{id: "po_123", status: :in_transit, automatic: true}} =
                MishkaPay.fetch_payout("stripe", "po_123", "site-a")
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Payout{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Balance.Payout{} | _]}} =
                MishkaPay.list_payouts("stripe", "site-a", status: :in_transit)
 
       assert_received {:sent, "GET", "/v1/payouts", payouts}
       assert %{"status" => "in_transit"} = URI.decode_query(payouts)
 
-      assert {:ok, %MishkaPay.Payout{}} = MishkaPay.cancel_payout("stripe", "po_123", "site-a")
+      assert {:ok, %MishkaPay.Balance.Payout{}} =
+               MishkaPay.cancel_payout("stripe", "po_123", "site-a")
+
       assert_received {:sent, "POST", "/v1/payouts/po_123/cancel", _}
 
       assert {:ok, %MishkaPay.ApplicationFee{id: "fee_123", account_id: "acct_" <> _}} =
@@ -1377,7 +1379,7 @@ defmodule MishkaPay.Providers.StripeTest do
                  })
                )
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{}} =
                MishkaPay.create_subscription_schedule(
                  Map.put(known, :phases, [
                    %{items: [%{id: "price_full"}], iterations: 1, interval: :month}
@@ -1420,7 +1422,7 @@ defmodule MishkaPay.Providers.StripeTest do
         refute Map.has_key?(params, "customer"), "#{method} #{path}"
       end
 
-      assert {:ok, %MishkaPay.TaxId{}} =
+      assert {:ok, %MishkaPay.Customer.TaxId{}} =
                MishkaPay.create_tax_id("stripe", buyer, %{type: "eu_vat", value: "DE1"}, "site-a")
 
       assert {:ok, %MishkaPay.Page{}} = MishkaPay.list_tax_ids("stripe", buyer, "site-a")
@@ -1481,7 +1483,7 @@ defmodule MishkaPay.Providers.StripeTest do
     end
 
     test "a customer's tax ids are added, listed and removed as Stripe's spec accepts" do
-      assert {:ok, %MishkaPay.TaxId{provider: "stripe", id: "txi_" <> _, type: type}} =
+      assert {:ok, %MishkaPay.Customer.TaxId{provider: "stripe", id: "txi_" <> _, type: type}} =
                MishkaPay.create_tax_id(
                  "stripe",
                  "cus_123",
@@ -1491,7 +1493,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert type == "eu_vat"
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxId{id: "txi_" <> _} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer.TaxId{id: "txi_" <> _} | _]}} =
                MishkaPay.list_tax_ids("stripe", "cus_123", "site-a", limit: 3)
 
       assert :ok = MishkaPay.delete_tax_id("stripe", "cus_123", "txi_123", "site-a")
@@ -1611,7 +1613,11 @@ defmodule MishkaPay.Providers.StripeTest do
       by_customer = @tax |> Map.delete(:address) |> Map.put(:customer_id, "cus_123")
       assert {:ok, %MishkaPay.TaxCalculation{}} = MishkaPay.calculate_tax(by_customer)
 
-      assert {:ok, %MishkaPay.TaxTransaction{id: "tax_" <> _, calculation_id: "taxcalc_123"}} =
+      assert {:ok,
+              %MishkaPay.TaxCalculation.Transaction{
+                id: "tax_" <> _,
+                calculation_id: "taxcalc_123"
+              }} =
                MishkaPay.record_tax("stripe", "taxcalc_123", "order-7", "site-a")
 
       {:ok, calculation} = MishkaPay.TaxCalculation.builder(@tax)
@@ -1806,10 +1812,12 @@ defmodule MishkaPay.Providers.StripeTest do
         cancel_url: "https://shop.test/no"
       }
 
-      schedule = %MishkaPay.SubscriptionSchedule{
+      schedule = %MishkaPay.Subscription.Schedule{
         provider: "stripe",
         customer_id: "cus_1",
-        phases: [%MishkaPay.SubscriptionPhase{items: [%MishkaPay.Price{id: "price_1"}]}]
+        phases: [
+          %MishkaPay.Subscription.Schedule.Phases{items: [%MishkaPay.Price{id: "price_1"}]}
+        ]
       }
 
       billing = fn choice, settings ->
@@ -1982,7 +1990,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       at = DateTime.add(DateTime.utc_now(), 3600)
 
-      assert {:ok, %MishkaPay.FileLink{id: "link_" <> _, url: "https://" <> _, expired: false}} =
+      assert {:ok, %MishkaPay.File.Link{id: "link_" <> _, url: "https://" <> _, expired: false}} =
                MishkaPay.file_link("stripe", id, "site-a", expires_at: at)
 
       assert {:ok, %MishkaPay.Dispute{}} =
@@ -2031,7 +2039,7 @@ defmodule MishkaPay.Providers.StripeTest do
       params =
         Stripe.Mapper.change_params(
           struct!(
-            MishkaPay.SubscriptionChange,
+            MishkaPay.Subscription.Change,
             Map.put(change, :proration_date, ~U[2026-11-16 00:00:00Z])
           ),
           "si_123"
@@ -2047,7 +2055,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert %{"subscription" => "sub_123", "subscription_details" => details} =
                Stripe.Mapper.preview_params(
-                 struct!(MishkaPay.SubscriptionChange, change),
+                 struct!(MishkaPay.Subscription.Change, change),
                  "si_123"
                )
 
@@ -2162,7 +2170,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Coupon{} | _]}} =
                MishkaPay.list_coupons("stripe", "site-a")
 
-      assert {:ok, %MishkaPay.PromotionCode{id: "promo_" <> _ = code_id}} =
+      assert {:ok, %MishkaPay.Coupon.PromotionCode{id: "promo_" <> _ = code_id}} =
                MishkaPay.create_promotion_code(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2172,13 +2180,13 @@ defmodule MishkaPay.Providers.StripeTest do
                  minimum_amount: %{amount: "20", currency: "USD"}
                })
 
-      assert {:ok, %MishkaPay.PromotionCode{}} =
+      assert {:ok, %MishkaPay.Coupon.PromotionCode{}} =
                MishkaPay.fetch_promotion_code("stripe", code_id, "site-a")
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PromotionCode{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Coupon.PromotionCode{} | _]}} =
                MishkaPay.list_promotion_codes("stripe", "site-a", code: "SPRING5", active: true)
 
-      assert {:ok, %MishkaPay.PromotionCode{}} =
+      assert {:ok, %MishkaPay.Coupon.PromotionCode{}} =
                MishkaPay.update_promotion_code(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2237,7 +2245,7 @@ defmodule MishkaPay.Providers.StripeTest do
     end
 
     test "invoice items are added, changed, listed and removed as Stripe's spec accepts" do
-      assert {:ok, %MishkaPay.InvoiceItem{id: "ii_" <> _, provider: "stripe"}} =
+      assert {:ok, %MishkaPay.Invoice.Item{id: "ii_" <> _, provider: "stripe"}} =
                MishkaPay.create_invoice_item(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2250,7 +2258,7 @@ defmodule MishkaPay.Providers.StripeTest do
                  metadata: %{"team" => "ops"}
                })
 
-      assert {:ok, %MishkaPay.InvoiceItem{}} =
+      assert {:ok, %MishkaPay.Invoice.Item{}} =
                MishkaPay.create_invoice_item(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2259,7 +2267,7 @@ defmodule MishkaPay.Providers.StripeTest do
                  price_id: "price_123"
                })
 
-      assert {:ok, %MishkaPay.InvoiceItem{}} =
+      assert {:ok, %MishkaPay.Invoice.Item{}} =
                MishkaPay.update_invoice_item(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2269,7 +2277,7 @@ defmodule MishkaPay.Providers.StripeTest do
                  quantity: 3
                })
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.InvoiceItem{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Invoice.Item{} | _]}} =
                MishkaPay.list_invoice_items("stripe", "site-a",
                  customer_id: "cus_123",
                  pending: true,
@@ -2328,7 +2336,7 @@ defmodule MishkaPay.Providers.StripeTest do
     end
 
     test "subscription schedules are made, read, listed, changed, released and canceled as Stripe's spec accepts" do
-      assert {:ok, %MishkaPay.SubscriptionSchedule{id: "sub_sched_" <> _ = id, phases: [_ | _]}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{id: "sub_sched_" <> _ = id, phases: [_ | _]}} =
                MishkaPay.create_subscription_schedule(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2350,23 +2358,23 @@ defmodule MishkaPay.Providers.StripeTest do
                  ]
                })
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{}} =
                MishkaPay.create_subscription_schedule(%{
                  provider: "stripe",
                  subscription_id: "sub_123"
                })
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{id: ^id}} =
                MishkaPay.fetch_subscription_schedule("stripe", id, "site-a")
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.SubscriptionSchedule{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Subscription.Schedule{} | _]}} =
                MishkaPay.list_subscription_schedules("stripe", "site-a",
                  customer_id: "cus_123",
                  scheduled: true,
                  limit: 3
                )
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{}} =
                MishkaPay.update_subscription_schedule(%{
                  provider: "stripe",
                  id: id,
@@ -2382,10 +2390,10 @@ defmodule MishkaPay.Providers.StripeTest do
                  ]
                })
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{}} =
                MishkaPay.release_subscription_schedule("stripe", id, "site-a")
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{}} =
                MishkaPay.cancel_subscription_schedule("stripe", id, "site-a",
                  invoice_now: true,
                  prorate: false
@@ -2617,7 +2625,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote{} | _]}} =
                MishkaPay.list_credit_notes("stripe", "site-a", invoice_id: "in_123", limit: 3)
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNoteLine{amount: %Money{}} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote.Lines{amount: %Money{}} | _]}} =
                MishkaPay.list_credit_note_lines("stripe", id, "site-a", limit: 2)
     end
 
@@ -2918,19 +2926,21 @@ defmodule MishkaPay.Providers.StripeTest do
     end
 
     test "saved payment methods are listed, read, made the default and taken off, as Stripe's spec answers" do
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: "pm_" <> _} | _]}} =
+      assert {:ok,
+              %MishkaPay.Page{items: [%MishkaPay.Customer.PaymentMethod{id: "pm_" <> _} | _]}} =
                MishkaPay.list_payment_methods("stripe", "site-a",
                  customer_id: "cus_123",
                  limit: 3
                )
 
-      assert {:ok, %MishkaPay.PaymentMethod{provider: "stripe", id: "pm_" <> _, type: "card"}} =
+      assert {:ok,
+              %MishkaPay.Customer.PaymentMethod{provider: "stripe", id: "pm_" <> _, type: "card"}} =
                MishkaPay.fetch_payment_method("stripe", "pm_123", "site-a")
 
       assert {:ok, %MishkaPay.Customer{id: "cus_" <> _}} =
                MishkaPay.set_default_payment_method("stripe", "cus_123", "pm_123", "site-a")
 
-      assert {:ok, %MishkaPay.PaymentMethod{id: "pm_" <> _}} =
+      assert {:ok, %MishkaPay.Customer.PaymentMethod{id: "pm_" <> _}} =
                MishkaPay.detach_payment_method("stripe", "pm_123", "site-a")
     end
 
@@ -2976,7 +2986,8 @@ defmodule MishkaPay.Providers.StripeTest do
     end
 
     test "portal configurations are made, changed, read and listed as Stripe's spec accepts, and a session names one" do
-      assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_" <> _ = id, provider: "stripe"}} =
+      assert {:ok,
+              %MishkaPay.PortalSession.Configuration{id: "bpc_" <> _ = id, provider: "stripe"}} =
                MishkaPay.create_portal_configuration(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -2995,7 +3006,7 @@ defmodule MishkaPay.Providers.StripeTest do
                  metadata: %{"for" => "teams"}
                })
 
-      assert {:ok, %MishkaPay.PortalConfiguration{}} =
+      assert {:ok, %MishkaPay.PortalSession.Configuration{}} =
                MishkaPay.update_portal_configuration(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -3005,10 +3016,10 @@ defmodule MishkaPay.Providers.StripeTest do
                  customer_update: []
                })
 
-      assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_123"}} =
+      assert {:ok, %MishkaPay.PortalSession.Configuration{id: "bpc_123"}} =
                MishkaPay.fetch_portal_configuration("stripe", "bpc_123", "site-a")
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalConfiguration{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalSession.Configuration{} | _]}} =
                MishkaPay.list_portal_configurations("stripe", "site-a", active: true, limit: 3)
 
       assert {:ok, %MishkaPay.PortalSession{url: "https://" <> _}} =
@@ -3254,7 +3265,7 @@ defmodule MishkaPay.Providers.StripeTest do
       end)
 
       assert {:ok,
-              %MishkaPay.FraudWarning{
+              %MishkaPay.Payment.FraudWarning{
                 id: "issfr_123",
                 charge_id: "ch_1234",
                 fraud_type: "misc",
@@ -3262,21 +3273,25 @@ defmodule MishkaPay.Providers.StripeTest do
                 created_at: %DateTime{}
               }} = MishkaPay.fetch_fraud_warning("stripe", "issfr_123", "site-a")
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.FraudWarning{id: "issfr_" <> _}]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Payment.FraudWarning{id: "issfr_" <> _}]}} =
                MishkaPay.list_fraud_warnings("stripe", "site-a", payment_id: "pi_1", limit: 5)
 
       assert_received {:sent, "GET", "/v1/radar/early_fraud_warnings/issfr_123", ""}
       assert_received {:sent, "GET", "/v1/radar/early_fraud_warnings", query}
       assert %{"payment_intent" => "pi_1", "limit" => "5"} = URI.decode_query(query)
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.FraudReview{open: true} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Payment.FraudReview{open: true} | _]}} =
                MishkaPay.list_fraud_reviews("stripe", "site-a")
 
       assert {:ok,
-              %MishkaPay.FraudReview{id: "prv_123", opened_reason: :rule, charge_id: "ch_" <> _}} =
+              %MishkaPay.Payment.FraudReview{
+                id: "prv_123",
+                opened_reason: :rule,
+                charge_id: "ch_" <> _
+              }} =
                MishkaPay.fetch_fraud_review("stripe", "prv_123", "site-a")
 
-      assert {:ok, %MishkaPay.FraudReview{id: "prv_123"}} =
+      assert {:ok, %MishkaPay.Payment.FraudReview{id: "prv_123"}} =
                MishkaPay.approve_fraud_review("stripe", "prv_123", "site-a")
 
       assert_received {:sent, "POST", "/v1/reviews/prv_123/approve", ""}
@@ -3535,7 +3550,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:stripe_sent, "POST", "/v1/invoiceitems", %{"tax_rates[0]" => "txr_2"},
                        _key}
 
-      assert {:ok, %MishkaPay.InvoiceItem{}} =
+      assert {:ok, %MishkaPay.Invoice.Item{}} =
                MishkaPay.create_invoice_item(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -3552,7 +3567,7 @@ defmodule MishkaPay.Providers.StripeTest do
       test = self()
       MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
 
-      assert {:ok, %MishkaPay.TaxRegistration{id: "taxreg_" <> _}} =
+      assert {:ok, %MishkaPay.TaxSettings.Registration{id: "taxreg_" <> _}} =
                MishkaPay.create_tax_registration(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -3571,7 +3586,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       ends = ~U[2030-01-01 00:00:00Z]
 
-      assert {:ok, %MishkaPay.TaxRegistration{}} =
+      assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
                MishkaPay.create_tax_registration(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -3585,7 +3600,7 @@ defmodule MishkaPay.Providers.StripeTest do
                        %{"country_options[us][state]" => "CA", "expires_at" => "1893456000"},
                        _key}
 
-      assert {:ok, %MishkaPay.TaxRegistration{}} =
+      assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
                MishkaPay.create_tax_registration(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -3597,15 +3612,15 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:stripe_sent, "POST", "/v1/tax/registrations",
                        %{"country_options[ca][province_standard][province]" => "BC"}, _key}
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxRegistration{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxSettings.Registration{} | _]}} =
                MishkaPay.list_tax_registrations("stripe", "site-a", status: :all)
 
       assert_received {:stripe_sent, "GET", "/v1/tax/registrations", %{"status" => "all"}, _key}
 
-      assert {:ok, %MishkaPay.TaxRegistration{}} =
+      assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
                MishkaPay.expire_tax_registration("stripe", "taxreg_123", "site-a")
 
-      assert {:ok, %MishkaPay.TaxRegistration{}} =
+      assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
                MishkaPay.expire_tax_registration("stripe", "taxreg_123", "site-a", at: ends)
 
       assert_received {:stripe_sent, "POST", "/v1/tax/registrations/taxreg_123",
@@ -3643,7 +3658,7 @@ defmodule MishkaPay.Providers.StripeTest do
       test = self()
       MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
 
-      assert {:ok, %MishkaPay.TaxRegistration{id: "taxreg_" <> _}} =
+      assert {:ok, %MishkaPay.TaxSettings.Registration{id: "taxreg_" <> _}} =
                MishkaPay.create_tax_registration(%{
                  provider: "stripe",
                  tenant: "site-a",
@@ -3659,7 +3674,7 @@ defmodule MishkaPay.Providers.StripeTest do
                        }, _key}
 
       for {country, scheme} <- [{"GB", :inbound_goods}, {"IS", :standard}, {"DE", :inbound_goods}] do
-        assert {:ok, %MishkaPay.TaxRegistration{}} =
+        assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
                  MishkaPay.create_tax_registration(%{
                    provider: "stripe",
                    tenant: "site-a",
@@ -3793,19 +3808,19 @@ defmodule MishkaPay.Providers.StripeTest do
       cancel = %{provider: "stripe", tenant: "site-a", event_name: "api_call", usage_id: "use-1"}
 
       assert %{"type" => "cancel", "cancel" => %{"identifier" => "use-1"}} =
-               Stripe.Mapper.usage_cancellation_params(%MishkaPay.UsageCancellation{
+               Stripe.Mapper.usage_cancellation_params(%MishkaPay.Usage.Cancellation{
                  provider: "stripe",
                  event_name: "api_call",
                  usage_id: "use-1"
                })
 
-      assert {:ok, %MishkaPay.UsageCancellation{status: :complete, usage_id: "use-1"}} =
+      assert {:ok, %MishkaPay.Usage.Cancellation{status: :complete, usage_id: "use-1"}} =
                MishkaPay.cancel_usage(cancel)
 
       assert_received {:sent, "POST", "/v1/billing/meter_event_adjustments",
                        %{"idempotency-key" => "mishka_pay-usage-cancel-" <> _ = key}}
 
-      assert {:ok, %MishkaPay.UsageCancellation{}} = MishkaPay.cancel_usage(cancel)
+      assert {:ok, %MishkaPay.Usage.Cancellation{}} = MishkaPay.cancel_usage(cancel)
 
       assert_received {:sent, "POST", "/v1/billing/meter_event_adjustments",
                        %{"idempotency-key" => ^key}}
@@ -3850,7 +3865,7 @@ defmodule MishkaPay.Providers.StripeTest do
       from = ~U[2026-11-01 00:00:00Z]
 
       assert {:ok,
-              %MishkaPay.UsageSummary{meter_id: "mtr_123", customer_id: "cus_123", value: 25}} =
+              %MishkaPay.Usage.Summary{meter_id: "mtr_123", customer_id: "cus_123", value: 25}} =
                MishkaPay.usage_summary(
                  "stripe",
                  "mtr_123",
@@ -4118,7 +4133,7 @@ defmodule MishkaPay.Providers.StripeTest do
       from = ~U[2026-11-16 10:00:30Z]
       to = ~U[2026-11-16 11:15:01Z]
 
-      assert {:ok, %MishkaPay.UsageSummary{value: 0, from: start, to: finish}} =
+      assert {:ok, %MishkaPay.Usage.Summary{value: 0, from: start, to: finish}} =
                MishkaPay.usage_summary("stripe", "mtr_1", "cus_1", from, to)
 
       assert start == ~U[2026-11-16 10:00:00Z]
@@ -4144,7 +4159,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert {:ok,
               %MishkaPay.Page{
-                items: [%MishkaPay.Entitlement{id: "ent_" <> _, feature_id: "feat_" <> _}]
+                items: [%MishkaPay.Feature.Entitlement{id: "ent_" <> _, feature_id: "feat_" <> _}]
               }} = MishkaPay.list_entitlements("stripe", "cus_123", "site-a", limit: 5)
     end
 
@@ -4155,7 +4170,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert {:ok,
               %MishkaPay.Page{
                 items: [
-                  %MishkaPay.BalanceTransaction{
+                  %MishkaPay.Balance.Transaction{
                     id: "txn_" <> _,
                     type: "charge",
                     status: :available
@@ -4171,7 +4186,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
     test "a customer's balance is credited and listed as Stripe's spec accepts" do
       assert {:ok,
-              %MishkaPay.CustomerBalanceTransaction{
+              %MishkaPay.Customer.BalanceTransaction{
                 id: "cbtxn_" <> _,
                 customer_id: "cus_123",
                 amount: amount
@@ -4187,7 +4202,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert Money.negative?(amount)
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CustomerBalanceTransaction{} | _]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer.BalanceTransaction{} | _]}} =
                MishkaPay.list_customer_balance("stripe", "cus_123", "site-a", limit: 2)
     end
 
@@ -4222,7 +4237,7 @@ defmodule MishkaPay.Providers.StripeTest do
       end
 
       assert {:ok,
-              %MishkaPay.CustomerBalanceTransaction{
+              %MishkaPay.Customer.BalanceTransaction{
                 amount: amount,
                 ending_balance: ending,
                 reference: "ticket-7",
@@ -4249,7 +4264,7 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Money.equal?(jpy, Money.new(:JPY, 300))
 
       assert {:ok,
-              %MishkaPay.BalanceTransaction{amount: out, fee: fee, net: net, source_id: "po_1"}} =
+              %MishkaPay.Balance.Transaction{amount: out, fee: fee, net: net, source_id: "po_1"}} =
                Stripe.Mapper.balance_transaction(%{
                  "id" => "txn_1",
                  "amount" => -10_000,
@@ -5068,7 +5083,7 @@ defmodule MishkaPay.Providers.StripeTest do
                  "filename=\"receipt.pdf\"\r\ncontent-type: application/pdf\r\n\r\n" <>
                  @upload.content <> "\r\n--#{boundary}--\r\n"
 
-      refute inspect(MishkaPay.FileUpload.builder(@upload)) =~ "%PDF"
+      refute inspect(MishkaPay.File.Upload.builder(@upload)) =~ "%PDF"
     end
 
     test "an upload follows files_url, else base_url, while the API follows base_url only" do
@@ -5125,7 +5140,7 @@ defmodule MishkaPay.Providers.StripeTest do
       unix = Integer.to_string(DateTime.to_unix(at))
 
       assert {:ok,
-              %MishkaPay.FileLink{
+              %MishkaPay.File.Link{
                 id: "link_1",
                 file_id: "file_1",
                 url: "https://files.stripe.com/links/abc"
@@ -5394,7 +5409,7 @@ defmodule MishkaPay.Providers.StripeTest do
       ]
     }
 
-    assert {:ok, %MishkaPay.SubscriptionSchedule{} = mapped} =
+    assert {:ok, %MishkaPay.Subscription.Schedule{} = mapped} =
              Stripe.Mapper.subscription_schedule(schedule)
 
     assert {mapped.id, mapped.customer_id, mapped.subscription_id,
@@ -5405,11 +5420,11 @@ defmodule MishkaPay.Providers.StripeTest do
              {:released, :release, 1, "member-1"}
 
     assert [
-             %MishkaPay.SubscriptionPhase{
+             %MishkaPay.Subscription.Schedule.Phases{
                trial_end_at: %DateTime{},
                items: [%{id: "price_intro"}]
              },
-             %MishkaPay.SubscriptionPhase{
+             %MishkaPay.Subscription.Schedule.Phases{
                proration: :none,
                items: [%{id: "price_full", quantity: 3}]
              }
@@ -5488,12 +5503,12 @@ defmodule MishkaPay.Providers.StripeTest do
     assert mapped.voided_at == DateTime.from_unix!(1_794_000_100)
 
     assert [
-             %MishkaPay.CreditNoteLine{
+             %MishkaPay.CreditNote.Lines{
                type: :invoice_line,
                invoice_line_id: "il_1",
                amount: line
              },
-             %MishkaPay.CreditNoteLine{type: :custom, name: "Goodwill", quantity: 2}
+             %MishkaPay.CreditNote.Lines{type: :custom, name: "Goodwill", quantity: 2}
            ] = mapped.lines
 
     assert line == Money.new(:USD, "10.00")
@@ -5638,7 +5653,11 @@ defmodule MishkaPay.Providers.StripeTest do
     assert Decimal.equal?(percentage, Decimal.new("7.25"))
 
     assert {:ok,
-            %MishkaPay.TaxRegistration{country: "CA", type: "province_standard", state: "BC"}} =
+            %MishkaPay.TaxSettings.Registration{
+              country: "CA",
+              type: "province_standard",
+              state: "BC"
+            }} =
              Stripe.Mapper.tax_registration(%{
                "id" => "taxreg_1",
                "country" => "CA",
@@ -5660,7 +5679,7 @@ defmodule MishkaPay.Providers.StripeTest do
           {"GB", "something_new", nil}
         ] do
       assert {:ok,
-              %MishkaPay.TaxRegistration{
+              %MishkaPay.TaxSettings.Registration{
                 country: ^country,
                 type: "standard",
                 place_of_supply_scheme: ^read
@@ -5692,7 +5711,7 @@ defmodule MishkaPay.Providers.StripeTest do
     rate = %MishkaPay.TaxRate{provider: "stripe", id: "txr_1", percentage: Decimal.new(5)}
     assert Stripe.Mapper.tax_rate_params(rate) == %{}
 
-    assert {:ok, %MishkaPay.InvoiceItem{tax_rate_ids: ["txr_1"]}} =
+    assert {:ok, %MishkaPay.Invoice.Item{tax_rate_ids: ["txr_1"]}} =
              Stripe.Mapper.invoice_item(%{
                "object" => "invoiceitem",
                "id" => "ii_1",
@@ -5722,7 +5741,7 @@ defmodule MishkaPay.Providers.StripeTest do
       "metadata" => %{"mishka_pay_reference" => "setup-1", "team" => "ops"}
     }
 
-    assert {:ok, %MishkaPay.InvoiceItem{} = mapped} = Stripe.Mapper.invoice_item(item)
+    assert {:ok, %MishkaPay.Invoice.Item{} = mapped} = Stripe.Mapper.invoice_item(item)
 
     assert {mapped.id, mapped.customer_id, mapped.invoice_id, mapped.price_id, mapped.name} ==
              {"ii_1", "cus_1", nil, "price_1", "Setup fee"}
@@ -5733,7 +5752,7 @@ defmodule MishkaPay.Providers.StripeTest do
     assert {mapped.reference, mapped.metadata} == {"setup-1", %{"team" => "ops"}}
     assert mapped.created_at == DateTime.from_unix!(1_794_000_000)
 
-    assert {:ok, %MishkaPay.InvoiceItem{total: credit, amount: nil, invoice_id: "in_1"}} =
+    assert {:ok, %MishkaPay.Invoice.Item{total: credit, amount: nil, invoice_id: "in_1"}} =
              item
              |> Map.merge(%{"amount" => -500, "invoice" => "in_1", "quantity" => 1})
              |> put_in(["pricing", "unit_amount_decimal"], "-499.5")
@@ -5767,7 +5786,7 @@ defmodule MishkaPay.Providers.StripeTest do
       }
     }
 
-    assert {:ok, %MishkaPay.PortalConfiguration{} = mapped} =
+    assert {:ok, %MishkaPay.PortalSession.Configuration{} = mapped} =
              Stripe.Mapper.portal_configuration(config)
 
     assert {mapped.id, mapped.name, mapped.active, mapped.default, mapped.headline} ==
@@ -5776,7 +5795,14 @@ defmodule MishkaPay.Providers.StripeTest do
     assert {mapped.invoice_history, mapped.payment_method_update} == {true, false}
     assert mapped.customer_update == [:email, :tax_id]
     assert {mapped.subscription_cancel, mapped.subscription_update} == {:at_period_end, [:price]}
-    assert [%MishkaPay.PortalPlan{product_id: "prod_1", price_ids: ["price_a"]}] = mapped.plans
+
+    assert [
+             %MishkaPay.PortalSession.Configuration.Plans{
+               product_id: "prod_1",
+               price_ids: ["price_a"]
+             }
+           ] = mapped.plans
+
     assert mapped.proration == :create_prorations
 
     off =
@@ -5810,7 +5836,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
   test "a tax id maps with its country and its register check, and an unchecked kind has none" do
     assert {:ok,
-            %MishkaPay.TaxId{
+            %MishkaPay.Customer.TaxId{
               id: "txi_1",
               customer_id: "cus_1",
               type: "eu_vat",
@@ -5837,7 +5863,7 @@ defmodule MishkaPay.Providers.StripeTest do
                }
              })
 
-    assert {:ok, %MishkaPay.TaxId{type: "us_ein", verification: nil}} =
+    assert {:ok, %MishkaPay.Customer.TaxId{type: "us_ein", verification: nil}} =
              Stripe.Mapper.tax_id(%{
                "id" => "txi_2",
                "object" => "tax_id",
@@ -5939,7 +5965,7 @@ defmodule MishkaPay.Providers.StripeTest do
               address: %MishkaPay.Address{country: "US", state: "WA", postal_code: "98104"},
               address_source: :shipping,
               items: [
-                %MishkaPay.TaxLine{
+                %MishkaPay.TaxCalculation.Items{
                   id: "tax_li_1",
                   reference: "Music Streaming Coupon",
                   quantity: 1,
@@ -6016,7 +6042,7 @@ defmodule MishkaPay.Providers.StripeTest do
     end
 
     assert {:ok,
-            %MishkaPay.TaxTransaction{
+            %MishkaPay.TaxCalculation.Transaction{
               id: "tax_1",
               reference: "myOrder_123",
               calculation_id: "taxcalc_1",
@@ -6098,7 +6124,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
   test "a payment method maps with its card, and one of another kind without" do
     assert {:ok,
-            %MishkaPay.PaymentMethod{
+            %MishkaPay.Customer.PaymentMethod{
               provider: "stripe",
               id: "pm_1",
               customer_id: "cus_1",
@@ -6124,7 +6150,12 @@ defmodule MishkaPay.Providers.StripeTest do
                }
              })
 
-    assert {:ok, %MishkaPay.PaymentMethod{type: "sepa_debit", customer_id: nil, card_last4: nil}} =
+    assert {:ok,
+            %MishkaPay.Customer.PaymentMethod{
+              type: "sepa_debit",
+              customer_id: nil,
+              card_last4: nil
+            }} =
              Stripe.Mapper.payment_method(%{
                "id" => "pm_2",
                "object" => "payment_method",
@@ -6201,7 +6232,7 @@ defmodule MishkaPay.Providers.StripeTest do
     assert Money.equal?(amount, Money.new(:USD, "5.00"))
 
     assert {:ok,
-            %MishkaPay.PromotionCode{
+            %MishkaPay.Coupon.PromotionCode{
               id: "promo_1",
               code: "SPRING5",
               coupon_id: "Or6TT44r",
@@ -6226,7 +6257,9 @@ defmodule MishkaPay.Providers.StripeTest do
     assert Money.equal?(minimum, Money.new(:USD, "20.00"))
 
     assert %{"promotion" => %{"type" => "coupon", "coupon" => "Or6TT44r"}} =
-             Stripe.Mapper.promotion_code_params(%MishkaPay.PromotionCode{coupon_id: "Or6TT44r"})
+             Stripe.Mapper.promotion_code_params(%MishkaPay.Coupon.PromotionCode{
+               coupon_id: "Or6TT44r"
+             })
   end
 
   # One object of each kind Stripe sends in a handled event, as its API version names them.

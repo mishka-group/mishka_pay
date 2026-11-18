@@ -7,7 +7,7 @@ defmodule MishkaPay.ClientTest do
   use ExUnit.Case, async: true
 
   alias GuardedStruct.Errors.Validation
-  alias MishkaPay.{Client, Errors, RequestOptions}
+  alias MishkaPay.{Client, Errors, RawRequest}
 
   defp request(attrs) do
     %{
@@ -410,8 +410,8 @@ defmodule MishkaPay.ClientTest do
   end
 
   test "request options take a version and expand paths, and no field that could become a header" do
-    assert {:ok, %RequestOptions{api_version: "2026-10-28.endive", expand: ["data.customer"]}} =
-             RequestOptions.builder(%{
+    assert {:ok, %RawRequest.Options{api_version: "2026-10-28.endive", expand: ["data.customer"]}} =
+             RawRequest.Options.builder(%{
                api_version: "2026-10-28.endive",
                expand: ["data.customer"]
              })
@@ -424,11 +424,11 @@ defmodule MishkaPay.ClientTest do
           expand: %{expand: [:customer]},
           expand: %{expand: Enum.map(1..21, &"f#{&1}")}
         ] do
-      assert {:error, [%{field: ^field} | _]} = RequestOptions.builder(attrs)
+      assert {:error, [%{field: ^field} | _]} = RawRequest.Options.builder(attrs)
     end
 
-    assert {:error, _unknown} = RequestOptions.builder(%{headers: %{"authorization" => "x"}})
-    assert {:error, _unknown} = RequestOptions.builder(%{idempotency_key: "k"})
+    assert {:error, _unknown} = RawRequest.Options.builder(%{headers: %{"authorization" => "x"}})
+    assert {:error, _unknown} = RawRequest.Options.builder(%{idempotency_key: "k"})
   end
 
   test "inspect leaves out the auth" do

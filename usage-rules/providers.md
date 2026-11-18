@@ -71,7 +71,7 @@ end
     `file_link/3`; an upload is `MishkaPay.Client`'s `multipart` body;
   - `:usage`: `create_meter/2`, `fetch_meter/2`, `update_meter/2` (a new name only),
     `list_meters/2`, `deactivate_meter/2`, `reactivate_meter/2`, `report_usage/2`,
-    `cancel_usage/2` (a `MishkaPay.UsageCancellation`, once per report), `usage_summary/3`;
+    `cancel_usage/2` (a `MishkaPay.Usage.Cancellation`, once per report), `usage_summary/3`;
   - `:entitlement`: `create_feature/2`, `attach_feature/3`, `list_entitlements/2`;
   - `:balance`: `fetch_balance/1`, `list_balance_transactions/2`;
   - `:customer_balance`: `adjust_customer_balance/2`, `list_customer_balance/2`;

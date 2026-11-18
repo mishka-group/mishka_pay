@@ -13,28 +13,19 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     Checkout,
     Coupon,
     CreditNote,
-    CreditNoteLine,
     Customer,
     Event,
     Invoice,
-    InvoiceItem,
     Money,
     Payment,
     PaymentLink,
-    PaymentMethod,
-    PortalConfiguration,
+    PortalSession,
     Price,
     Product,
-    PromotionCode,
     Refund,
     ShippingRate,
     Subscription,
-    SubscriptionPhase,
-    SubscriptionSchedule,
-    TaxCalculation,
-    TaxId,
-    TaxLine,
-    TaxTransaction
+    TaxCalculation
   }
 
   @reference "mishka_pay_reference"
@@ -184,6 +175,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   # A rate Stripe keeps, by its id, or a new one made with the session.
+  defp shipping_option(id) when is_binary(id), do: %{"shipping_rate" => id}
   defp shipping_option(%ShippingRate{id: id}) when is_binary(id), do: %{"shipping_rate" => id}
   defp shipping_option(rate), do: %{"shipping_rate_data" => shipping_rate_params(rate)}
 
@@ -353,18 +345,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         "dropdown" =>
           (field.type == :dropdown &&
              %{
-               "options" =>
-                 Enum.map(
-                   field.options,
-                   &%{"value" => opt(&1, :value), "label" => opt(&1, :label)}
-                 )
+               "options" => Enum.map(field.options, &%{"value" => &1.value, "label" => &1.label})
              }) ||
             nil
       })
     end
   end
-
-  defp opt(option, name), do: Map.get(option, name) || Map.get(option, Atom.to_string(name))
 
   # The buyer's answers: each field's key to its value, whatever its type.
   defp field_values(fields) when is_list(fields) do
@@ -452,8 +438,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/billing_portal/configurations` (and its update): only what is set. A list
   of choices turns its feature on with them, or off when empty.
   """
-  @spec portal_configuration_params(PortalConfiguration.t()) :: map()
-  def portal_configuration_params(%PortalConfiguration{} = config) do
+  @spec portal_configuration_params(PortalSession.Configuration.t()) :: map()
+  def portal_configuration_params(%PortalSession.Configuration{} = config) do
     %{
       "name" => config.name,
       "active" => config.active,
@@ -492,9 +478,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp portal_plan(plan), do: %{"product" => plan.product_id, "prices" => plan.price_ids}
 
-  @doc "A Stripe portal configuration (`billing_portal.configuration`) as a `MishkaPay.PortalConfiguration`."
+  @doc "A Stripe portal configuration (`billing_portal.configuration`) as a `MishkaPay.PortalSession.Configuration`."
   @spec portal_configuration(map()) ::
-          {:ok, PortalConfiguration.t()} | {:error, Splode.Error.t()}
+          {:ok, PortalSession.Configuration.t()} | {:error, Splode.Error.t()}
   def portal_configuration(config) do
     features = config["features"] || %{}
     profile = config["business_profile"] || %{}
@@ -523,7 +509,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       created_at: time(config["created"])
     }
     |> Map.reject(fn {_field, value} -> value == "" end)
-    |> PortalConfiguration.builder()
+    |> PortalSession.Configuration.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -889,11 +875,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   }
 
   @doc "Params of `POST /v1/customers/:id/tax_ids`: its kind and its number."
-  @spec tax_id_params(TaxId.t()) :: map()
-  def tax_id_params(%TaxId{} = tax_id), do: %{"type" => tax_id.type, "value" => tax_id.value}
+  @spec tax_id_params(Customer.TaxId.t()) :: map()
+  def tax_id_params(%Customer.TaxId{} = tax_id),
+    do: %{"type" => tax_id.type, "value" => tax_id.value}
 
-  @doc "A Stripe tax id (`object: \"tax_id\"`) as a `MishkaPay.TaxId`, with its register check."
-  @spec tax_id(map()) :: {:ok, TaxId.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe tax id (`object: \"tax_id\"`) as a `MishkaPay.Customer.TaxId`, with its register check."
+  @spec tax_id(map()) :: {:ok, Customer.TaxId.t()} | {:error, Splode.Error.t()}
   def tax_id(tax_id) do
     check = tax_id["verification"] || %{}
 
@@ -909,7 +896,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       verified_address: blank(check["verified_address"]),
       created_at: time(tax_id["created"])
     }
-    |> TaxId.builder()
+    |> Customer.TaxId.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -934,7 +921,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
-  defp tax_line_params(%TaxLine{} = line) do
+  defp tax_line_params(%TaxCalculation.Items{} = line) do
     reject_nil(%{
       "reference" => line.reference,
       "amount" => minor(line.amount),
@@ -1200,8 +1187,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   a standard registration's place of supply scheme) under the country's own `country_options`;
   it starts now unless `:active_from` says when.
   """
-  @spec tax_registration_params(MishkaPay.TaxRegistration.t()) :: map()
-  def tax_registration_params(%MishkaPay.TaxRegistration{} = registration) do
+  @spec tax_registration_params(MishkaPay.TaxSettings.Registration.t()) :: map()
+  def tax_registration_params(%MishkaPay.TaxSettings.Registration{} = registration) do
     country = String.downcase(registration.country)
 
     %{
@@ -1233,9 +1220,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     "standard" => :standard
   }
 
-  @doc "A Stripe Tax Registration as a `MishkaPay.TaxRegistration`."
+  @doc "A Stripe Tax Registration as a `MishkaPay.TaxSettings.Registration`."
   @spec tax_registration(map()) ::
-          {:ok, MishkaPay.TaxRegistration.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.TaxSettings.Registration.t()} | {:error, Splode.Error.t()}
   def tax_registration(registration) do
     country = registration["country"]
     options = get_in(registration, ["country_options", String.downcase(country || "")]) || %{}
@@ -1255,7 +1242,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       created_at: time(registration["created"])
     }
     |> reject_nil()
-    |> MishkaPay.TaxRegistration.builder()
+    |> MishkaPay.TaxSettings.Registration.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -1299,9 +1286,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
-  @doc "A Stripe Tax Transaction as a `MishkaPay.TaxTransaction`, made from `calculation_id`."
+  @doc "A Stripe Tax Transaction as a `MishkaPay.TaxCalculation.Transaction`, made from `calculation_id`."
   @spec tax_transaction(map(), String.t()) ::
-          {:ok, TaxTransaction.t()} | {:error, Splode.Error.t()}
+          {:ok, TaxCalculation.Transaction.t()} | {:error, Splode.Error.t()}
   def tax_transaction(transaction, calculation_id) do
     %{
       provider: "stripe",
@@ -1312,7 +1299,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       posted_at: time(transaction["posted_at"]),
       created_at: time(transaction["created"])
     }
-    |> TaxTransaction.builder()
+    |> TaxCalculation.Transaction.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -1361,7 +1348,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/invoices` for a draft: its customer, how it is collected, and the reference
   in its metadata. Its items are added after, each on its own (`invoice_item_params/3`).
   """
-  @spec invoice_params(MishkaPay.InvoiceDraft.t()) :: map()
+  @spec invoice_params(MishkaPay.Invoice.Draft.t()) :: map()
   def invoice_params(draft) do
     %{
       "collection_method" => Atom.to_string(draft.collection),
@@ -1404,13 +1391,13 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc """
-  Params of `POST /v1/invoiceitems` for a `MishkaPay.InvoiceItem` made on its own: the line a
+  Params of `POST /v1/invoiceitems` for a `MishkaPay.Invoice.Item` made on its own: the line a
   draft's item sends (`invoice_item_params/3`), with the reference in its metadata.
   """
-  @spec invoice_item_params(InvoiceItem.t()) :: map()
-  def invoice_item_params(%InvoiceItem{} = item) do
+  @spec invoice_item_params(Invoice.Item.t()) :: map()
+  def invoice_item_params(%Invoice.Item{} = item) do
     item
-    |> InvoiceItem.price()
+    |> Invoice.item_price()
     |> invoice_item_params(item.invoice_id, item.customer_id)
     |> Map.merge(item_metadata(item))
   end
@@ -1419,10 +1406,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/invoiceitems/:id`: only what the change sets. Stripe keeps the item's
   currency, so the amount is sent in its places without one.
   """
-  @spec invoice_item_update_params(InvoiceItem.t()) :: map()
-  def invoice_item_update_params(%InvoiceItem{} = item) do
+  @spec invoice_item_update_params(Invoice.Item.t()) :: map()
+  def invoice_item_update_params(%Invoice.Item{} = item) do
     item
-    |> InvoiceItem.price()
+    |> Invoice.item_price()
     |> charge_params()
     |> Map.delete("currency")
     |> Map.merge(item_metadata(item))
@@ -1449,15 +1436,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
   end
 
-  defp item_metadata(%InvoiceItem{} = item) do
+  defp item_metadata(%Invoice.Item{} = item) do
     case with_reference(item.metadata, item.reference) do
       nil -> %{}
       metadata -> %{"metadata" => metadata}
     end
   end
 
-  @doc "A Stripe invoice item (`object: \"invoiceitem\"`) as a `MishkaPay.InvoiceItem`."
-  @spec invoice_item(map()) :: {:ok, InvoiceItem.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe invoice item (`object: \"invoiceitem\"`) as a `MishkaPay.Invoice.Item`."
+  @spec invoice_item(map()) :: {:ok, Invoice.Item.t()} | {:error, Splode.Error.t()}
   def invoice_item(item) do
     currency = item["currency"]
 
@@ -1478,7 +1465,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       metadata: Map.delete(item["metadata"] || %{}, @reference),
       created_at: time(item["date"])
     }
-    |> InvoiceItem.builder()
+    |> Invoice.Item.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -1499,14 +1486,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   given), the phases and what happens after them, its billing mode (`billing_mode/2`, with the
   tenant's `settings`), with the reference in its metadata.
   """
-  @spec subscription_schedule_params(SubscriptionSchedule.t(), map()) :: map()
+  @spec subscription_schedule_params(Subscription.Schedule.t(), map()) :: map()
   def subscription_schedule_params(schedule, settings \\ %{})
 
-  def subscription_schedule_params(%SubscriptionSchedule{subscription_id: id}, _settings)
+  def subscription_schedule_params(%Subscription.Schedule{subscription_id: id}, _settings)
       when is_binary(id),
       do: %{"from_subscription" => id}
 
-  def subscription_schedule_params(%SubscriptionSchedule{} = schedule, settings) do
+  def subscription_schedule_params(%Subscription.Schedule{} = schedule, settings) do
     %{
       "billing_mode" => billing_mode(schedule, settings),
       "start_date" => unix(schedule.start_at) || "now",
@@ -1519,8 +1506,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc "Params of `POST /v1/subscription_schedules/:id`: only what the change sets."
-  @spec subscription_schedule_update_params(SubscriptionSchedule.t()) :: map()
-  def subscription_schedule_update_params(%SubscriptionSchedule{} = schedule) do
+  @spec subscription_schedule_update_params(Subscription.Schedule.t()) :: map()
+  def subscription_schedule_update_params(%Subscription.Schedule{} = schedule) do
     reject_nil(%{
       "end_behavior" => schedule.end_behavior && Atom.to_string(schedule.end_behavior),
       "phases" => schedule.phases && Enum.map(schedule.phases, &phase_params/1),
@@ -1532,7 +1519,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp schedule_metadata(schedule), do: with_reference(schedule.metadata, schedule.reference)
 
   # This API version takes a phase's length as a `duration`; `iterations` is gone.
-  defp phase_params(%SubscriptionPhase{} = phase) do
+  defp phase_params(%Subscription.Schedule.Phases{} = phase) do
     reject_nil(%{
       "items" =>
         Enum.map(
@@ -1558,11 +1545,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp unix(%DateTime{} = at), do: DateTime.to_unix(at)
 
   @doc """
-  A Stripe subscription schedule as a `MishkaPay.SubscriptionSchedule`: its phases with their
+  A Stripe subscription schedule as a `MishkaPay.Subscription.Schedule`: its phases with their
   dates, and which of them runs now.
   """
   @spec subscription_schedule(map()) ::
-          {:ok, SubscriptionSchedule.t()} | {:error, Splode.Error.t()}
+          {:ok, Subscription.Schedule.t()} | {:error, Splode.Error.t()}
   def subscription_schedule(schedule) do
     phases = schedule["phases"] |> List.wrap() |> Enum.map(&phase/1)
     current = get_in(schedule, ["current_phase", "start_date"])
@@ -1584,7 +1571,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       canceled_at: time(schedule["canceled_at"]),
       completed_at: time(schedule["completed_at"])
     }
-    |> SubscriptionSchedule.builder()
+    |> Subscription.Schedule.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -1624,7 +1611,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp credit_lines_params(lines) when lines in [nil, []], do: nil
   defp credit_lines_params(lines), do: Enum.map(lines, &credit_line_params/1)
 
-  defp credit_line_params(%CreditNoteLine{invoice_line_id: id} = line) when is_binary(id) do
+  defp credit_line_params(%CreditNote.Lines{invoice_line_id: id} = line) when is_binary(id) do
     %{
       "type" => "invoice_line_item",
       "invoice_line_item" => id,
@@ -1634,7 +1621,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> reject_nil()
   end
 
-  defp credit_line_params(%CreditNoteLine{} = line) do
+  defp credit_line_params(%CreditNote.Lines{} = line) do
     %{
       "type" => "custom_line_item",
       "description" => line.name,
@@ -1689,15 +1676,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc """
-  A Stripe credit note line item as a `MishkaPay.CreditNoteLine`, in its note's `currency` (the
+  A Stripe credit note line item as a `MishkaPay.CreditNote.Lines`, in its note's `currency` (the
   line carries none).
   """
   @spec credit_note_line(map(), String.t()) ::
-          {:ok, CreditNoteLine.t()} | {:error, Splode.Error.t()}
+          {:ok, CreditNote.Lines.t()} | {:error, Splode.Error.t()}
   def credit_note_line(line, currency) do
     line
     |> credit_line(currency)
-    |> CreditNoteLine.builder()
+    |> CreditNote.Lines.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -1738,7 +1725,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/subscriptions/:id` for a change: the item with its new price and quantity,
   and how the difference is billed; only what the change sets.
   """
-  @spec change_params(MishkaPay.SubscriptionChange.t(), String.t()) :: map()
+  @spec change_params(MishkaPay.Subscription.Change.t(), String.t()) :: map()
   def change_params(change, item_id) do
     %{
       "items" => [change_item(change, item_id)],
@@ -1752,7 +1739,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc "Params of `POST /v1/invoices/create_preview` for the same change, without making it."
-  @spec preview_params(MishkaPay.SubscriptionChange.t(), String.t()) :: map()
+  @spec preview_params(MishkaPay.Subscription.Change.t(), String.t()) :: map()
   def preview_params(change, item_id) do
     details =
       change
@@ -2029,8 +2016,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   @dispute_statuses ~w(warning_needs_response warning_under_review warning_closed needs_response under_review won lost prevented)a
 
-  @doc "A Stripe PaymentMethod as a `MishkaPay.PaymentMethod`, with its card when it is one."
-  @spec payment_method(map()) :: {:ok, PaymentMethod.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe PaymentMethod as a `MishkaPay.Customer.PaymentMethod`, with its card when it is one."
+  @spec payment_method(map()) :: {:ok, Customer.PaymentMethod.t()} | {:error, Splode.Error.t()}
   def payment_method(method) do
     card = method["card"] || %{}
 
@@ -2045,7 +2032,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       card_exp_year: card["exp_year"],
       created_at: time(method["created"])
     }
-    |> PaymentMethod.builder()
+    |> Customer.PaymentMethod.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2073,8 +2060,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
-  @doc "A Stripe Radar early fraud warning as a `MishkaPay.FraudWarning`."
-  @spec fraud_warning(map()) :: {:ok, MishkaPay.FraudWarning.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe Radar early fraud warning as a `MishkaPay.Payment.FraudWarning`."
+  @spec fraud_warning(map()) ::
+          {:ok, MishkaPay.Payment.FraudWarning.t()} | {:error, Splode.Error.t()}
   def fraud_warning(warning) do
     %{
       provider: "stripe",
@@ -2085,14 +2073,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       actionable: warning["actionable"] == true,
       created_at: time(warning["created"])
     }
-    |> MishkaPay.FraudWarning.builder()
+    |> MishkaPay.Payment.FraudWarning.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
   @opened_reasons %{"rule" => :rule, "manual" => :manual}
 
-  @doc "A Stripe Radar review as a `MishkaPay.FraudReview`."
-  @spec fraud_review(map()) :: {:ok, MishkaPay.FraudReview.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe Radar review as a `MishkaPay.Payment.FraudReview`."
+  @spec fraud_review(map()) ::
+          {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
   def fraud_review(review) do
     %{
       provider: "stripe",
@@ -2106,7 +2095,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       ip_address: review["ip_address"],
       created_at: time(review["created"])
     }
-    |> MishkaPay.FraudReview.builder()
+    |> MishkaPay.Payment.FraudReview.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2121,8 +2110,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/files`, as multipart parts: the purpose, and the file with its name and
   content type.
   """
-  @spec file_params(MishkaPay.FileUpload.t()) :: [{String.t(), term()}]
-  def file_params(%MishkaPay.FileUpload{} = upload) do
+  @spec file_params(MishkaPay.File.Upload.t()) :: [{String.t(), term()}]
+  def file_params(%MishkaPay.File.Upload{} = upload) do
     [
       {"purpose", Atom.to_string(upload.purpose)},
       {"file", {upload.content, filename: upload.filename, content_type: upload.content_type}}
@@ -2153,8 +2142,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     %{"file" => file_id, "expires_at" => opts[:expires_at] && DateTime.to_unix(opts[:expires_at])}
   end
 
-  @doc "A Stripe file link as a `MishkaPay.FileLink`."
-  @spec file_link(map()) :: {:ok, MishkaPay.FileLink.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe file link as a `MishkaPay.File.Link`."
+  @spec file_link(map()) :: {:ok, MishkaPay.File.Link.t()} | {:error, Splode.Error.t()}
   def file_link(link) do
     %{
       provider: "stripe",
@@ -2165,7 +2154,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       expired: link["expired"] == true,
       created_at: time(link["created"])
     }
-    |> MishkaPay.FileLink.builder()
+    |> MishkaPay.File.Link.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2243,8 +2232,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/promotion_codes`: the coupon it applies (as Stripe's `promotion`), the code
   and its own limits.
   """
-  @spec promotion_code_params(PromotionCode.t()) :: map()
-  def promotion_code_params(%PromotionCode{} = code) do
+  @spec promotion_code_params(Coupon.PromotionCode.t()) :: map()
+  def promotion_code_params(%Coupon.PromotionCode{} = code) do
     %{
       "promotion" => %{"type" => "coupon", "coupon" => code.coupon_id},
       "code" => code.code,
@@ -2257,7 +2246,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> with_customer(code.customer_id)
   end
 
-  defp restrictions(%PromotionCode{first_time_transaction: first, minimum_amount: minimum}) do
+  defp restrictions(%Coupon.PromotionCode{first_time_transaction: first, minimum_amount: minimum}) do
     %{
       "first_time_transaction" => first,
       "minimum_amount" => minimum && minor(minimum),
@@ -2266,12 +2255,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc "Params of `POST /v1/promotion_codes/:id`: only whether it is active, and its metadata."
-  @spec promotion_code_update_params(PromotionCode.t()) :: map()
-  def promotion_code_update_params(%PromotionCode{} = code),
+  @spec promotion_code_update_params(Coupon.PromotionCode.t()) :: map()
+  def promotion_code_update_params(%Coupon.PromotionCode{} = code),
     do: %{"active" => code.active, "metadata" => code.metadata}
 
-  @doc "A Stripe promotion code as a `MishkaPay.PromotionCode`."
-  @spec promotion_code(map()) :: {:ok, PromotionCode.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe promotion code as a `MishkaPay.Coupon.PromotionCode`."
+  @spec promotion_code(map()) :: {:ok, Coupon.PromotionCode.t()} | {:error, Splode.Error.t()}
   def promotion_code(code) do
     restrictions = code["restrictions"] || %{}
 
@@ -2291,7 +2280,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       times_redeemed: code["times_redeemed"],
       created_at: time(code["created"])
     }
-    |> PromotionCode.builder()
+    |> Coupon.PromotionCode.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2613,7 +2602,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   def usage(answer, usage), do: %{usage | id: answer["identifier"]}
 
   @doc "Params of `POST /v1/billing/meter_event_adjustments`: cancel the report by its identifier."
-  @spec usage_cancellation_params(MishkaPay.UsageCancellation.t()) :: map()
+  @spec usage_cancellation_params(MishkaPay.Usage.Cancellation.t()) :: map()
   def usage_cancellation_params(cancel) do
     %{
       "event_name" => cancel.event_name,
@@ -2623,8 +2612,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   end
 
   @doc "The cancel with Stripe's answer: the adjustment's `status`."
-  @spec usage_cancellation(map(), MishkaPay.UsageCancellation.t()) ::
-          {:ok, MishkaPay.UsageCancellation.t()}
+  @spec usage_cancellation(map(), MishkaPay.Usage.Cancellation.t()) ::
+          {:ok, MishkaPay.Usage.Cancellation.t()}
   def usage_cancellation(answer, cancel),
     do: {:ok, %{cancel | status: known(answer["status"], ~w(pending complete)a)}}
 
@@ -2645,11 +2634,11 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp minute(time, up), do: div(DateTime.to_unix(time) + up, 60) * 60
 
   @doc """
-  Stripe's summaries of a window as one `MishkaPay.UsageSummary`. Asked for without grouping,
+  Stripe's summaries of a window as one `MishkaPay.Usage.Summary`. Asked for without grouping,
   Stripe answers one summary for the whole window, or none when nothing was reported.
   """
   @spec usage_summary(map(), String.t(), String.t(), [{String.t(), String.t()}]) ::
-          {:ok, MishkaPay.UsageSummary.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Usage.Summary.t()} | {:error, Splode.Error.t()}
   def usage_summary(%{"data" => data}, meter_id, customer_id, params) do
     summary = List.first(data) || %{}
     window = Map.new(params)
@@ -2662,7 +2651,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       from: time(summary["start_time"] || String.to_integer(window["start_time"])),
       to: time(summary["end_time"] || String.to_integer(window["end_time"]))
     }
-    |> MishkaPay.UsageSummary.builder()
+    |> MishkaPay.Usage.Summary.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2695,8 +2684,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
-  @doc "A Stripe active entitlement as a `MishkaPay.Entitlement`."
-  @spec entitlement(map()) :: {:ok, MishkaPay.Entitlement.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe active entitlement as a `MishkaPay.Feature.Entitlement`."
+  @spec entitlement(map()) ::
+          {:ok, MishkaPay.Feature.Entitlement.t()} | {:error, Splode.Error.t()}
   def entitlement(entitlement) do
     %{
       provider: "stripe",
@@ -2704,7 +2694,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       feature_id: id_of(entitlement["feature"]),
       lookup_key: entitlement["lookup_key"]
     }
-    |> MishkaPay.Entitlement.builder()
+    |> MishkaPay.Feature.Entitlement.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2732,9 +2722,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp funds(_none), do: []
 
-  @doc "A Stripe balance transaction as a `MishkaPay.BalanceTransaction`."
+  @doc "A Stripe balance transaction as a `MishkaPay.Balance.Transaction`."
   @spec balance_transaction(map()) ::
-          {:ok, MishkaPay.BalanceTransaction.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Balance.Transaction.t()} | {:error, Splode.Error.t()}
   def balance_transaction(txn) do
     currency = txn["currency"]
 
@@ -2751,7 +2741,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       available_at: time(txn["available_on"]),
       created_at: time(txn["created"])
     }
-    |> MishkaPay.BalanceTransaction.builder()
+    |> MishkaPay.Balance.Transaction.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -2759,7 +2749,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of `POST /v1/customers/:id/balance_transactions`: the signed amount in Stripe's places
   (below zero is credit), why, and the reference in its metadata.
   """
-  @spec customer_balance_params(MishkaPay.CustomerBalanceTransaction.t()) :: map()
+  @spec customer_balance_params(MishkaPay.Customer.BalanceTransaction.t()) :: map()
   def customer_balance_params(txn) do
     reject_nil(%{
       "amount" => minor(txn.amount),
@@ -2769,9 +2759,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     })
   end
 
-  @doc "A Stripe customer balance transaction as a `MishkaPay.CustomerBalanceTransaction`."
+  @doc "A Stripe customer balance transaction as a `MishkaPay.Customer.BalanceTransaction`."
   @spec customer_balance_transaction(map()) ::
-          {:ok, MishkaPay.CustomerBalanceTransaction.t()} | {:error, Splode.Error.t()}
+          {:ok, MishkaPay.Customer.BalanceTransaction.t()} | {:error, Splode.Error.t()}
   def customer_balance_transaction(txn) do
     currency = txn["currency"]
 
@@ -2787,7 +2777,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       reference: get_in(txn, ["metadata", @reference]),
       created_at: time(txn["created"])
     }
-    |> MishkaPay.CustomerBalanceTransaction.builder()
+    |> MishkaPay.Customer.BalanceTransaction.builder()
     |> MishkaPay.Errors.from_builder()
   end
 
@@ -3094,7 +3084,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   Params of an account link: `POST /v2/core/account_links` (`:v2`), its use case with the two
   pages; or `POST /v1/account_links` (`:v1`).
   """
-  @spec account_link_params(MishkaPay.AccountLink.t(), :v2 | :v1) :: map()
+  @spec account_link_params(MishkaPay.ConnectedAccount.Link.t(), :v2 | :v1) :: map()
   def account_link_params(link, :v2) do
     type = @link_types[link.type]
 
@@ -3116,9 +3106,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
   end
 
-  @doc "A Stripe account link or login link as the `MishkaPay.AccountLink` asked for, with its URL."
-  @spec account_link(map(), MishkaPay.AccountLink.t()) ::
-          {:ok, MishkaPay.AccountLink.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe account link or login link as the `MishkaPay.ConnectedAccount.Link` asked for, with its URL."
+  @spec account_link(map(), MishkaPay.ConnectedAccount.Link.t()) ::
+          {:ok, MishkaPay.ConnectedAccount.Link.t()} | {:error, Splode.Error.t()}
   def account_link(answer, link) do
     made = %{
       link
@@ -3182,8 +3172,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   def part_params(amount, expand),
     do: [{"amount", Integer.to_string(minor(amount))} | part_params(nil, expand)]
 
-  @doc "A Stripe Payout as a `MishkaPay.Payout`."
-  @spec payout(map()) :: {:ok, MishkaPay.Payout.t()} | {:error, Splode.Error.t()}
+  @doc "A Stripe Payout as a `MishkaPay.Balance.Payout`."
+  @spec payout(map()) :: {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
   def payout(payout) do
     %{
       provider: "stripe",
@@ -3199,7 +3189,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       description: payout["description"],
       created_at: time(payout["created"])
     }
-    |> MishkaPay.Payout.builder()
+    |> MishkaPay.Balance.Payout.builder()
     |> MishkaPay.Errors.from_builder()
   end
 

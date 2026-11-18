@@ -28,8 +28,6 @@ defmodule MishkaPay.Messages do
           | :base_url
           | :path_plain
           | :path_root
-          | :api_version
-          | :expand_paths
           | :request_options_none
           | :params_plain
           | :one_body
@@ -75,11 +73,8 @@ defmodule MishkaPay.Messages do
           | :shipping_needs
           | :shipping_days
           | :managed_payments_shipping
-          | :shipping_countries
           | :webhook_secrets
-          | :account_id_plain
           | :account_invalid
-          | :capability_names
           | :connect_not_set_up
           | :connect_v1_customer
           | :customer_v2_email
@@ -135,7 +130,6 @@ defmodule MishkaPay.Messages do
           | :invoice_item_moves
           | :credit_note_one_of
           | :tax_percentage
-          | :tax_rate_ids
           | :tax_rate_fixed
           | :tax_rates_line_only
           | :tax_rates_automatic
@@ -149,7 +143,6 @@ defmodule MishkaPay.Messages do
           | :billing_mode_when_made
           | :schedule_moves
           | :choices
-          | :fields_three
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
@@ -229,20 +222,6 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The path field must be one plain path from the root, with no query, dot segment or encoded slash"
-      )
-
-  defp msgid(:api_version),
-    do:
-      dgettext_noop(
-        "mishka_pay",
-        "The api_version field takes letters, digits, dots, dashes and underscores only"
-      )
-
-  defp msgid(:expand_paths),
-    do:
-      dgettext_noop(
-        "mishka_pay",
-        "The expand field takes up to 20 dotted paths of lower-case names, at most four levels deep"
       )
 
   defp msgid(:request_options_none),
@@ -452,25 +431,11 @@ defmodule MishkaPay.Messages do
         "The webhook_secrets field must be a list of secrets, none of them empty"
       )
 
-  defp msgid(:account_id_plain),
-    do:
-      dgettext_noop(
-        "mishka_pay",
-        "The account_id field must be an account id of letters, digits and underscores only"
-      )
-
   defp msgid(:account_invalid),
     do:
       dgettext_noop(
         "mishka_pay",
         "%{provider} does not know this site's connected account, or the platform's key has no access to it"
-      )
-
-  defp msgid(:capability_names),
-    do:
-      dgettext_noop(
-        "mishka_pay",
-        "The capabilities field must be a list of names in lowercase letters, digits and underscores, with dots between their parts"
       )
 
   defp msgid(:connect_v1_customer),
@@ -534,13 +499,6 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "The application_fee field must be in the same currency as the items"
-      )
-
-  defp msgid(:shipping_countries),
-    do:
-      dgettext_noop(
-        "mishka_pay",
-        "The shipping countries must be a list of two-letter country codes, such as NL"
       )
 
   defp msgid(:stripe_shipping_five),
@@ -781,9 +739,6 @@ defmodule MishkaPay.Messages do
         "%{param} goes only with merchant of record off: set merchant_of_record to false for this checkout"
       )
 
-  defp msgid(:fields_three),
-    do: dgettext_noop("mishka_pay", "A checkout asks at most three questions")
-
   defp msgid(:dropdown_options),
     do:
       dgettext_noop(
@@ -802,9 +757,6 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:tax_percentage),
     do: dgettext_noop("mishka_pay", "The percentage field must be an exact number from 0 to 100")
-
-  defp msgid(:tax_rate_ids),
-    do: dgettext_noop("mishka_pay", "The tax_rate_ids field must be a list of tax rate ids")
 
   defp msgid(:tax_rate_fixed),
     do:

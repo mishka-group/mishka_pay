@@ -64,5 +64,59 @@ defmodule MishkaPay.Payment do
     field :checkout_id, String.t(), derives: "validate(string)"
     field :items, list(), structs: MishkaPay.Price, default: []
     field :created_at, DateTime.t(), derives: "validate(struct)"
+
+    sub_field :fraud_review, struct(),
+      authorized_fields: true,
+      doc: """
+      A payment the provider's fraud rules held for the seller to look at before it goes on (a
+      review, `prv_...` at Stripe Radar). A guarded_struct the provider fills in, read with
+      `MishkaPay.fetch_fraud_review/3` and `MishkaPay.list_fraud_reviews/3`, and let through with
+      `MishkaPay.approve_fraud_review/3`. Refunding the payment closes it the other way.
+
+        * `:id`, `:payment_id`, `:charge_id`: the review and the payment it holds.
+        * `:open`: whether it still waits for the seller.
+        * `:opened_reason`: `:rule` (a fraud rule placed it) or `:manual` (someone did).
+        * `:reason`: why it is open or how it closed, in the provider's words (`"rule"`,
+          `"manual"`, `"approved"`, `"refunded"`, `"refunded_as_fraud"`, `"disputed"`,
+          `"redacted"`...); `:closed_reason` only how it closed.
+        * `:ip_address`: where the buyer paid from, when the provider knows.
+        * `:created_at`.
+      """ do
+      field :provider, String.t(), enforce: true, derives: "validate(not_nil_value, string)"
+      field :id, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
+      field :payment_id, String.t(), derives: "validate(string)"
+      field :charge_id, String.t(), derives: "validate(string)"
+      field :open, boolean(), default: false, derives: "validate(boolean)"
+      field :opened_reason, :rule | :manual, derives: "validate(enum=Atom[rule::manual])"
+      field :reason, String.t(), derives: "validate(string)"
+      field :closed_reason, String.t(), derives: "validate(string)"
+      field :ip_address, String.t(), derives: "validate(string)"
+      field :created_at, DateTime.t(), derives: "validate(struct)"
+    end
+
+    sub_field :fraud_warning, struct(),
+      authorized_fields: true,
+      doc: """
+      A card issuer's early warning that a payment looks like fraud (an early fraud warning,
+      `issfr_...` at Stripe Radar), often days before the buyer's bank opens a dispute. A guarded_struct
+      the provider fills in, read with `MishkaPay.fetch_fraud_warning/3` and
+      `MishkaPay.list_fraud_warnings/3`.
+
+        * `:id`, `:payment_id`, `:charge_id`: the warning and the payment it is about.
+        * `:fraud_type`: the issuer's kind of fraud, in the provider's words
+          (`"made_with_stolen_card"`, `"unauthorized_use_of_card"`, `"card_never_received"`...).
+        * `:actionable`: whether a refund can still head off a dispute: the payment is not refunded
+          or disputed yet. Refunding an actionable warning's payment in full usually stops the
+          dispute and its fee.
+        * `:created_at`.
+      """ do
+      field :provider, String.t(), enforce: true, derives: "validate(not_nil_value, string)"
+      field :id, String.t(), enforce: true, derives: "validate(not_nil_value, string, not_empty)"
+      field :payment_id, String.t(), derives: "validate(string)"
+      field :charge_id, String.t(), derives: "validate(string)"
+      field :fraud_type, String.t(), derives: "validate(string)"
+      field :actionable, boolean(), default: false, derives: "validate(boolean)"
+      field :created_at, DateTime.t(), derives: "validate(struct)"
+    end
   end
 end

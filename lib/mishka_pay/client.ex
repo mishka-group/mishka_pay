@@ -45,7 +45,8 @@ defmodule MishkaPay.Client do
   `request/1` answers `{:ok, %Req.Response{}}` for any HTTP status: the adapter reads its
   provider's own error body. A request that never got an answer is a
   `MishkaPay.Errors.Unreachable` error, and a description that is not valid an `:invalid` one.
-  `inspect/1` leaves out `:auth`.
+  `inspect/1` leaves out `:auth`. `headers`, `params`, `form` and `json` reach the provider as
+  given: their keys are never turned into atoms.
 
   `base_url` is an `http` or `https` address with no user, query or fragment, and `path` one plain
   path from `/`: no query (`params` carries it), no control character, dot segment or encoded
@@ -93,14 +94,24 @@ defmodule MishkaPay.Client do
       validator: {__MODULE__, :path}
 
     field :auth, term()
-    field :headers, map(), default: %{}, derives: "validate(map)"
+    dynamic_field :headers
 
-    field :params, term(),
+    dynamic_field :params,
+      type: map() | keyword(),
+      default: nil,
       derives: "validate(either=[map, list])",
       validator: {__MODULE__, :params}
 
-    field :form, term(), derives: "validate(either=[map, list])"
-    field :json, term()
+    dynamic_field :form,
+      type: map() | keyword(),
+      default: nil,
+      derives: "validate(either=[map, list])"
+
+    dynamic_field :json,
+      type: map() | list(),
+      default: nil,
+      derives: "validate(either=[map, list])"
+
     field :json_text, String.t(), derives: "validate(string, not_empty)"
     field :multipart, term(), validator: {__MODULE__, :multipart}
 

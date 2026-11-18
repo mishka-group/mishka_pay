@@ -210,7 +210,7 @@ if Code.ensure_loaded?(Ash) do
         or `:now`; `:resume` takes back a cancel set for the period's end
         (`MishkaPay.resume_subscription/3`).
       * `:change` changes its plan (`:price_id`) or quantity, with every option of
-        `MishkaPay.SubscriptionChange` as arguments (`MishkaPay.change_subscription/1`).
+        `MishkaPay.Subscription.Change` as arguments (`MishkaPay.change_subscription/1`).
       * `:pause` pauses collecting its payments (`behavior:` and `resumes_at:`, see
         `MishkaPay.pause_collection/4`); `:resume_collection` collects again.
 
