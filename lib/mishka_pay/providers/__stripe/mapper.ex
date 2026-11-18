@@ -1397,7 +1397,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec invoice_item_params(Invoice.Item.t()) :: map()
   def invoice_item_params(%Invoice.Item{} = item) do
     item
-    |> Invoice.Item.price()
+    |> Invoice.item_price()
     |> invoice_item_params(item.invoice_id, item.customer_id)
     |> Map.merge(item_metadata(item))
   end
@@ -1409,7 +1409,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec invoice_item_update_params(Invoice.Item.t()) :: map()
   def invoice_item_update_params(%Invoice.Item{} = item) do
     item
-    |> Invoice.Item.price()
+    |> Invoice.item_price()
     |> charge_params()
     |> Map.delete("currency")
     |> Map.merge(item_metadata(item))

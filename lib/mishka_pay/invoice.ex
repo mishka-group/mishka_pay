@@ -76,71 +76,132 @@ defmodule MishkaPay.Invoice do
     field :description, String.t(), derives: "validate(string)"
     field :reference, String.t(), derives: "validate(string)"
     field :created_at, DateTime.t(), derives: "validate(struct)"
-  end
-end
 
-defmodule MishkaPay.Invoice.Draft do
-  @moduledoc """
-  A bill to make for a customer, outside any subscription, with `MishkaPay.create_invoice/1`: a
-  service sold by hand, an order paid later. The provider makes it as a draft and answers it as a
-  `MishkaPay.Invoice`; `MishkaPay.finalize_invoice/3` opens it for payment,
-  `MishkaPay.send_invoice/3` emails it, and `MishkaPay.pay_invoice/4`, `void_invoice/3`,
-  `mark_invoice_uncollectible/3` and `delete_invoice/3` end it. A guarded_struct.
+    sub_field :draft, struct(),
+      authorized_fields: true,
+      main_validator: {__MODULE__, :consistent},
+      doc: """
+      A bill to make for a customer, outside any subscription, with `MishkaPay.create_invoice/1`: a
+      service sold by hand, an order paid later. The provider makes it as a draft and answers it as a
+      `MishkaPay.Invoice`; `MishkaPay.finalize_invoice/3` opens it for payment,
+      `MishkaPay.send_invoice/3` emails it, and `MishkaPay.pay_invoice/4`, `void_invoice/3`,
+      `mark_invoice_uncollectible/3` and `delete_invoice/3` end it. A guarded_struct.
 
-    * `:provider`, `:tenant`: as for a checkout.
-    * `:customer_id`: the provider customer it bills (`MishkaPay.create_customer/1`).
-    * `:items`: one or more `MishkaPay.Price`, all in one currency: a catalog price by its `:id`,
-      or a `:name` with an `:amount` and a `:quantity`. A recurring price is refused: a plan
-      starts with a checkout. An item's `:tax_rate_ids` add the seller's own tax rates to it.
-    * `:tax_rate_ids`: the seller's own tax rates (`MishkaPay.TaxRate`) for every line of the bill
-      that names none of its own.
-    * `:collection`: `:charge_automatically` (the default) charges the customer's saved payment
-      method when it is finalized; `:send_invoice` emails a bill they pay on the provider's page,
-      within `:days_until_due` (30 unless given).
-    * `:description`, `:footer`: text on the bill.
-    * `:reference`: the caller's own id for the bill, such as an order id; it makes the
-      idempotency key, so the same reference never makes two bills, and it comes back on it.
-    * `:metadata`: extra pairs kept with it.
+        * `:provider`, `:tenant`: as for a checkout.
+        * `:customer_id`: the provider customer it bills (`MishkaPay.create_customer/1`).
+        * `:items`: one or more `MishkaPay.Price`, all in one currency: a catalog price by its `:id`,
+          or a `:name` with an `:amount` and a `:quantity`. A recurring price is refused: a plan
+          starts with a checkout. An item's `:tax_rate_ids` add the seller's own tax rates to it.
+        * `:tax_rate_ids`: the seller's own tax rates (`MishkaPay.TaxRate`) for every line of the bill
+          that names none of its own.
+        * `:collection`: `:charge_automatically` (the default) charges the customer's saved payment
+          method when it is finalized; `:send_invoice` emails a bill they pay on the provider's page,
+          within `:days_until_due` (30 unless given).
+        * `:description`, `:footer`: text on the bill.
+        * `:reference`: the caller's own id for the bill, such as an order id; it makes the
+          idempotency key, so the same reference never makes two bills, and it comes back on it.
+        * `:metadata`: extra pairs kept with it.
 
-  Stripe sells as merchant of record (Managed Payments) only through checkouts and payment links:
-  a site with merchant of record on cannot send one-off bills.
-  """
+      Stripe sells as merchant of record (Managed Payments) only through checkouts and payment links:
+      a site with merchant of record on cannot send one-off bills.
+      """ do
+      field :provider, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
-  use GuardedStruct
+      field :tenant, term()
 
-  guardedstruct authorized_fields: true, main_validator: {__MODULE__, :consistent} do
-    field :provider, String.t(),
-      enforce: true,
-      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+      field :customer_id, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
 
-    field :tenant, term()
+      field :items, list(),
+        enforce: true,
+        structs: MishkaPay.Price,
+        derives: "validate(not_nil_value, list)"
 
-    field :customer_id, String.t(),
-      enforce: true,
-      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+      field :collection, :charge_automatically | :send_invoice,
+        default: :charge_automatically,
+        derives: "validate(not_nil_value, enum=Atom[charge_automatically::send_invoice])",
+        validator: {__MODULE__, :collection}
 
-    field :items, list(),
-      enforce: true,
-      structs: MishkaPay.Price,
-      derives: "validate(not_nil_value, list)"
+      field :days_until_due, pos_integer(), derives: "validate(integer, min_len=1)"
 
-    field :collection, :charge_automatically | :send_invoice,
-      default: :charge_automatically,
-      derives: "validate(not_nil_value, enum=Atom[charge_automatically::send_invoice])",
-      validator: {__MODULE__, :collection}
+      field :tax_rate_ids, list(),
+        derives: "sanitize(each=[trim]) validate(list, each=[string, not_empty])"
 
-    field :days_until_due, pos_integer(), derives: "validate(integer, min_len=1)"
+      field :description, String.t(), derives: "sanitize(trim) validate(string, max_len=1500)"
+      field :footer, String.t(), derives: "sanitize(trim) validate(string, max_len=5000)"
 
-    field :tax_rate_ids, list(),
-      derives: "sanitize(each=[trim]) validate(list, each=[string, not_empty])"
+      field :reference, String.t(),
+        derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
 
-    field :description, String.t(), derives: "sanitize(trim) validate(string, max_len=1500)"
-    field :footer, String.t(), derives: "sanitize(trim) validate(string, max_len=5000)"
+      dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
+    end
 
-    field :reference, String.t(),
-      derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
+    sub_field :item, struct(),
+      authorized_fields: true,
+      main_validator: {__MODULE__, :charges},
+      doc: """
+      One charge for a customer kept on its own, outside `MishkaPay.create_invoice/1`: a setup fee, an
+      extra seat, a late fee. Left off any bill it waits (pending) and goes on the customer's next
+      bill, a subscription's renewal or a one-off bill; given `:invoice_id` it goes on that draft
+      bill. Made with `MishkaPay.create_invoice_item/1`, changed with
+      `MishkaPay.update_invoice_item/1`, listed with `MishkaPay.list_invoice_items/3` and removed
+      with `MishkaPay.delete_invoice_item/3`. A guarded_struct.
 
-    dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
+      What the caller gives:
+
+        * `:provider`, `:tenant`: which provider, with whose keys.
+        * `:customer_id`: whose bill it goes on.
+        * `:invoice_id`: a draft bill to put it on; left out, it waits for the customer's next bill.
+        * What it charges: a catalog price by `:price_id`, or a `:name` with an `:amount` (the price
+          of one); `:quantity` (1 unless given), `:tax_code`, `:tax_behavior` and `:tax_rate_ids`
+          (the seller's own `MishkaPay.TaxRate`s on it) as on a `MishkaPay.Price`.
+        * `:reference`: the caller's own id for it; it makes the idempotency key, so the same reference
+          never charges twice, and it comes back on it.
+        * `:metadata`: extra pairs, string keys to string values.
+
+      What the provider fills in: `:id` (`ii_...` at Stripe), `:total` (the amount times the quantity;
+      below zero for a credit), `:period_start` and `:period_end`, `:created_at`.
+
+      A change (`:id` given) names only what it changes: `:name`, `:amount` (in the item's own
+      currency), `:quantity`, `:price_id`, the tax fields, `:metadata`. An item stays on its customer
+      and bill; once its bill is finalized it cannot change or go.
+      """ do
+      field :provider, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+
+      field :tenant, term()
+      field :id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :customer_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :invoice_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :price_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :name, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=500)"
+      field :amount, Money.t(), validator: {MishkaPay.Money, :signed_field}
+      field :quantity, pos_integer(), derives: "validate(integer, min_len=1)"
+
+      field :tax_code, String.t(),
+        derives: "sanitize(trim) validate(string, not_empty, max_len=100)"
+
+      field :tax_behavior, :inclusive | :exclusive,
+        derives: "validate(enum=Atom[inclusive::exclusive])",
+        validator: {MishkaPay.Price, :tax_behavior}
+
+      field :tax_rate_ids, list(),
+        derives: "sanitize(each=[trim]) validate(list, each=[string, not_empty])"
+
+      field :total, Money.t(), validator: {MishkaPay.Money, :signed_field}
+      field :period_start, DateTime.t(), derives: "validate(struct)"
+      field :period_end, DateTime.t(), derives: "validate(struct)"
+
+      field :reference, String.t(),
+        derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
+
+      dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
+      field :created_at, DateTime.t(), derives: "validate(struct)"
+    end
   end
 
   @doc false
@@ -184,80 +245,13 @@ defmodule MishkaPay.Invoice.Draft do
 
   defp key(%{} = map, name), do: Map.get(map, name) || Map.get(map, Atom.to_string(name))
   defp key(_not_a_map, _name), do: nil
-end
-
-defmodule MishkaPay.Invoice.Item do
-  @moduledoc """
-  One charge for a customer kept on its own, outside `MishkaPay.create_invoice/1`: a setup fee, an
-  extra seat, a late fee. Left off any bill it waits (pending) and goes on the customer's next
-  bill, a subscription's renewal or a one-off bill; given `:invoice_id` it goes on that draft
-  bill. Made with `MishkaPay.create_invoice_item/1`, changed with
-  `MishkaPay.update_invoice_item/1`, listed with `MishkaPay.list_invoice_items/3` and removed
-  with `MishkaPay.delete_invoice_item/3`. A guarded_struct.
-
-  What the caller gives:
-
-    * `:provider`, `:tenant`: which provider, with whose keys.
-    * `:customer_id`: whose bill it goes on.
-    * `:invoice_id`: a draft bill to put it on; left out, it waits for the customer's next bill.
-    * What it charges: a catalog price by `:price_id`, or a `:name` with an `:amount` (the price
-      of one); `:quantity` (1 unless given), `:tax_code`, `:tax_behavior` and `:tax_rate_ids`
-      (the seller's own `MishkaPay.TaxRate`s on it) as on a `MishkaPay.Price`.
-    * `:reference`: the caller's own id for it; it makes the idempotency key, so the same reference
-      never charges twice, and it comes back on it.
-    * `:metadata`: extra pairs, string keys to string values.
-
-  What the provider fills in: `:id` (`ii_...` at Stripe), `:total` (the amount times the quantity;
-  below zero for a credit), `:period_start` and `:period_end`, `:created_at`.
-
-  A change (`:id` given) names only what it changes: `:name`, `:amount` (in the item's own
-  currency), `:quantity`, `:price_id`, the tax fields, `:metadata`. An item stays on its customer
-  and bill; once its bill is finalized it cannot change or go.
-  """
-
-  use GuardedStruct
-
-  guardedstruct authorized_fields: true, main_validator: {__MODULE__, :charges} do
-    field :provider, String.t(),
-      enforce: true,
-      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
-
-    field :tenant, term()
-    field :id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
-    field :customer_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
-    field :invoice_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
-    field :price_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
-    field :name, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=500)"
-    field :amount, Money.t(), validator: {MishkaPay.Money, :signed_field}
-    field :quantity, pos_integer(), derives: "validate(integer, min_len=1)"
-
-    field :tax_code, String.t(),
-      derives: "sanitize(trim) validate(string, not_empty, max_len=100)"
-
-    field :tax_behavior, :inclusive | :exclusive,
-      derives: "validate(enum=Atom[inclusive::exclusive])",
-      validator: {MishkaPay.Price, :tax_behavior}
-
-    field :tax_rate_ids, list(),
-      derives: "sanitize(each=[trim]) validate(list, each=[string, not_empty])"
-
-    field :total, Money.t(), validator: {MishkaPay.Money, :signed_field}
-    field :period_start, DateTime.t(), derives: "validate(struct)"
-    field :period_end, DateTime.t(), derives: "validate(struct)"
-
-    field :reference, String.t(),
-      derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
-
-    dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
-    field :created_at, DateTime.t(), derives: "validate(struct)"
-  end
 
   @doc """
-  What a new item charges, as a `MishkaPay.Price` (its catalog price, or its name, amount and
-  quantity): the line a provider's bill takes.
+  What a new `MishkaPay.Invoice.Item` charges, as a `MishkaPay.Price` (its catalog price, or its
+  name, amount and quantity): the line a provider's bill takes.
   """
-  @spec price(t()) :: MishkaPay.Price.t()
-  def price(%__MODULE__{} = item) do
+  @spec item_price(MishkaPay.Invoice.Item.t()) :: MishkaPay.Price.t()
+  def item_price(%MishkaPay.Invoice.Item{} = item) do
     struct(MishkaPay.Price,
       id: item.price_id,
       name: item.name,
@@ -282,6 +276,4 @@ defmodule MishkaPay.Invoice.Item do
         {:ok, attrs}
     end
   end
-
-  defp key(map, name), do: Map.get(map, name) || Map.get(map, Atom.to_string(name))
 end

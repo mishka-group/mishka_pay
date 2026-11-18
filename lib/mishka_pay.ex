@@ -2262,7 +2262,7 @@ defmodule MishkaPay do
           {:ok, MishkaPay.Invoice.t()} | {:error, Splode.Error.t()}
   def preview_subscription_change(attrs) when is_map(attrs) do
     attrs =
-      case MishkaPay.Subscription.Change.prorates?(attrs) do
+      case MishkaPay.Subscription.change_prorates?(attrs) do
         true -> Map.put_new_lazy(attrs, :proration_date, &DateTime.utc_now/0)
         false -> attrs
       end
@@ -2353,7 +2353,7 @@ defmodule MishkaPay do
       :subscription_schedule,
       attrs,
       MishkaPay.Subscription.Schedule,
-      [:provider | MishkaPay.Subscription.Schedule.needs(attrs)],
+      [:provider | MishkaPay.Subscription.schedule_needs(attrs)],
       :create_subscription_schedule
     )
   end

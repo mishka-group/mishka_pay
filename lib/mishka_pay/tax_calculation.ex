@@ -108,6 +108,28 @@ defmodule MishkaPay.TaxCalculation do
     field :tax_amount_exclusive, Money.t(), validator: {MishkaPay.Money, :field}
     field :tax_amount_inclusive, Money.t(), validator: {MishkaPay.Money, :field}
     field :expires_at, DateTime.t(), derives: "validate(struct)"
+
+    sub_field :transaction, struct(),
+      authorized_fields: true,
+      doc: """
+      A sale reported to the provider's tax records from a `MishkaPay.TaxCalculation`, with
+      `MishkaPay.record_tax/4`: the provider then counts its tax in the site's tax reports and
+      filings. A guarded_struct the provider fills in.
+
+        * `:provider`, `:id` (`tax_...` at Stripe).
+        * `:reference`: the caller's own id of the sale, such as an order id; one sale per reference.
+        * `:calculation_id`: the calculation it was made from.
+        * `:customer_id`: the provider customer, when the calculation named one.
+        * `:posted_at`: when the tax counts as owed; `:created_at`: when the provider made it.
+      """ do
+      field :provider, String.t(), derives: "validate(string)"
+      field :id, String.t(), derives: "validate(string)"
+      field :reference, String.t(), derives: "validate(string)"
+      field :calculation_id, String.t(), derives: "validate(string)"
+      field :customer_id, String.t(), derives: "validate(string)"
+      field :posted_at, DateTime.t(), derives: "validate(struct)"
+      field :created_at, DateTime.t(), derives: "validate(struct)"
+    end
   end
 
   @doc false
@@ -157,30 +179,4 @@ defmodule MishkaPay.TaxCalculation do
 
   defp key(%{} = map, name), do: Map.get(map, name) || Map.get(map, Atom.to_string(name))
   defp key(_not_a_map, _name), do: nil
-end
-
-defmodule MishkaPay.TaxCalculation.Transaction do
-  @moduledoc """
-  A sale reported to the provider's tax records from a `MishkaPay.TaxCalculation`, with
-  `MishkaPay.record_tax/4`: the provider then counts its tax in the site's tax reports and
-  filings. A guarded_struct the provider fills in.
-
-    * `:provider`, `:id` (`tax_...` at Stripe).
-    * `:reference`: the caller's own id of the sale, such as an order id; one sale per reference.
-    * `:calculation_id`: the calculation it was made from.
-    * `:customer_id`: the provider customer, when the calculation named one.
-    * `:posted_at`: when the tax counts as owed; `:created_at`: when the provider made it.
-  """
-
-  use GuardedStruct
-
-  guardedstruct authorized_fields: true do
-    field :provider, String.t(), derives: "validate(string)"
-    field :id, String.t(), derives: "validate(string)"
-    field :reference, String.t(), derives: "validate(string)"
-    field :calculation_id, String.t(), derives: "validate(string)"
-    field :customer_id, String.t(), derives: "validate(string)"
-    field :posted_at, DateTime.t(), derives: "validate(struct)"
-    field :created_at, DateTime.t(), derives: "validate(struct)"
-  end
 end
