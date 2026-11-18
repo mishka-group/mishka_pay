@@ -302,8 +302,14 @@ defmodule MishkaPay.Subscription do
 
   defp dated(attrs), do: {:ok, attrs}
 
-  @doc false
-  # Whether the change has prorations a date can count from.
+  @doc """
+  Whether a subscription change makes prorations that a `proration_date` counts from: true unless
+  its `proration` is `:none` or its `billing_cycle_anchor` is `:now`.
+
+  Date such a change once and send the same `proration_date` to the preview and to the change, so
+  the change bills what the preview showed.
+  """
+  @spec change_prorates?(map()) :: boolean()
   def change_prorates?(attrs) do
     attrs[:proration] not in [:none, "none"] and attrs[:billing_cycle_anchor] not in [:now, "now"]
   end

@@ -77,7 +77,7 @@ defmodule Mix.Tasks.Shop.Sandbox do
 
     key = System.get_env("STRIPE_SECRET_KEY") || ""
 
-    unless String.starts_with?(key, "sk_test_"),
+    if not String.starts_with?(key, "sk_test_"),
       do: Mix.raise("shop.sandbox runs only with a Stripe test key (sk_test_...) in .env")
 
     case args do
@@ -140,7 +140,7 @@ defmodule Mix.Tasks.Shop.Sandbox do
   defp paypal?, do: match?({:ok, _keys}, MishkaPay.Credentials.fetch("paypal", @tenant))
 
   defp make_paypal do
-    unless paypal?(), do: Mix.raise("PayPal rows need PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET")
+    if not paypal?(), do: Mix.raise("PayPal rows need PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET")
     Mix.shell().info("\nMaking PayPal Orders and a subscription, waiting for the buyer...\n")
 
     for {product_id, quantity} <- @paypal_orders do
