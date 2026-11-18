@@ -112,3 +112,10 @@ end
 - Check ids by shape before they reach a URL path; refuse what the provider cannot do before any
   request.
 - Test with a stand-in that answers in the provider's shapes, and `use MishkaPay.ProviderCase`.
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Providers are plugins](https://mishka.tools/pay/docs/how-mishka-pay-works#providers-are-plugins)
+- [Capabilities by provider](https://mishka.tools/pay/docs/capabilities)

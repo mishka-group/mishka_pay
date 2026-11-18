@@ -51,3 +51,9 @@ end
   tests every provider must pass.
 - Live sandbox tests go behind a tag excluded unless the sandbox key is set, and accept only test
   keys.
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Test code that takes payments](https://mishka.tools/pay/docs/test-your-payments)

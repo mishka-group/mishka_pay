@@ -140,3 +140,9 @@ not take it, so the provider sends it again.
 Stripe: `stripe listen --forward-to localhost:4000/pay/webhooks/stripe/<tenant>` and put the
 `whsec_...` it prints in the tenant's keys. Telemetry: `[:mishka_pay, :webhook, :stop]` with
 `:status` and `:outcome` (`ok`, `mismatch`, `too_old`, `missing_credentials`, `too_large`...).
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Receive and verify webhooks](https://mishka.tools/pay/docs/webhooks)

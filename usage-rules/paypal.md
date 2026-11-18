@@ -1,9 +1,13 @@
-# Rules for PayPal in Mishka Pay (coming soon)
+# Rules for PayPal in Mishka Pay
 
-`MishkaPay.Providers.PayPal` (id `"paypal"`) exists with `:checkout`, `:refund`,
-`:subscription`, `:webhook` and `:raw_request`. Checkout, capture, refunds (once, or many with a reference) and
-subscriptions have run against PayPal's sandbox; webhooks from the sandbox are still to come
-(mishka-group/mishka_pay#17). Prefer Stripe in production until then.
+`MishkaPay.Providers.PayPal` (id `"paypal"`) is supported with a smaller set than Stripe's:
+`:checkout`, `:refund`, `:subscription`, `:webhook` and `:raw_request`. Checkout, capture, refunds
+(once, or many with a reference), subscriptions and verified webhooks work as with Stripe. Anything
+else is refused before any request (the list below); `MishkaPay.Provider.capable/2` asks at
+runtime.
+
+Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
+[Capabilities by provider](https://mishka.tools/pay/docs/capabilities).
 
 - Keys: `publishable_key` is the app's client id, `secret_key` its secret, `webhook_secret` the
   webhook id (`WH-...`), `mode` sandbox (`:test`) or live.

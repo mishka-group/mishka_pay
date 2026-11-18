@@ -5,8 +5,8 @@ description: "Use this skill when a project takes payments with Mishka Pay (`:mi
 
 ## Overview
 
-Mishka Pay takes payments the same way for every provider. Providers (Stripe; PayPal coming soon)
-are mishka_installer plugins; each site's keys come from the host's `MishkaPay.Credentials`
+Mishka Pay takes payments the same way for every provider. Providers (Stripe in full; PayPal with
+checkout, refunds, subscriptions and webhooks) are plugins; each site's keys come from the host's `MishkaPay.Credentials`
 plugin at runtime; every call answers a struct or a `MishkaPay.Errors` error; changes are
 announced as mishka_installer events.
 
@@ -34,3 +34,7 @@ access is given from the payment's or subscription's status.
 The package's usage rules hold the details: `deps/mishka_pay/usage-rules.md` (calls, errors,
 refunds, rules) and `deps/mishka_pay/usage-rules/` (`stripe`, `subscriptions`, `webhooks`, `ash`,
 `testing`, `providers`, `paypal`). Read the one for the task before writing code.
+
+For the why and full examples, read the docs: [Get Started](https://mishka.tools/pay/docs),
+[How Mishka Pay works](https://mishka.tools/pay/docs/how-mishka-pay-works),
+[Capabilities by provider](https://mishka.tools/pay/docs/capabilities) and [Keys and options](https://mishka.tools/pay/docs/keys-and-options).

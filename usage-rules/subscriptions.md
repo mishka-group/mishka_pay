@@ -1,8 +1,8 @@
 # Rules for subscriptions in Mishka Pay
 
 A subscription starts with a checkout in `mode: :subscription`; the provider needs the
-`:subscription` capability (Stripe has it; PayPal not yet), or the checkout is
-`Errors.Unsupported`.
+`:subscription` capability (Stripe and PayPal have it; PayPal sells one price per subscription,
+see `usage-rules/paypal.md`), or the checkout is `Errors.Unsupported`.
 
 ```elixir
 MishkaPay.checkout(%{
@@ -97,7 +97,8 @@ change = %{provider: "stripe", tenant: site.id, subscription_id: sub.id,
   `resume_collection/3` starts again.
 - `MishkaPay.fetch_invoice(p, invoice_id, tenant)` reads one bill with its `:lines`; a credit line
   for unused time has a negative `:amount`.
-- Usage-based billing is not in Mishka Pay yet.
+- Usage-based billing (meters, usage reports) is Stripe's `:usage` capability: see the usage
+  billing section of `usage-rules/stripe.md`.
 - A one-off charge on the next renewal (a setup fee, an extra seat this month) is an invoice item:
   `MishkaPay.create_invoice_item(%{provider: "stripe", tenant: site.id, customer_id: id,
   name: "Setup fee", amount: money, reference: r})`. Without `:invoice_id` it waits for the
@@ -146,3 +147,10 @@ MishkaPay.update_subscription_schedule(%{provider: "stripe", id: schedule.id, en
 Do not compute access from dates yourself. Listen to `mishka_pay:subscription:changed` (or the
 Ash subscription row), and give or take access from `status`. With the Ash layer, the inbox
 listener keeps the row current from `invoice.*` and `customer.subscription.*` webhooks.
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Sell and manage subscriptions](https://mishka.tools/pay/docs/subscriptions)
+- [Bill by usage with meters](https://mishka.tools/pay/docs/usage-billing)

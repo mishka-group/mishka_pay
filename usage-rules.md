@@ -2,7 +2,8 @@
 
 Mishka Pay (`:mishka_pay`) takes payments in Elixir projects: checkouts, payments, refunds,
 subscriptions and verified webhooks, the same way for every provider. Stripe is the full provider;
-PayPal's adapter exists and waits for its sandbox run. An optional Ash layer (the
+PayPal is supported with a smaller set (checkout, refunds, subscriptions, webhooks and raw
+requests; see `usage-rules/paypal.md`). An optional Ash layer (the
 `MishkaPay.Ash.Resource` extension) stores events, payments, subscriptions, customers and disputes
 in the host's own resources.
 
@@ -487,7 +488,7 @@ nothing. Supervise every listener like any child.
 | `usage-rules/ash.md` | storing events, payments, subscriptions, customers or disputes in Ash resources |
 | `usage-rules/testing.md` | tests of code that takes payments |
 | `usage-rules/providers.md` | writing a new provider, or a capability for one |
-| `usage-rules/paypal.md` | PayPal (coming soon) |
+| `usage-rules/paypal.md` | anything PayPal: keys, checkout and capture, subscriptions, what it refuses |
 
 ## With the usage_rules package
 
@@ -507,3 +508,16 @@ Then `mix usage_rules.sync`. `{:mishka_pay, sub_rules: [...]}` inlines this file
 named (checked with usage_rules 1.3); a bare `:mishka_pay` inlines this file and every sub-rule;
 `{:mishka_pay, link: :markdown}` links instead of inlining. `package_skills` installs the
 `mishka-pay` skill this package ships (`usage-rules/skills/mishka-pay/SKILL.md`).
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Get Started](https://mishka.tools/pay/docs)
+- [How Mishka Pay works](https://mishka.tools/pay/docs/how-mishka-pay-works)
+- [Capabilities by provider](https://mishka.tools/pay/docs/capabilities)
+- [Keys and options](https://mishka.tools/pay/docs/keys-and-options)
+- [Errors and telemetry](https://mishka.tools/pay/docs/errors-and-telemetry)
+- [Take a one-time payment](https://mishka.tools/pay/docs/take-a-payment)
+- [Refund, hold and capture a payment](https://mishka.tools/pay/docs/refunds-and-captures)
+- [Save customers and cards, and open the billing portal](https://mishka.tools/pay/docs/customers-and-portal)

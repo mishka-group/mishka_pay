@@ -607,3 +607,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - **Test clocks** show what time does to a subscription: `MishkaPay.Providers.Stripe.TestClock`
   (`create/2`, `fetch/2`, `advance/3`, `list/1`, `delete/2`), test keys only. A clock moves on
   Stripe's servers: read it until `status: :ready`, then read the subscription again.
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Take a one-time payment](https://mishka.tools/pay/docs/take-a-payment)
+- [Refund, hold and capture a payment](https://mishka.tools/pay/docs/refunds-and-captures)
+- [Save customers and cards, and open the billing portal](https://mishka.tools/pay/docs/customers-and-portal)
+- [Run many sites on one Stripe platform](https://mishka.tools/pay/docs/connect-platform)
+- [Count tax, send invoices and issue credit notes](https://mishka.tools/pay/docs/tax-and-invoices)
+- [Bill by usage with meters](https://mishka.tools/pay/docs/usage-billing)

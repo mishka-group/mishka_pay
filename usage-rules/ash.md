@@ -197,3 +197,9 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 - An inbox event whose work fails stays `:pending` with `last_error` set and is tried again (10
   tries), then `:failed`. A host listener on `mishka_pay:event:process` can do its own work per
   event.
+
+## Further reading
+
+The Mishka Pay docs on mishka.tools explain each area with full examples:
+
+- [Keep payments in Ash resources and Mishka CMS](https://mishka.tools/pay/docs/ash-and-cms)
