@@ -90,8 +90,12 @@ defmodule MishkaPay.MixProject do
       # Providers, credentials and every extension point are mishka_installer plugins and events.
       mishka_dep(:mishka_installer, "~> 0.1.16"),
       # Every input and every answer of a provider is a guarded_struct (0.1.8: `not_nil_value`
-      # refuses nil).
-      mishka_dep(:guarded_struct, "~> 0.1.8", override: true),
+      # refuses nil). The branch refuses a `struct:`, `structs:` or `sub_field` value of the wrong
+      # shape (guarded_struct#31); it goes once that is on Hex.
+      mishka_dep(:guarded_struct, "~> 0.1.8",
+        override: true,
+        branch: "fix/embedded-field-shape"
+      ),
       # The HTTP client of every provider adapter.
       {:req, "~> 0.7"},
       # The webhook endpoint (`MishkaPay.Webhook`) is a Plug.
