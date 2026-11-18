@@ -89,13 +89,9 @@ defmodule MishkaPay.MixProject do
     [
       # Providers, credentials and every extension point are mishka_installer plugins and events.
       mishka_dep(:mishka_installer, "~> 0.1.16"),
-      # Every input and every answer of a provider is a guarded_struct (0.1.8: `not_nil_value`
-      # refuses nil). The branch refuses a `struct:`, `structs:` or `sub_field` value of the wrong
-      # shape (guarded_struct#31); it goes once that is on Hex.
-      mishka_dep(:guarded_struct, "~> 0.1.8",
-        override: true,
-        branch: "fix/embedded-field-shape"
-      ),
+      # Every input and every answer of a provider is a guarded_struct (`not_nil_value` refuses
+      # nil; 0.1.9 refuses a `struct:`, `structs:` or `sub_field` value of the wrong shape).
+      mishka_dep(:guarded_struct, "~> 0.1.10", override: true),
       # The HTTP client of every provider adapter.
       {:req, "~> 0.7"},
       # The webhook endpoint (`MishkaPay.Webhook`) is a Plug.
@@ -141,8 +137,8 @@ defmodule MishkaPay.MixProject do
   # `override: true` goes with the sibling only, for a package another dependency takes from Hex,
   # such as guarded_struct, which mishka_installer takes from Hex.
   #
-  # `branch:` is for a fix that is not on Hex yet: without a sibling the package comes from that
-  # branch of its GitHub repo. Remove it once the fix is released; Hex refuses a git dependency.
+  # `branch:` takes a fix that is not on Hex yet from that branch of the package's GitHub repo when
+  # there is no sibling; Hex refuses a git dependency, so no release may carry it.
   defp mishka_dep(name, requirement, opts \\ []) do
     {path_opts, opts} = Keyword.split(opts, [:override])
     {branch, opts} = Keyword.pop(opts, :branch)
