@@ -20,6 +20,7 @@ defmodule MishkaPay.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       description: description(),
       package: package(),
+      homepage_url: "https://mishka.tools/pay",
       source_url: @source_url,
       docs: [
         main: "readme",
@@ -50,7 +51,7 @@ defmodule MishkaPay.MixProject do
   end
 
   defp description do
-    "A payment SDK for Elixir: providers as mishka_installer plugins, Stripe first, usable on its own or inside Ash."
+    "A payment SDK for Elixir: plugin-based providers, Stripe in full, PayPal included, with or without Ash."
   end
 
   defp package do
@@ -60,7 +61,10 @@ defmodule MishkaPay.MixProject do
       files:
         ~w(lib priv/gettext .formatter.exs mix.exs LICENSE README* guides usage-rules.md usage-rules),
       links: %{
+        "Mishka Pay" => "https://mishka.tools/pay",
+        "Official document" => "https://mishka.tools/pay/docs",
         "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/master/CHANGELOG.md",
         "Sponsor" => "https://github.com/sponsors/mishka-group",
         "Contributors" => "#{@source_url}/graphs/contributors"
       }
