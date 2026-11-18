@@ -1,0 +1,50 @@
+name: Release
+
+# "Run workflow" with a version is the release button: it bumps @version in mix.exs, tags
+# `v<version>`, runs CI on that commit, builds the ebin tarball, creates the GitHub release and
+# publishes the package to Hex through the workload identity (staged: approve it on hex.pm).
+# Pushing a `v*` tag by hand releases that tag; "Run workflow" without a version is a dry run.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. 0.1.1 (empty dry-runs the version in mix.exs)
+        required: false
+
+concurrency:
+  group: release
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    uses: mishka-group/mishka_cms/.github/workflows/mishka-release.yml@ci-v1
+    with:
+      version: ${{ inputs.version }}
+      package: mishka_pay
+      github-release: true
+      ebin: true
+      # The library has no `priv`.
+      ebin-paths: ""
+      credence-task: mishka_pay.credence
+      # The demo shop is built against this checkout, so a change to the library that breaks it
+      # fails here.
+      extra-checks: |
+        cd examples/shop
+        mix deps.get
+        MIX_ENV=test mix compile --warnings-as-errors
+        MIX_ENV=test mix format --check-formatted
+      sobelow: true
+      # Postgres for the Ash layer's tests, its schema made from the test resources, and Stripe's
+      # own mock server for the :stripe_mock tests; the run fails if it is not up.
+      postgres: true
+      pre-test: |
+        mix ash.codegen ci
+        docker run -d -p 12111:12111 stripe/stripe-mock:latest
+        until curl -s localhost:12111 > /dev/null; do sleep 1; done
+        echo "STRIPE_MOCK_REQUIRED=1" >> "$GITHUB_ENV"
+    secrets: inherit
