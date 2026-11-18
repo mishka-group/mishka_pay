@@ -13,7 +13,7 @@ without leaning on text or layout.
 | On the page | What Mishka Pay does |
 |---|---|
 | **Providers**, **Site demo**, **Plugins** | `MishkaPay.Provider.all/0`; the site's keys and settings from `MishkaPay.Credentials.fetch/2` (never a key); every plugin on Mishka Pay's events |
-| **Pay with**: Stripe (PayPal coming soon) | the checkout through the chosen provider |
+| **Pay with**: Stripe or PayPal (PayPal needs its sandbox keys) | the checkout through the chosen provider |
 | **Buy with Stripe** + options | `:start_checkout` for a product from the seeds: quantity 1 to 10, buyer email, merchant of record and metadata for this checkout |
 | Shop closed | the checkout gate (`Shop.Pay.Gate` on `mishka_pay:checkout:before`) refuses every checkout |
 | Back from Stripe, or canceled | `MishkaPay.fetch_checkout/3` reads the session, `:sync` keeps the payment at once |
@@ -67,11 +67,20 @@ mix phx.server
 The app reads `.env` itself; a variable set in the shell wins over the file. `mix setup` also runs
 the seeds (`priv/repo/seeds.exs`): the products and the site's settings.
 
-### PayPal: coming soon
+### PayPal
 
-Mishka Pay's PayPal adapter is in and tested against a stand-in; its run against PayPal's sandbox
-waits for a PayPal sandbox app ([#17](https://github.com/mishka-group/mishka_pay/issues/17)). Until
-then "Pay with: PayPal" is off in the demo.
+Make a sandbox app in PayPal's developer dashboard and put its keys in `.env`:
+
+```bash
+PAYPAL_CLIENT_ID=...
+PAYPAL_CLIENT_SECRET=...
+# Only for webhooks: the id of the app's webhook, sent to https://<public host>/pay/webhooks/paypal/demo.
+PAYPAL_WEBHOOK_ID=WH-...
+```
+
+Then "Pay with: PayPal" is on, and `mix shop.sandbox paypal` makes PayPal Orders and a
+subscription for a sandbox buyer to approve. PayPal has a smaller set than Stripe:
+[Capabilities by provider](https://mishka.tools/pay/docs/capabilities).
 
 ### Test payments in every status
 
