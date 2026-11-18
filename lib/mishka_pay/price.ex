@@ -67,7 +67,8 @@ defmodule MishkaPay.Price do
       derives: "validate(enum=Atom[inclusive::exclusive])",
       validator: {__MODULE__, :tax_behavior}
 
-    field :tax_rate_ids, list(), validator: {MishkaPay.TaxRate, :ids}
+    field :tax_rate_ids, list(),
+      derives: "sanitize(each=[trim]) validate(list, each=[string, not_empty])"
 
     field :quantity, pos_integer(),
       default: 1,

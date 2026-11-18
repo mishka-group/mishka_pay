@@ -86,7 +86,7 @@ defmodule ShopWeb.RawCallComponent do
         a plain path from the root is sent; an address or a path with <code>..</code>
         is refused before anything leaves the shop.
       </p>
-      <.hint>MishkaPay.request/1, MishkaPay.RequestOptions</.hint>
+      <.hint>MishkaPay.request/1, MishkaPay.RawRequest.Options</.hint>
 
       <form
         id="raw-call-form"

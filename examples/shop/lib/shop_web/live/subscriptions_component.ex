@@ -788,7 +788,7 @@ defmodule ShopWeb.SubscriptionsComponent do
   # A change that prorates is dated once, here: the preview and the change count from the same
   # second, so the change bills what the preview showed.
   defp dated(change) do
-    case MishkaPay.SubscriptionChange.prorates?(change) do
+    case MishkaPay.Subscription.Change.prorates?(change) do
       true -> Map.put(change, :proration_date, DateTime.truncate(DateTime.utc_now(), :second))
       false -> change
     end

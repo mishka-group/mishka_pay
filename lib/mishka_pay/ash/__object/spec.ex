@@ -14,7 +14,7 @@ if Code.ensure_loaded?(Ash) do
     them.
     """
 
-    alias MishkaPay.{Coupon, Invoice, PaymentLink, Price, Product, PromotionCode}
+    alias MishkaPay.{Coupon, Invoice, PaymentLink, Price, Product}
 
     @kinds [:product, :price, :coupon, :promotion_code, :payment_link, :invoice]
 
@@ -166,7 +166,7 @@ if Code.ensure_loaded?(Ash) do
       |> common(coupon)
     end
 
-    def attributes(%PromotionCode{} = code) do
+    def attributes(%Coupon.PromotionCode{} = code) do
       %{
         code: code.code,
         coupon_id: code.coupon_id,

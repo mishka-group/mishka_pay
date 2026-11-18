@@ -73,3 +73,70 @@ defmodule MishkaPay.Usage do
 
   defp not_exact(field), do: {:error, field, MishkaPay.Messages.text(:usage_value)}
 end
+
+defmodule MishkaPay.Usage.Summary do
+  @moduledoc """
+  What a meter counted for one customer over a window of time, read with
+  `MishkaPay.usage_summary/6`. A guarded_struct the provider fills in.
+
+    * `:provider`, `:meter_id`, `:customer_id`: whose usage, on which meter.
+    * `:value`: the usage the meter's aggregation gives for the window (a sum, a count or the
+      last value), as the provider reports it; 0 when nothing was reported.
+    * `:from`, `:to`: the window the provider counted, `:to` not included. A provider may widen
+      the window asked for to its own boundaries, such as whole minutes at Stripe.
+
+  A provider counts usage a little after it is reported, so a report made a moment ago may not
+  be in the value yet.
+  """
+
+  use GuardedStruct
+
+  guardedstruct authorized_fields: true do
+    field :provider, String.t(), derives: "validate(string)"
+    field :meter_id, String.t(), derives: "validate(string)"
+    field :customer_id, String.t(), derives: "validate(string)"
+    field :value, number(), default: 0
+    field :from, DateTime.t(), derives: "validate(struct)"
+    field :to, DateTime.t(), derives: "validate(struct)"
+  end
+end
+
+defmodule MishkaPay.Usage.Cancellation do
+  @moduledoc """
+  Takes back one usage report sent by mistake, with `MishkaPay.cancel_usage/1`: the meter then
+  counts it as if it was never reported. A guarded_struct.
+
+  What the caller gives:
+
+    * `:provider`, `:tenant`: which provider, with whose keys.
+    * `:event_name`: the meter's event name the report was sent under.
+    * `:usage_id`: the report's id, the `:id` of the `MishkaPay.Usage` that
+      `MishkaPay.report_usage/1` answered (made from its `:reference`).
+
+  What the provider fills in: `:status`, `:pending` while it takes the report out of the count,
+  `:complete` once it has.
+
+  A provider takes a report back only for a while after it came in (Stripe: 24 hours). After
+  that, report the same value again below zero to correct the count.
+  """
+
+  use GuardedStruct
+
+  guardedstruct authorized_fields: true do
+    field :provider, String.t(),
+      enforce: true,
+      derives: "sanitize(trim) validate(not_nil_value, string, not_empty)"
+
+    field :tenant, term()
+
+    field :event_name, String.t(),
+      enforce: true,
+      derives: "sanitize(trim) validate(not_nil_value, string, not_empty, max_len=100)"
+
+    field :usage_id, String.t(),
+      enforce: true,
+      derives: "sanitize(trim) validate(not_nil_value, string, not_empty, max_len=100)"
+
+    field :status, :pending | :complete, derives: "validate(enum=Atom[pending::complete])"
+  end
+end

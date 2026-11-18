@@ -43,8 +43,8 @@ defmodule MishkaPay.Checkout do
     * `:trial_days`: with `:subscription`, how many days the buyer uses it before the first
       charge.
     * `:discounts`: coupons or promotion codes the checkout applies by itself
-      (`MishkaPay.Discount`), or `:allow_promotion_codes`: `true` lets the buyer type a code. One
-      or the other.
+      (`MishkaPay.Checkout.Discounts`), or `:allow_promotion_codes`: `true` lets the buyer type a
+      code. One or the other.
     * `:automatic_tax`: `true` has the provider count the tax from the buyer's address (Stripe
       Tax); each price then needs its `:tax_code`.
     * `:customer_creation`: in a one-time or setup checkout, `:always` makes a provider customer
@@ -53,7 +53,7 @@ defmodule MishkaPay.Checkout do
     * `:terms`: `true` makes the buyer accept the site's terms of service before paying (the
       terms page is set in the provider's account). It helps when a buyer later disputes a sale.
     * `:phone`: `true` asks the buyer for a phone number.
-    * `:fields`: up to three questions the page asks, each a `MishkaPay.CheckoutField`; the
+    * `:fields`: up to three questions the page asks, each a `MishkaPay.Checkout.Fields`; the
       answers come back in `:field_values`.
     * `:card_required`: with `:subscription` and a trial, `false` starts the trial without a card;
       the provider asks for one before the first charge.
@@ -137,6 +137,31 @@ defmodule MishkaPay.Checkout do
     * `:shipping_address`: where the buyer asked it shipped, a `MishkaPay.Address` with the
       recipient's `:name`; `:amount_shipping`, what the chosen rate costs, and
       `:shipping_rate_id`, which rate it was.
+
+  ## Discounts
+
+  Each of `:discounts` is a `MishkaPay.Checkout.Discounts`, a sub_field of this struct: a coupon
+  (`%{coupon_id: "SPRING"}`) or a promotion code (`%{promotion_code_id: "promo_..."}`), one of
+  them. To let the buyer type a code instead, a checkout sets `allow_promotion_codes: true`; a
+  checkout does one or the other.
+
+  ## Fields
+
+  Each of `:fields` is a `MishkaPay.Checkout.Fields`, a sub_field of this struct: a question the
+  provider's page asks the buyer, such as "Name on the certificate" or "Which site is this for"
+  (Stripe takes three). The answers come back on the checkout read again, in its
+  `:field_values`, each field's key to the buyer's answer as the provider sent it.
+
+    * `:key`: the caller's own name for it, letters and digits, up to 200 characters.
+    * `:label`: what the buyer reads, up to 50 characters.
+    * `:type`: `:text` (the default), `:numeric`, or `:dropdown` with its `:options`, from one to
+      200, each a `MishkaPay.Checkout.Fields.Options` (`%{value: "pro", label: "Pro"}`).
+    * `:optional`: `true` lets the buyer leave it empty.
+
+  ## Shipping rates
+
+  `:shipping_rates` is a conditional field: each entry is either a rate id string the provider
+  keeps (`"shr_..."`), kept as the string, or a map built into a `MishkaPay.ShippingRate`.
   """
 
   use GuardedStruct
@@ -202,9 +227,14 @@ defmodule MishkaPay.Checkout do
 
     field :trial_days, pos_integer(), derives: "validate(integer, min_len=1)"
 
-    field :discounts, list(),
-      structs: MishkaPay.Discount,
-      derives: "validate(list)"
+    sub_field :discounts, [MishkaPay.Checkout.Discounts.t()],
+      structs: true,
+      authorized_fields: true,
+      main_validator: {__MODULE__, :one_discount},
+      derives: "validate(list)" do
+      field :coupon_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :promotion_code_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+    end
 
     field :allow_promotion_codes, boolean(), derives: "validate(boolean)"
     field :automatic_tax, boolean(), derives: "validate(boolean)"
@@ -223,7 +253,42 @@ defmodule MishkaPay.Checkout do
     field :tax_id_collection, boolean(), derives: "validate(boolean)"
     field :terms, boolean(), derives: "validate(boolean)"
     field :phone, boolean(), derives: "validate(boolean)"
-    field :fields, list(), structs: MishkaPay.CheckoutField, derives: "validate(list)"
+
+    sub_field :fields, [MishkaPay.Checkout.Fields.t()],
+      structs: true,
+      authorized_fields: true,
+      main_validator: {__MODULE__, :field_options},
+      derives: "validate(list, max_len=3)" do
+      field :key, String.t(),
+        enforce: true,
+        derives:
+          ~S"sanitize(trim) validate(not_nil_value, string, not_empty, max_len=200, regex=\A[A-Za-z0-9]+\z)"
+
+      field :label, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty, max_len=50)"
+
+      field :type, :text | :numeric | :dropdown,
+        default: :text,
+        derives: "validate(not_nil_value, enum=Atom[text::numeric::dropdown])",
+        validator: {__MODULE__, :field_type}
+
+      sub_field :options, [MishkaPay.Checkout.Fields.Options.t()],
+        structs: true,
+        authorized_fields: true,
+        derives: "validate(list, max_len=200)" do
+        field :value, String.t(),
+          enforce: true,
+          derives: "sanitize(trim) validate(not_nil_value, string, not_empty, max_len=100)"
+
+        field :label, String.t(),
+          enforce: true,
+          derives: "sanitize(trim) validate(not_nil_value, string, not_empty, max_len=100)"
+      end
+
+      field :optional, boolean(), default: false, derives: "validate(boolean)"
+    end
+
     field :card_required, boolean(), derives: "validate(boolean)"
 
     field :billing_mode, :flexible | :classic,
@@ -245,16 +310,22 @@ defmodule MishkaPay.Checkout do
       validator: {__MODULE__, :submit_type}
 
     field :phone_number, String.t(), derives: "validate(string)"
-    field :field_values, map(), derives: "validate(map)"
+    dynamic_field :field_values, default: nil
     field :terms_accepted, boolean(), derives: "validate(boolean)"
     field :invoice, boolean(), derives: "validate(boolean)"
     field :invoice_id, String.t(), derives: "validate(string)"
 
     field :shipping_countries, list(),
-      derives: "validate(list)",
-      validator: {__MODULE__, :shipping_countries}
+      derives:
+        ~S"sanitize(each=[trim, upcase]) validate(list, not_empty, each=[string, regex=\A[A-Z]{2}\z])"
 
-    field :shipping_rates, list(), validator: {MishkaPay.ShippingRate, :rates}
+    conditional_field :shipping_rates, [String.t() | MishkaPay.ShippingRate.t()],
+      structs: true,
+      derives: "validate(list)" do
+      field :shipping_rates, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :shipping_rates, MishkaPay.ShippingRate.t(), struct: MishkaPay.ShippingRate
+    end
+
     field :shipping_address, struct(), struct: MishkaPay.Address
     field :amount_shipping, Money.t(), validator: {MishkaPay.Money, :field}
     field :shipping_rate_id, String.t(), derives: "validate(string)"
@@ -355,19 +426,6 @@ defmodule MishkaPay.Checkout do
     end
   end
 
-  # Two-letter country codes, in upper case as providers take them.
-  @doc false
-  def shipping_countries(field, nil), do: {:ok, field, nil}
-
-  def shipping_countries(field, [_ | _] = countries) do
-    case Enum.all?(countries, &(is_binary(&1) and Regex.match?(~r/\A[A-Za-z]{2}\z/, &1))) do
-      true -> {:ok, field, Enum.map(countries, &String.upcase/1)}
-      false -> {:error, field, Messages.text(:shipping_countries)}
-    end
-  end
-
-  def shipping_countries(field, _other), do: {:error, field, Messages.text(:shipping_countries)}
-
   @doc false
   def return_url(field, url) when is_binary(url) do
     case URI.parse(String.trim(url)) do
@@ -398,6 +456,40 @@ defmodule MishkaPay.Checkout do
     do: MishkaPay.Helpers.Choice.atom(:mode, mode, ~w(payment subscription setup)a)
 
   def mode(:mode, mode), do: {:ok, :mode, mode}
+
+  @doc false
+  def field_type(field, value), do: Choice.atom(field, value, ~w(text numeric dropdown)a)
+
+  # A dropdown question has its options; the other types none. The options themselves are the
+  # `options` sub_field's.
+  @doc false
+  def field_options(attrs) do
+    case {attrs |> key(:type) |> to_string(), key(attrs, :options)} do
+      {"dropdown", [_ | _]} -> {:ok, attrs}
+      {"dropdown", _none} -> options_error()
+      {_other, none} when none in [nil, []] -> {:ok, attrs}
+      {_other, _options} -> options_error()
+    end
+  end
+
+  defp options_error,
+    do: {:error, %{field: :options, action: :options, message: Messages.text(:dropdown_options)}}
+
+  # A discount the checkout applies is a coupon or a promotion code, one of them.
+  @doc false
+  def one_discount(attrs) do
+    case {is_binary(attrs[:coupon_id]), is_binary(attrs[:promotion_code_id])} do
+      {true, false} ->
+        {:ok, attrs}
+
+      {false, true} ->
+        {:ok, attrs}
+
+      _none_or_both ->
+        {:error,
+         %{field: :coupon_id, action: :discount, message: Messages.text(:discount_one_of)}}
+    end
+  end
 
   # One currency across the items, and items that fit the mode: recurring prices for a
   # subscription, one-time prices for a payment. Runs before the items are built, so an item may
@@ -509,15 +601,12 @@ defmodule MishkaPay.Checkout do
     end
   end
 
-  # At most three questions; a trial without a card is a subscription's, the button's word a
+  # A trial without a card is a subscription's, the button's word a
   # one-time checkout's.
   defp options_mode(attrs) do
     subscription? = key(attrs, :mode) in [:subscription, "subscription"]
 
     cond do
-      Enum.count_until(List.wrap(key(attrs, :fields)), 4) > 3 ->
-        {:error, %{field: :fields, action: :fields, message: Messages.text(:fields_three)}}
-
       given(attrs, :card_required) == false and not subscription? ->
         {:error,
          %{

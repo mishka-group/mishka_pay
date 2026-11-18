@@ -15,7 +15,7 @@ defmodule MishkaPay.CreditNote do
     * `:provider`, `:tenant`: which provider, with whose keys.
     * `:invoice_id`: the finalized bill it credits (`MishkaPay.Invoice`).
     * What it credits, one of them: an `:amount` of the whole bill, or `:lines`, each a
-      `MishkaPay.CreditNoteLine` (a line of the bill, or a line of its own).
+      `MishkaPay.CreditNote.Lines` (a line of the bill, or a line of its own).
     * `:reason`: `:duplicate`, `:fraudulent`, `:order_change` or `:product_unsatisfactory`.
     * Where the money goes, on a paid bill: `:refund_amount` back to the buyer's card,
       `:credit_amount` onto the customer's balance (taken off their next bills),
@@ -33,6 +33,20 @@ defmodule MishkaPay.CreditNote do
   `:mixed`), `:customer_id`, `:amount` (all of it, tax included), `:amount_tax`, the `:lines`,
   `:refund_ids` (the refunds it made), `:pdf_url`, `:voided_at` and `:created_at`. A preview
   answers the same, from a note not made.
+
+  ## Lines
+
+  Each of `:lines` is a `MishkaPay.CreditNote.Lines`, a sub_field of this struct: what the note
+  takes back of the bill. `MishkaPay.list_credit_note_lines/4` answers them too. What the caller
+  gives, one of two kinds:
+
+    * a line of the bill: `:invoice_line_id` (a `MishkaPay.Invoice.Lines` id, `il_...` at
+      Stripe), with a `:quantity` of it to credit, or an `:amount` (a part of the line's amount);
+    * a line of its own: a `:name` and a `:unit_amount` (the credit for one), with a `:quantity`
+      (1 unless given).
+
+  What the provider fills in: `:id` (`cnli_...` at Stripe), `:type` (`:invoice_line` or
+  `:custom`) and `:amount`, the line's whole credit.
   """
 
   use GuardedStruct
@@ -50,7 +64,22 @@ defmodule MishkaPay.CreditNote do
     field :invoice_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
     field :customer_id, String.t(), derives: "validate(string)"
     field :amount, Money.t(), validator: {MishkaPay.Money, :field}
-    field :lines, list(), structs: MishkaPay.CreditNoteLine, derives: "validate(list)"
+
+    sub_field :lines, [MishkaPay.CreditNote.Lines.t()],
+      structs: true,
+      authorized_fields: true,
+      main_validator: {__MODULE__, :names_what},
+      derives: "validate(list)" do
+      field :id, String.t(), derives: "validate(string)"
+      field :type, :invoice_line | :custom, derives: "validate(enum=Atom[invoice_line::custom])"
+      field :invoice_line_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+
+      field :name, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=500)"
+
+      field :quantity, pos_integer(), derives: "validate(integer, min_len=1)"
+      field :unit_amount, Money.t(), validator: {MishkaPay.Money, :field}
+      field :amount, Money.t(), validator: {MishkaPay.Money, :field}
+    end
 
     field :reason, :duplicate | :fraudulent | :order_change | :product_unsatisfactory,
       derives: "validate(enum=Atom[duplicate::fraudulent::order_change::product_unsatisfactory])",
@@ -122,6 +151,35 @@ defmodule MishkaPay.CreditNote do
   end
 
   defp amounts(_not_a_map, _fields), do: []
+
+  # A line to credit names a line of the bill with how much of it, or a line of its own with its
+  # name and the credit for one. A line the provider answered (it has an id or a type) is taken
+  # as it is.
+  @doc false
+  def names_what(attrs) do
+    case {key(attrs, :id) || key(attrs, :type), key(attrs, :invoice_line_id), key(attrs, :name),
+          key(attrs, :unit_amount)} do
+      {nil, nil, name, unit} when is_nil(name) or is_nil(unit) -> line_needs()
+      {nil, line, _name, _unit} when not is_nil(line) -> how_much(attrs)
+      _named -> {:ok, attrs}
+    end
+  end
+
+  defp how_much(attrs) do
+    case is_nil(key(attrs, :quantity)) and is_nil(key(attrs, :amount)) do
+      true -> line_needs()
+      false -> {:ok, attrs}
+    end
+  end
+
+  defp line_needs do
+    {:error,
+     %{
+       field: :lines,
+       action: :credit_note_line,
+       message: MishkaPay.Messages.text(:credit_line_needs)
+     }}
+  end
 
   defp invalid(field, message),
     do: {:error, %{field: field, action: :credit_note, message: MishkaPay.Messages.text(message)}}

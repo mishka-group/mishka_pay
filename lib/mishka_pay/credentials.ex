@@ -64,7 +64,7 @@ defmodule MishkaPay.Credentials do
       and the only one a platform that turned Connect on lately may use to make accounts) or
       `:v1` (Stripe's Accounts v1, still needed for OAuth, Treasury, card issuing and older
       capabilities). A call's own `:api` still wins (`MishkaPay.ConnectedAccount`,
-      `MishkaPay.AccountLink`, `api:` on a read, a list or a close).
+      `MishkaPay.ConnectedAccount.Link`, `api:` on a read, a list or a close).
     * `:customer_api`: which of the provider's APIs makes this tenant's customers, at a provider
       that has two. `:v2` (the default: Stripe's Accounts v2, an account with the customer
       configuration, `acct_...`, the one Stripe recommends) or `:v1` (Stripe's Customers,
@@ -133,8 +133,7 @@ defmodule MishkaPay.Credentials do
       validator: {__MODULE__, :refunds}
 
     field :account_id, String.t(),
-      derives: "sanitize(trim) validate(string, not_empty, max_len=255)",
-      validator: {__MODULE__, :account_id}
+      derives: ~S"sanitize(trim) validate(string, max_len=255, regex=\A[A-Za-z0-9_]+\z)"
 
     field :connect_api, :v2 | :v1,
       default: :v2,
@@ -300,20 +299,6 @@ defmodule MishkaPay.Credentials do
   end
 
   def secret_list(field, _other), do: {:error, field, MishkaPay.Messages.text(:webhook_secrets)}
-
-  # An account id goes into a request header: letters, digits and underscores only, so it can never
-  # end the header or add another.
-  @doc false
-  def account_id(field, id) when is_binary(id) do
-    trimmed = String.trim(id)
-
-    case Regex.match?(~r/\A[A-Za-z0-9_]+\z/, trimmed) do
-      true -> {:ok, field, trimmed}
-      false -> {:error, field, MishkaPay.Messages.text(:account_id_plain)}
-    end
-  end
-
-  def account_id(field, id), do: {:ok, field, id}
 
   # A plugin that reads its keys from JSON or settings answers the mode as a string.
   @doc false

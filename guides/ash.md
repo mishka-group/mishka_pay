@@ -45,7 +45,7 @@ by hand, `MishkaPay.Ash.listeners(MyApp.Pay)` lists them all in the domain's ord
 - **coupon**: `:sync`, `:add`, `:remove`. **promotion_code**: `:sync`, `:add`, `:edit`.
 - **payment_link**: `:sync`, `:add` (`link`, the map `MishkaPay.create_payment_link/1` takes),
   `:edit` (`changes`).
-- **invoice**: `:sync`, `:add` (`draft`, a `MishkaPay.InvoiceDraft` map), `:finalize`, `:send`,
+- **invoice**: `:sync`, `:add` (`draft`, a `MishkaPay.Invoice.Draft` map), `:finalize`, `:send`,
   `:pay` (`out_of_band`), `:void`, `:mark_uncollectible`, `:remove` (a draft).
 
 The last six are what a site manages from its admin. Each keeps a local copy that its webhooks

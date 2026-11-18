@@ -246,7 +246,7 @@ defmodule ShopWeb.StripeListsComponent do
   defp summary(%MishkaPay.Price{} = p), do: "#{p.name || "–"} · #{money(p.amount)}"
   defp summary(%MishkaPay.Coupon{} = c), do: "#{c.name || "–"} · used #{c.times_redeemed || 0}"
 
-  defp summary(%MishkaPay.PromotionCode{} = c),
+  defp summary(%MishkaPay.Coupon.PromotionCode{} = c),
     do: "#{c.code} · #{if c.active, do: "on", else: "off"}"
 
   defp money(nil), do: "–"

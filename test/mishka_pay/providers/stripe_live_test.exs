@@ -491,7 +491,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     at = DateTime.add(DateTime.utc_now(), 3600)
 
     assert {:ok,
-            %MishkaPay.FileLink{
+            %MishkaPay.File.Link{
               id: "link_" <> _,
               file_id: ^id,
               url: "https://files.stripe.com/links/" <> _,
@@ -673,20 +673,20 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       reference: "setup-#{run}"
     }
 
-    assert {:ok, %MishkaPay.InvoiceItem{id: "ii_" <> _ = id, invoice_id: nil} = made} =
+    assert {:ok, %MishkaPay.Invoice.Item{id: "ii_" <> _ = id, invoice_id: nil} = made} =
              MishkaPay.create_invoice_item(item)
 
     assert {made.amount, made.total, made.reference} ==
              {Money.new(:USD, "49.00"), Money.new(:USD, "98.00"), "setup-#{run}"}
 
-    assert {:ok, %MishkaPay.InvoiceItem{id: ^id}} = MishkaPay.create_invoice_item(item)
+    assert {:ok, %MishkaPay.Invoice.Item{id: ^id}} = MishkaPay.create_invoice_item(item)
 
-    assert {:ok, %MishkaPay.InvoiceItem{quantity: 3, total: total}} =
+    assert {:ok, %MishkaPay.Invoice.Item{quantity: 3, total: total}} =
              MishkaPay.update_invoice_item(%{provider: "stripe", id: id, quantity: 3})
 
     assert total == Money.new(:USD, "147.00")
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.InvoiceItem{id: ^id}]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Invoice.Item{id: ^id}]}} =
              MishkaPay.list_invoice_items("stripe", nil, customer_id: customer, pending: true)
 
     assert :ok = MishkaPay.delete_invoice_item("stripe", id)
@@ -713,7 +713,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
         interval: :month
       })
 
-    assert {:ok, %MishkaPay.PortalConfiguration{id: "bpc_" <> _ = id} = config} =
+    assert {:ok, %MishkaPay.PortalSession.Configuration{id: "bpc_" <> _ = id} = config} =
              MishkaPay.create_portal_configuration(%{
                provider: "stripe",
                name: "Live portal #{run}",
@@ -732,7 +732,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       cleanup(
         key,
         &Stripe.update_portal_configuration(
-          %MishkaPay.PortalConfiguration{provider: "stripe", id: id, active: false},
+          %MishkaPay.PortalSession.Configuration{provider: "stripe", id: id, active: false},
           &1
         )
       )
@@ -744,9 +744,15 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {config.active, config.default, config.customer_update, config.subscription_cancel} ==
              {true, false, [:email, :name], :at_period_end}
 
-    assert [%MishkaPay.PortalPlan{product_id: ^product, price_ids: [^price]}] = config.plans
+    assert [
+             %MishkaPay.PortalSession.Configuration.Plans{
+               product_id: ^product,
+               price_ids: [^price]
+             }
+           ] = config.plans
 
-    assert {:ok, %MishkaPay.PortalConfiguration{subscription_cancel: :off, customer_update: []}} =
+    assert {:ok,
+            %MishkaPay.PortalSession.Configuration{subscription_cancel: :off, customer_update: []}} =
              MishkaPay.update_portal_configuration(%{
                provider: "stripe",
                id: id,
@@ -754,7 +760,11 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                customer_update: []
              })
 
-    assert {:ok, %MishkaPay.PortalConfiguration{name: "Live portal " <> _, invoice_history: true}} =
+    assert {:ok,
+            %MishkaPay.PortalSession.Configuration{
+              name: "Live portal " <> _,
+              invoice_history: true
+            }} =
              MishkaPay.fetch_portal_configuration("stripe", id)
 
     assert {:ok, %MishkaPay.Page{items: [_ | _]}} =
@@ -917,7 +927,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %Payment{id: ^id, status: :paid, customer_id: ^customer}} =
              MishkaPay.fetch_payment("stripe", id)
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: ^pm}]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer.PaymentMethod{id: ^pm}]}} =
              MishkaPay.list_payment_methods("stripe", nil, customer_id: customer)
 
     assert {:ok, %MishkaPay.Customer{id: ^customer, default_payment_method: ^pm}} =
@@ -959,7 +969,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     # Stripe's sandbox verifies an EU VAT number of 000000000.
     assert {:ok,
-            %MishkaPay.TaxId{
+            %MishkaPay.Customer.TaxId{
               id: "txi_" <> _ = id,
               customer_id: ^customer_id,
               type: "eu_vat",
@@ -974,7 +984,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert check in [:pending, :verified]
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.TaxId{id: ^id}]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer.TaxId{id: ^id}]}} =
              MishkaPay.list_tax_ids("stripe", customer_id)
 
     assert {:error, %Errors.Rejected{code: "tax_id_invalid"} = error} =
@@ -1010,7 +1020,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
          id: "taxcalc_" <> _ = id,
          amount_total: total,
          tax_amount_exclusive: tax,
-         items: [%MishkaPay.TaxLine{reference: reference, amount_tax: %Money{}}]
+         items: [%MishkaPay.TaxCalculation.Items{reference: reference, amount_tax: %Money{}}]
        }} ->
         assert reference == "ebook-#{run}"
         # The line's amount is its whole: 20.00 for the two, then 4.95 shipping and the tax.
@@ -1018,7 +1028,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
         assert Money.equal?(total, expected)
 
         assert {:ok,
-                %MishkaPay.TaxTransaction{
+                %MishkaPay.TaxCalculation.Transaction{
                   id: "tax_" <> _ = recorded,
                   calculation_id: ^id,
                   reference: order
@@ -1026,7 +1036,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
         assert order == "order-#{run}"
 
-        assert {:ok, %MishkaPay.TaxTransaction{id: ^recorded}} =
+        assert {:ok, %MishkaPay.TaxCalculation.Transaction{id: ^recorded}} =
                  MishkaPay.record_tax("stripe", id, "order-#{run}")
 
       {:error, %Errors.Rejected{code: "tax_not_set_up"} = error} ->
@@ -1082,14 +1092,15 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     on_exit(fn -> MishkaPay.delete_coupon("stripe", coupon_id) end)
 
-    assert {:ok, %MishkaPay.PromotionCode{id: "promo_" <> _ = code_id, coupon_id: ^coupon_id}} =
+    assert {:ok,
+            %MishkaPay.Coupon.PromotionCode{id: "promo_" <> _ = code_id, coupon_id: ^coupon_id}} =
              MishkaPay.create_promotion_code(%{
                provider: "stripe",
                coupon_id: coupon_id,
                code: "LIVE#{run}"
              })
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PromotionCode{id: ^code_id}]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Coupon.PromotionCode{id: ^code_id}]}} =
              MishkaPay.list_promotion_codes("stripe", nil, code: "LIVE#{run}")
 
     assert {:ok, %Checkout{id: id, status: :open, amount_total: total, amount_discount: discount}} =
@@ -1116,7 +1127,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %Checkout{status: :expired, url: nil}} = MishkaPay.fetch_checkout("stripe", id)
     assert {:error, %Errors.Rejected{status: 400}} = MishkaPay.expire_checkout("stripe", id)
 
-    assert {:ok, %MishkaPay.PromotionCode{active: false}} =
+    assert {:ok, %MishkaPay.Coupon.PromotionCode{active: false}} =
              MishkaPay.update_promotion_code(%{provider: "stripe", id: code_id, active: false})
   end
 
@@ -1303,7 +1314,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     }
 
     assert {:ok,
-            %MishkaPay.SubscriptionSchedule{
+            %MishkaPay.Subscription.Schedule{
               id: "sub_sched_" <> _ = id,
               status: :active,
               subscription_id: "sub_" <> _ = subscription,
@@ -1317,16 +1328,16 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {first.end_at, first.trial_end_at} == {second.start_at, second.start_at}
     assert [%{id: ^full, quantity: 2}] = second.items
 
-    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+    assert {:ok, %MishkaPay.Subscription.Schedule{id: ^id}} =
              MishkaPay.create_subscription_schedule(schedule)
 
-    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^id}} =
+    assert {:ok, %MishkaPay.Subscription.Schedule{id: ^id}} =
              MishkaPay.fetch_subscription_schedule("stripe", id)
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.SubscriptionSchedule{id: ^id}]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Subscription.Schedule{id: ^id}]}} =
              MishkaPay.list_subscription_schedules("stripe", nil, customer_id: customer)
 
-    assert {:ok, %MishkaPay.SubscriptionSchedule{end_behavior: :release, phases: [kept, next]}} =
+    assert {:ok, %MishkaPay.Subscription.Schedule{end_behavior: :release, phases: [kept, next]}} =
              MishkaPay.update_subscription_schedule(%{
                provider: "stripe",
                id: id,
@@ -1346,14 +1357,14 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert [%{id: ^intro, quantity: 3}] = next.items
 
     assert {:ok,
-            %MishkaPay.SubscriptionSchedule{
+            %MishkaPay.Subscription.Schedule{
               status: :released,
               released_subscription_id: ^subscription,
               released_at: %DateTime{}
             }} = MishkaPay.release_subscription_schedule("stripe", id)
 
     assert {:ok,
-            %MishkaPay.SubscriptionSchedule{
+            %MishkaPay.Subscription.Schedule{
               id: from_id,
               status: :active,
               subscription_id: ^subscription,
@@ -1366,7 +1377,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                reference: "plan-from-#{run}"
              })
 
-    assert {:ok, %MishkaPay.SubscriptionSchedule{id: ^from_id, status: :canceled}} =
+    assert {:ok, %MishkaPay.Subscription.Schedule{id: ^from_id, status: :canceled}} =
              MishkaPay.cancel_subscription_schedule("stripe", from_id)
 
     assert {:ok, %Subscription{status: :canceled}} =
@@ -1414,7 +1425,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
           {%{}, %{"type" => "flexible", "flexible" => %{"proration_discounts" => "itemized"}}},
           {%{billing_mode: :classic}, %{"type" => "classic", "flexible" => nil}}
         ] do
-      assert {:ok, %MishkaPay.SubscriptionSchedule{id: id, subscription_id: subscription}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{id: id, subscription_id: subscription}} =
                MishkaPay.create_subscription_schedule(
                  Map.merge(billing, %{
                    provider: "stripe",
@@ -1435,7 +1446,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
       for mode <- [schedule_mode, subscription_mode],
           do: assert(Map.take(mode, ["type", "flexible"]) == read)
 
-      assert {:ok, %MishkaPay.SubscriptionSchedule{status: :canceled}} =
+      assert {:ok, %MishkaPay.Subscription.Schedule{status: :canceled}} =
                MishkaPay.cancel_subscription_schedule("stripe", id)
     end
   end
@@ -1491,7 +1502,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote{id: ^id}]}} =
              MishkaPay.list_credit_notes("stripe", nil, invoice_id: invoice_id)
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNoteLine{} = line]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.CreditNote.Lines{} = line]}} =
              MishkaPay.list_credit_note_lines("stripe", id)
 
     assert {line.type, line.invoice_line_id, line.quantity, line.amount} ==
@@ -1809,7 +1820,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok,
             %MishkaPay.Page{
               items: [
-                %MishkaPay.PaymentMethod{
+                %MishkaPay.Customer.PaymentMethod{
                   id: ^card,
                   customer_id: ^customer_id,
                   type: "card",
@@ -1819,7 +1830,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
               ]
             }} = MishkaPay.list_payment_methods("stripe", nil, customer_id: customer_id)
 
-    assert {:ok, %MishkaPay.PaymentMethod{id: ^card, card_exp_year: year}} =
+    assert {:ok, %MishkaPay.Customer.PaymentMethod{id: ^card, card_exp_year: year}} =
              MishkaPay.fetch_payment_method("stripe", card)
 
     assert year > 2000
@@ -1827,7 +1838,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Customer{id: ^customer_id, default_payment_method: ^card}} =
              MishkaPay.set_default_payment_method("stripe", customer_id, card)
 
-    assert {:ok, %MishkaPay.PaymentMethod{id: ^card, customer_id: nil}} =
+    assert {:ok, %MishkaPay.Customer.PaymentMethod{id: ^card, customer_id: nil}} =
              MishkaPay.detach_payment_method("stripe", card)
 
     assert {:ok, %MishkaPay.Page{items: []}} =
@@ -1934,7 +1945,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     # Stripe counts reports a little after they come in: the value is what it has counted so far.
     assert {:ok,
-            %MishkaPay.UsageSummary{
+            %MishkaPay.Usage.Summary{
               meter_id: ^meter_id,
               customer_id: ^customer_id,
               value: value,
@@ -2018,12 +2029,12 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     cancel = %{provider: "stripe", event_name: event, usage_id: usage_id}
 
-    assert {:ok, %MishkaPay.UsageCancellation{status: status, usage_id: ^usage_id}} =
+    assert {:ok, %MishkaPay.Usage.Cancellation{status: status, usage_id: ^usage_id}} =
              MishkaPay.cancel_usage(cancel)
 
     assert status in [:pending, :complete]
 
-    assert {:ok, %MishkaPay.UsageCancellation{usage_id: ^usage_id}} =
+    assert {:ok, %MishkaPay.Usage.Cancellation{usage_id: ^usage_id}} =
              MishkaPay.cancel_usage(cancel)
 
     assert {:ok, %MishkaPay.Meter{status: :inactive}} =
@@ -2040,10 +2051,14 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Page{items: warnings}} =
              MishkaPay.list_fraud_warnings("stripe", nil, limit: 5)
 
-    assert Enum.all?(warnings, &match?(%MishkaPay.FraudWarning{id: "issfr_" <> _}, &1))
+    assert Enum.all?(warnings, &match?(%MishkaPay.Payment.FraudWarning{id: "issfr_" <> _}, &1))
 
     assert {:ok, %MishkaPay.Page{items: reviews}} = MishkaPay.list_fraud_reviews("stripe", nil)
-    assert Enum.all?(reviews, &match?(%MishkaPay.FraudReview{id: "prv_" <> _, open: true}, &1))
+
+    assert Enum.all?(
+             reviews,
+             &match?(%MishkaPay.Payment.FraudReview{id: "prv_" <> _, open: true}, &1)
+           )
 
     assert {:error, %Errors.Rejected{status: 404, code: "resource_missing"}} =
              MishkaPay.fetch_fraud_warning("stripe", "issfr_doesnotexist")
@@ -2099,13 +2114,13 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Page{items: [_, _] = items, has_more: true, next: next}} =
              MishkaPay.list_balance_transactions("stripe", nil, limit: 2)
 
-    for %MishkaPay.BalanceTransaction{id: "txn_" <> _} = txn <- items do
+    for %MishkaPay.Balance.Transaction{id: "txn_" <> _} = txn <- items do
       assert Money.equal?(txn.net, Money.sub!(txn.amount, txn.fee))
       assert txn.status in [:available, :pending]
       assert %DateTime{} = txn.created_at
     end
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.BalanceTransaction{id: later} | _]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Balance.Transaction{id: later} | _]}} =
              MishkaPay.list_balance_transactions("stripe", nil, limit: 2, after: next)
 
     refute later in Enum.map(items, & &1.id)
@@ -2134,7 +2149,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
 
     assert {:ok,
-            %MishkaPay.CustomerBalanceTransaction{
+            %MishkaPay.Customer.BalanceTransaction{
               id: "cbtxn_" <> _ = credit_id,
               customer_id: ^customer_id,
               amount: amount,
@@ -2146,9 +2161,9 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     assert Money.equal?(amount, Money.new(:USD, "-5.00"))
     assert Money.equal?(after_credit, Money.new(:USD, "-5.00"))
-    assert {:ok, %MishkaPay.CustomerBalanceTransaction{id: ^credit_id}} = credit.()
+    assert {:ok, %MishkaPay.Customer.BalanceTransaction{id: ^credit_id}} = credit.()
 
-    assert {:ok, %MishkaPay.CustomerBalanceTransaction{id: debit_id, ending_balance: ending}} =
+    assert {:ok, %MishkaPay.Customer.BalanceTransaction{id: debit_id, ending_balance: ending}} =
              MishkaPay.adjust_customer_balance("stripe", customer_id, Money.new(:USD, "2.00"))
 
     assert Money.equal?(ending, Money.new(:USD, "-3.00"))
@@ -2156,8 +2171,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok,
             %MishkaPay.Page{
               items: [
-                %MishkaPay.CustomerBalanceTransaction{id: ^debit_id},
-                %MishkaPay.CustomerBalanceTransaction{id: ^credit_id}
+                %MishkaPay.Customer.BalanceTransaction{id: ^debit_id},
+                %MishkaPay.Customer.BalanceTransaction{id: ^credit_id}
               ]
             }} = MishkaPay.list_customer_balance("stripe", customer_id)
   end
@@ -2354,7 +2369,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                return_url: "https://shop.test/saved"
              )
 
-    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PaymentMethod{id: ^method}]}} =
+    assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Customer.PaymentMethod{id: ^method}]}} =
              MishkaPay.list_payment_methods("stripe", nil, customer_id: customer)
 
     assert {:ok, %MishkaPay.SetupIntent{id: other}} =
@@ -2419,7 +2434,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     on_exit(fn -> cleanup(key, &delete_customer(customer, &1)) end)
 
-    assert {:ok, %MishkaPay.InvoiceItem{tax_rate_ids: [^id]}} =
+    assert {:ok, %MishkaPay.Invoice.Item{tax_rate_ids: [^id]}} =
              MishkaPay.create_invoice_item(%{
                provider: "stripe",
                customer_id: customer,
@@ -2442,7 +2457,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     starts = earlier_end("IS")
 
     assert {:ok,
-            %MishkaPay.TaxRegistration{
+            %MishkaPay.TaxSettings.Registration{
               id: "taxreg_" <> _ = registration,
               status: status,
               active_from: %DateTime{} = from
@@ -2459,7 +2474,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     ends = from |> DateTime.add(60) |> DateTime.truncate(:second)
 
     assert {:ok,
-            %MishkaPay.TaxRegistration{
+            %MishkaPay.TaxSettings.Registration{
               id: ^registration,
               country: "IS",
               type: "standard",
@@ -2597,7 +2612,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     }
 
     assert {:ok,
-            %MishkaPay.AccountLink{
+            %MishkaPay.ConnectedAccount.Link{
               url: "https://connect.stripe.com/" <> _,
               expires_at: %DateTime{}
             }} = MishkaPay.account_link(link)
@@ -2636,7 +2651,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
                  refresh_url: "https://shop.test/connect/again",
                  return_url: "https://shop.test/connect/done"
                }) do
-            {:ok, %MishkaPay.AccountLink{url: "https://connect.stripe.com/" <> _}} ->
+            {:ok, %MishkaPay.ConnectedAccount.Link{url: "https://connect.stripe.com/" <> _}} ->
               :ok
 
             {:error, %Errors.Rejected{code: "connect_needs_sandbox"} = error} ->
@@ -2838,7 +2853,7 @@ defmodule MishkaPay.Providers.StripeLiveTest do
 
     for {list, item} <- [
           {MishkaPay.list_transfers("stripe", nil, limit: 5), MishkaPay.Transfer},
-          {MishkaPay.list_payouts("stripe", nil, limit: 5), MishkaPay.Payout},
+          {MishkaPay.list_payouts("stripe", nil, limit: 5), MishkaPay.Balance.Payout},
           {MishkaPay.list_application_fees("stripe", nil, limit: 5), MishkaPay.ApplicationFee}
         ] do
       assert {:ok, %MishkaPay.Page{items: items}} = list

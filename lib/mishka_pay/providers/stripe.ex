@@ -118,7 +118,7 @@ defmodule MishkaPay.Providers.Stripe do
       allows (`MishkaPay.Refund`).
     * `upload_file/2` sends a file to `files.stripe.com` as `multipart/form-data`; dispute
       evidence only as PDF, JPEG or PNG, up to 5 MB, and its bytes must be the type it names.
-      `fetch_file/2` reads one, and `file_link/3` makes a FileLink, a public address of it.
+      `fetch_file/2` reads one, and `file_link/3` makes a `MishkaPay.File.Link`, a public address of it.
       `update_dispute/2` takes only a file id (`file_...`) in the evidence fields that hold a
       file, such as `receipt` and `uncategorized_file`.
     * `create_meter/2`, `fetch_meter/2`, `update_meter/2` (its display name only),
@@ -271,18 +271,17 @@ defmodule MishkaPay.Providers.Stripe do
     CreditNote,
     Customer,
     Errors,
-    InvoiceItem,
+    Invoice,
     Messages,
     Page,
     PaymentLink,
-    PortalConfiguration,
+    PortalSession,
     Price,
     Product,
-    PromotionCode,
     ProviderKit,
+    RawRequest,
     Refund,
-    RequestOptions,
-    SubscriptionSchedule
+    Subscription
   }
 
   alias MishkaPay.Helpers.{Choice, TokenCache}
@@ -876,7 +875,7 @@ defmodule MishkaPay.Providers.Stripe do
   # metadata with `from_subscription`: a schedule made so gets its reference and metadata in a
   # second request.
   @impl MishkaPay.Provider
-  def create_subscription_schedule(%SubscriptionSchedule{} = schedule, keys) do
+  def create_subscription_schedule(%Subscription.Schedule{} = schedule, keys) do
     with :ok <- maybe_id(schedule.subscription_id, "sub_", :subscription_id),
          :ok <- maybe_id(schedule.customer_id, @customer, :customer_id),
          :ok <- schedule_fits(schedule),
@@ -898,9 +897,9 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
-  defp labelled(answer, %SubscriptionSchedule{subscription_id: from} = schedule, keys)
+  defp labelled(answer, %Subscription.Schedule{subscription_id: from} = schedule, keys)
        when is_binary(from) do
-    labels = %SubscriptionSchedule{
+    labels = %Subscription.Schedule{
       provider: "stripe",
       metadata: schedule.metadata,
       reference: schedule.reference
@@ -927,7 +926,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def update_subscription_schedule(%SubscriptionSchedule{id: id} = schedule, keys) do
+  def update_subscription_schedule(%Subscription.Schedule{id: id} = schedule, keys) do
     with :ok <- schedule_fits(schedule) do
       schedule_call(:post, id, "", Mapper.subscription_schedule_update_params(schedule), keys)
     end
@@ -993,7 +992,7 @@ defmodule MishkaPay.Providers.Stripe do
   # A draft bill, then each item on it; a draft left half made is deleted, so a retry with the
   # same reference starts clean.
   @impl MishkaPay.Provider
-  def create_invoice(%MishkaPay.InvoiceDraft{} = draft, keys) do
+  def create_invoice(%MishkaPay.Invoice.Draft{} = draft, keys) do
     with :ok <- stripe_id(draft.customer_id, @customer, :customer_id),
          :ok <- invoice_prices(draft.items),
          :ok <- currencies(draft.items),
@@ -1072,7 +1071,7 @@ defmodule MishkaPay.Providers.Stripe do
   # An item kept on its own; its reference makes the idempotency key, so a retry never charges
   # twice.
   @impl MishkaPay.Provider
-  def create_invoice_item(%InvoiceItem{} = item, keys) do
+  def create_invoice_item(%Invoice.Item{} = item, keys) do
     with :ok <- stripe_id(item.customer_id, @customer, :customer_id),
          :ok <- maybe_id(item.invoice_id, "in_", :invoice_id),
          :ok <- tax_rates([item]),
@@ -1086,7 +1085,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def update_invoice_item(%InvoiceItem{id: id} = item, keys) do
+  def update_invoice_item(%Invoice.Item{id: id} = item, keys) do
     with :ok <- stripe_id(id, "ii_", :id),
          :ok <- tax_rates([item]),
          :ok <- item_fits(item),
@@ -1389,7 +1388,7 @@ defmodule MishkaPay.Providers.Stripe do
   # A tax id has no reference of its own, so it goes without a fixed idempotency key: the same
   # number added again after a delete must make a new one.
   @impl MishkaPay.Provider
-  def create_tax_id(%MishkaPay.TaxId{customer_id: customer_id} = tax_id, keys) do
+  def create_tax_id(%MishkaPay.Customer.TaxId{customer_id: customer_id} = tax_id, keys) do
     with :ok <- stripe_id(customer_id, @customer, :customer_id),
          {:ok, answer} <-
            request(
@@ -1594,7 +1593,7 @@ defmodule MishkaPay.Providers.Stripe do
   # A registration has no reference of its own: retries reuse one fresh key, and Stripe itself
   # refuses a second registration of the same kind in a country.
   @impl MishkaPay.Provider
-  def create_tax_registration(%MishkaPay.TaxRegistration{} = registration, keys) do
+  def create_tax_registration(%MishkaPay.TaxSettings.Registration{} = registration, keys) do
     with :ok <- registration_state(registration),
          :ok <- registration_scheme(registration),
          {:ok, answer} <-
@@ -1727,11 +1726,15 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp shipping_rate_ids(rates) do
-    case Enum.find(rates, &(is_binary(&1.id) and not shipping_rate?(&1.id))) do
+    case Enum.find(rates, &(is_binary(rate_id(&1)) and not shipping_rate?(rate_id(&1)))) do
       nil -> :ok
-      %{id: id} -> stripe_id(id, "shr_", :shipping_rates)
+      rate -> stripe_id(rate_id(rate), "shr_", :shipping_rates)
     end
   end
+
+  # A checkout's rate is the id of one Stripe keeps, or a new one, which may name a kept one too.
+  defp rate_id(id) when is_binary(id), do: id
+  defp rate_id(%{id: id}), do: id
 
   @impl MishkaPay.Provider
   def delete_tax_id(customer_id, tax_id_id, keys) do
@@ -1838,11 +1841,11 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def create_portal_configuration(%PortalConfiguration{} = config, keys),
+  def create_portal_configuration(%PortalSession.Configuration{} = config, keys),
     do: save_portal_configuration("/v1/billing_portal/configurations", config, keys)
 
   @impl MishkaPay.Provider
-  def update_portal_configuration(%PortalConfiguration{id: id} = config, keys) do
+  def update_portal_configuration(%PortalSession.Configuration{id: id} = config, keys) do
     with :ok <- stripe_id(id, "bpc_", :id),
          do: save_portal_configuration("/v1/billing_portal/configurations/#{id}", config, keys)
   end
@@ -1976,7 +1979,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def create_promotion_code(%PromotionCode{} = code, keys) do
+  def create_promotion_code(%Coupon.PromotionCode{} = code, keys) do
     with :ok <- plain_id(code.coupon_id, :coupon_id),
          :ok <- metadata(code.metadata),
          :ok <- money_off(code.minimum_amount),
@@ -2001,7 +2004,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def update_promotion_code(%PromotionCode{id: id} = code, keys) do
+  def update_promotion_code(%Coupon.PromotionCode{id: id} = code, keys) do
     with :ok <- stripe_id(id, "promo_", :id),
          :ok <- metadata(code.metadata),
          {:ok, answer} <-
@@ -2132,7 +2135,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def upload_file(%MishkaPay.FileUpload{} = upload, keys) do
+  def upload_file(%MishkaPay.File.Upload{} = upload, keys) do
     with :ok <- file_fits(upload),
          {:ok, answer} <-
            request(:post, "/v1/files", Mapper.file_params(upload), keys, upload: true) do
@@ -2345,7 +2348,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   # One cancel per report: the report's identifier makes the idempotency key.
   @impl MishkaPay.Provider
-  def cancel_usage(%MishkaPay.UsageCancellation{} = cancel, keys) do
+  def cancel_usage(%MishkaPay.Usage.Cancellation{} = cancel, keys) do
     key =
       ProviderKit.idempotency_key("usage-cancel", cancel.tenant, {
         cancel.event_name,
@@ -2556,7 +2559,7 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   @impl MishkaPay.Provider
-  def adjust_customer_balance(%MishkaPay.CustomerBalanceTransaction{} = txn, keys) do
+  def adjust_customer_balance(%MishkaPay.Customer.BalanceTransaction{} = txn, keys) do
     with :ok <- stripe_id(txn.customer_id, @customer, :customer_id),
          :ok <- currencies([txn]),
          {:ok, answer} <-
@@ -2702,10 +2705,10 @@ defmodule MishkaPay.Providers.Stripe do
 
   # An account link is never sent twice by mistake: each one is new, and runs out in minutes.
   @impl MishkaPay.Provider
-  def account_link(%MishkaPay.AccountLink{type: :login, account_id: account_id}, keys),
+  def account_link(%MishkaPay.ConnectedAccount.Link{type: :login, account_id: account_id}, keys),
     do: login_link(account_id, keys)
 
-  def account_link(%MishkaPay.AccountLink{} = link, keys) do
+  def account_link(%MishkaPay.ConnectedAccount.Link{} = link, keys) do
     with {:ok, api} <- connect_api(link.api, keys),
          :ok <- stripe_id(link.account_id, "acct_", :account_id),
          {:ok, answer} <-
@@ -2767,7 +2770,7 @@ defmodule MishkaPay.Providers.Stripe do
   def login_link(account_id, keys) do
     with :ok <- stripe_id(account_id, "acct_", :account_id),
          {:ok, answer} <- request(:post, "/v1/accounts/#{account_id}/login_links", %{}, keys) do
-      Mapper.account_link(answer, %MishkaPay.AccountLink{
+      Mapper.account_link(answer, %MishkaPay.ConnectedAccount.Link{
         provider: "stripe",
         account_id: account_id,
         type: :login
@@ -3223,7 +3226,7 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Public for the Stripe-only helpers beside this adapter (`MishkaPay.Providers.Stripe.TestClock`).
   # `upload: true` sends `params` as multipart parts to Stripe's files host; `request_options:` (a
-  # `MishkaPay.RequestOptions`) another API version and the objects to expand. The tenant's
+  # `MishkaPay.RawRequest.Options`) another API version and the objects to expand. The tenant's
   # connected account (`:account_id` in its keys) goes in `Stripe-Account` on every request, so
   # each call is made as that account; nothing else sets the header. A `/v2/` path is Stripe's
   # API v2: a write's params go as a JSON body, a read's as a query with indexed lists
@@ -3231,7 +3234,7 @@ defmodule MishkaPay.Providers.Stripe do
   # goes to the meter events host, and an empty answer from it is an empty map.
   @doc false
   def request(method, path, params, keys, opts \\ []) do
-    options = opts[:request_options] || %RequestOptions{}
+    options = opts[:request_options] || %RawRequest.Options{}
     account_id = Map.get(keys, :account_id)
     api = api_of(path, opts[:upload] == true)
 

@@ -12,7 +12,7 @@ defmodule MishkaPay.TaxCalculation do
   What the caller gives:
 
     * `:provider`, `:tenant`: which provider, with whose keys.
-    * `:items`: one or more `MishkaPay.TaxLine`, all in one currency, at most 100.
+    * `:items`: one or more `MishkaPay.TaxCalculation.Items`, all in one currency, at most 100.
     * `:address`: where the buyer is, a `MishkaPay.Address` (its `:country`, and its
       `:postal_code` in the US), with `:address_source` `:billing` (the default) or `:shipping`;
       or `:customer_id`, a provider customer whose saved address and tax ids are used. One or the
@@ -33,6 +33,27 @@ defmodule MishkaPay.TaxCalculation do
   A provider counts tax only where the account is set up for it (Stripe Tax: an origin address
   and the places it is registered); elsewhere the tax is zero. An account that never turned the
   tax service on is refused with `MishkaPay.Errors.Rejected`, code `"tax_not_set_up"`.
+
+  ## Items
+
+  Each of `:items` is a `MishkaPay.TaxCalculation.Items`, a sub_field of this struct: one line of
+  the sale, what is sold, for how much in all, and the tax the provider counted on it.
+
+  What the caller gives:
+
+    * `:reference`: the caller's own name for the line, such as a SKU or an order line id; one
+      per line, unique within the calculation. It comes back on the line and in the provider's
+      tax reports.
+    * `:amount`: what the whole line costs, the unit price times `:quantity`, as `Money` (or
+      `%{amount: "30.00", currency: "EUR"}`).
+    * `:quantity`: how many, 1 by default.
+    * `:tax_code`: the provider's tax category of what is sold (Stripe's `"txcd_10302000"` for
+      an e-book); the provider's default category when left out.
+    * `:tax_behavior`: `:exclusive` (the default: tax is added on top) or `:inclusive` (the
+      amount already holds it).
+    * `:product_id`: a catalog product whose tax category is used when `:tax_code` is left out.
+
+  What the provider fills in: `:id` and `:amount_tax`, the tax on the line.
   """
 
   use GuardedStruct
@@ -46,10 +67,31 @@ defmodule MishkaPay.TaxCalculation do
 
     field :tenant, term()
 
-    field :items, list(),
-      enforce: true,
-      structs: MishkaPay.TaxLine,
-      derives: "validate(not_nil_value, list)"
+    sub_field :items, [MishkaPay.TaxCalculation.Items.t()],
+      structs: true,
+      authorized_fields: true,
+      derives: "validate(not_nil_value, list)" do
+      field :reference, String.t(),
+        enforce: true,
+        derives: "sanitize(trim) validate(not_nil_value, string, not_empty, max_len=500)"
+
+      field :amount, Money.t(), enforce: true, validator: {MishkaPay.Money, :field}
+
+      field :quantity, pos_integer(),
+        default: 1,
+        derives: "validate(not_nil_value, integer, min_len=1)"
+
+      field :tax_code, String.t(),
+        derives: "sanitize(trim) validate(string, not_empty, max_len=100)"
+
+      field :tax_behavior, :inclusive | :exclusive,
+        derives: "validate(enum=Atom[inclusive::exclusive])",
+        validator: {MishkaPay.Price, :tax_behavior}
+
+      field :product_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
+      field :id, String.t(), derives: "validate(string)"
+      field :amount_tax, Money.t(), validator: {MishkaPay.Money, :field}
+    end
 
     field :address, struct(), struct: MishkaPay.Address
     field :customer_id, String.t(), derives: "sanitize(trim) validate(string, not_empty)"
@@ -115,4 +157,30 @@ defmodule MishkaPay.TaxCalculation do
 
   defp key(%{} = map, name), do: Map.get(map, name) || Map.get(map, Atom.to_string(name))
   defp key(_not_a_map, _name), do: nil
+end
+
+defmodule MishkaPay.TaxCalculation.Transaction do
+  @moduledoc """
+  A sale reported to the provider's tax records from a `MishkaPay.TaxCalculation`, with
+  `MishkaPay.record_tax/4`: the provider then counts its tax in the site's tax reports and
+  filings. A guarded_struct the provider fills in.
+
+    * `:provider`, `:id` (`tax_...` at Stripe).
+    * `:reference`: the caller's own id of the sale, such as an order id; one sale per reference.
+    * `:calculation_id`: the calculation it was made from.
+    * `:customer_id`: the provider customer, when the calculation named one.
+    * `:posted_at`: when the tax counts as owed; `:created_at`: when the provider made it.
+  """
+
+  use GuardedStruct
+
+  guardedstruct authorized_fields: true do
+    field :provider, String.t(), derives: "validate(string)"
+    field :id, String.t(), derives: "validate(string)"
+    field :reference, String.t(), derives: "validate(string)"
+    field :calculation_id, String.t(), derives: "validate(string)"
+    field :customer_id, String.t(), derives: "validate(string)"
+    field :posted_at, DateTime.t(), derives: "validate(struct)"
+    field :created_at, DateTime.t(), derives: "validate(struct)"
+  end
 end

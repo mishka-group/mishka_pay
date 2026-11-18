@@ -31,9 +31,9 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
   `Stripe-Account: acct_...` (`Stripe-Context` on an API v2 path), so its payments, customers
   and refunds live on the site's account.
   Keys without `account_id` are the platform itself.
-- The header comes only from the keys. No call, `RequestOptions` or `MishkaPay.request/1` can
-  set it: a raw call has no header field. An `account_id` that is not `acct_` and plain is
-  `Errors.Invalid` on `:account_id` before any request.
+- The header comes only from the keys. No call, `MishkaPay.RawRequest.Options` or
+  `MishkaPay.request/1` can set it: a raw call has no header field. An `account_id` that is not
+  `acct_` and plain is `Errors.Invalid` on `:account_id` before any request.
 - Webhooks: a tenant with `account_id` takes only events that name that account (Stripe's
   top-level `account`); an event of the platform's own account or of another connected account
   is refused with 400 (`BadSignature`, reason `:account`). Mishka Pay never routes an event to
@@ -47,7 +47,7 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
 - Two account APIs, one set of calls: `connect_api: :v2` (the default, Stripe's Accounts v2,
   `/v2/core/accounts` and `/v2/core/account_links`) or `connect_api: :v1` (Accounts v1,
   `/v1/accounts` and `/v1/account_links`) in the platform's keys, and `api:` on a call
-  (`MishkaPay.ConnectedAccount`, `MishkaPay.AccountLink`, `api:` on
+  (`MishkaPay.ConnectedAccount`, `MishkaPay.ConnectedAccount.Link`, `api:` on
   `fetch_connected_account/4`, `list_connected_accounts/3`, `close_connected_account/4`) wins
   over it. Both answer the same `MishkaPay.ConnectedAccount`, with `:api` saying which read it.
   Keep v2 unless the platform needs what only v1 does: OAuth connections, Treasury, card
@@ -320,7 +320,7 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   take one. Its `:reference` makes the idempotency key and is kept in its metadata.
   `preview_credit_note/1` is `GET /v1/credit_notes/preview` with the same fields.
 - `:amount` credits the whole bill, `:lines` each line: a line of the bill by its id (`il_...`,
-  an `MishkaPay.InvoiceLine`'s `:id`) with a `:quantity` or an `:amount`, or a line of its own
+  an `MishkaPay.Invoice.Lines`'s `:id`) with a `:quantity` or an `:amount`, or a line of its own
   (`:name`, `:unit_amount`, `:quantity`).
 - On an open bill the note lowers what is due (`type: :pre_payment`). On a paid one
   (`:post_payment`) `:refund_amount` + `:credit_amount` + `:out_of_band_amount` must make the
@@ -387,7 +387,7 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - `invoice: true` is Stripe's `invoice_creation`: an invoice for a one-time payment. Whether
   Stripe emails receipts and invoices is a Dashboard setting (Customer emails), not code.
 - `calculate_tax/1` is Stripe Tax without Checkout (`POST /v1/tax/calculations`): a
-  `MishkaPay.TaxLine`'s `:amount` is the whole line (unit price times `:quantity`), as Stripe
+  `MishkaPay.TaxCalculation.Items`'s `:amount` is the whole line (unit price times `:quantity`), as Stripe
   takes it. `record_tax/4` is `POST /v1/tax/transactions/create_from_calculation`; its
   reference makes the idempotency key, and Stripe wants it unique across all transactions. A
   calculation can be recorded for 90 days (`:expires_at`).

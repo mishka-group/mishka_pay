@@ -152,7 +152,8 @@ defmodule MishkaPayTest do
     end
 
     test "portal configurations are made, read and listed, and a session names one" do
-      assert {:ok, %MishkaPay.PortalConfiguration{id: "acme_bpc_1", subscription_cancel: :off}} =
+      assert {:ok,
+              %MishkaPay.PortalSession.Configuration{id: "acme_bpc_1", subscription_cancel: :off}} =
                MishkaPay.create_portal_configuration(%{
                  provider: "acme",
                  tenant: "site-a",
@@ -160,7 +161,7 @@ defmodule MishkaPayTest do
                  subscription_cancel: "off"
                })
 
-      assert {:ok, %MishkaPay.PortalConfiguration{name: "Monthly"}} =
+      assert {:ok, %MishkaPay.PortalSession.Configuration{name: "Monthly"}} =
                MishkaPay.update_portal_configuration(%{
                  provider: "acme",
                  tenant: "site-a",
@@ -168,10 +169,10 @@ defmodule MishkaPayTest do
                  name: "Monthly"
                })
 
-      assert {:ok, %MishkaPay.PortalConfiguration{default: true}} =
+      assert {:ok, %MishkaPay.PortalSession.Configuration{default: true}} =
                MishkaPay.fetch_portal_configuration("acme", "acme_bpc_1", "site-a")
 
-      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalConfiguration{}]}} =
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.PortalSession.Configuration{}]}} =
                MishkaPay.list_portal_configurations("acme", "site-a", active: true)
 
       assert {:ok, %MishkaPay.PortalSession{configuration: "acme_bpc_1"}} =
@@ -237,7 +238,7 @@ defmodule MishkaPayTest do
       assert {:ok, %MishkaPay.Page{items: [_one]}} =
                MishkaPay.list_coupons("acme", "site-a", limit: 1)
 
-      assert {:ok, %MishkaPay.PromotionCode{id: "acme_promo_1", code: "SPRING10"}} =
+      assert {:ok, %MishkaPay.Coupon.PromotionCode{id: "acme_promo_1", code: "SPRING10"}} =
                MishkaPay.create_promotion_code(%{
                  provider: "acme",
                  tenant: "site-a",
@@ -249,7 +250,7 @@ defmodule MishkaPayTest do
       assert {:ok, %MishkaPay.Page{items: [%{code: "ACME10"}]}} =
                MishkaPay.list_promotion_codes("acme", "site-a", code: "ACME10")
 
-      assert {:ok, %MishkaPay.PromotionCode{active: false}} =
+      assert {:ok, %MishkaPay.Coupon.PromotionCode{active: false}} =
                MishkaPay.update_promotion_code(%{
                  provider: "acme",
                  tenant: "site-a",
@@ -257,7 +258,7 @@ defmodule MishkaPayTest do
                  active: false
                })
 
-      assert {:ok, %MishkaPay.PromotionCode{coupon_id: "acme_coupon_1"}} =
+      assert {:ok, %MishkaPay.Coupon.PromotionCode{coupon_id: "acme_coupon_1"}} =
                MishkaPay.fetch_promotion_code("acme", "acme_promo_1", "site-a")
 
       assert :ok = MishkaPay.delete_coupon("acme", "SPRING", "site-a")
@@ -302,7 +303,10 @@ defmodule MishkaPayTest do
     end
 
     test "a checkout applies a discount or lets the buyer type a code, never both" do
-      assert {:ok, %Checkout{discounts: [%MishkaPay.Discount{promotion_code_id: "acme_promo_1"}]}} =
+      assert {:ok,
+              %Checkout{
+                discounts: [%MishkaPay.Checkout.Discounts{promotion_code_id: "acme_promo_1"}]
+              }} =
                MishkaPay.checkout(
                  Map.put(@checkout, :discounts, [%{promotion_code_id: "acme_promo_1"}])
                )
@@ -646,7 +650,7 @@ defmodule MishkaPayTest do
       assert {:ok, %MishkaPay.Subscription{pause_behavior: nil}} =
                MishkaPay.resume_collection("acme", "acme_sub_active", "site-a")
 
-      assert {:ok, %MishkaPay.Invoice{lines: [%MishkaPay.InvoiceLine{description: "Pro plan"}]}} =
+      assert {:ok, %MishkaPay.Invoice{lines: [%MishkaPay.Invoice.Lines{description: "Pro plan"}]}} =
                MishkaPay.fetch_invoice("acme", "acme_in_1", "site-a")
     end
 
@@ -802,7 +806,7 @@ defmodule MishkaPayTest do
     end
 
     test "a line's tax rates are a list of ids" do
-      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids}]}} =
+      assert {:error, %Errors.Invalid{errors: [_ | _] = errors}} =
                MishkaPay.create_invoice_item(%{
                  provider: "acme",
                  customer_id: "c1",
@@ -810,12 +814,22 @@ defmodule MishkaPayTest do
                  tax_rate_ids: "txr_1"
                })
 
-      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids}]}} =
+      assert Enum.all?(errors, &(&1.field == :tax_rate_ids))
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :tax_rate_ids, action: :not_empty}]}} =
                MishkaPay.create_invoice(%{
                  provider: "acme",
                  customer_id: "c1",
                  items: [%{id: "p1"}],
-                 tax_rate_ids: [""]
+                 tax_rate_ids: [" "]
+               })
+
+      assert {:ok, %MishkaPay.Invoice.Item{tax_rate_ids: ["txr_1"]}} =
+               MishkaPay.Invoice.Item.builder(%{
+                 provider: "acme",
+                 customer_id: "c1",
+                 price_id: "p1",
+                 tax_rate_ids: [" txr_1 "]
                })
     end
 
