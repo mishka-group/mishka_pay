@@ -5,7 +5,7 @@
 defmodule MishkaPay.MixProject do
   use Mix.Project
 
-  @version "0.0.1-alpha.1"
+  @version "0.0.1"
   @source_url "https://github.com/mishka-group/mishka_pay"
 
   def project do
