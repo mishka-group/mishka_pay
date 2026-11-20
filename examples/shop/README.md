@@ -38,6 +38,7 @@ without leaning on text or layout.
 | **Saved cards and portal links** | a setup checkout (`mode: :setup`) saves a card without charging; the customer's cards (`list_payment_methods/3`), made default or taken off; Stripe's portal opened on one task (`portal_session/1` with `flow:`): update the card, cancel or change a subscription |
 | **One-off bills** | `MishkaPay.create_invoice/1` for a customer, then finalize, email, mark paid by other means, void, mark uncollectible or delete, with the status, number, page and PDF after each step |
 | **Find customers, preview bills** | `search_customers/3` by email, name or reference; a subscription's next bill (`:upcoming_invoice`) and a plan or quantity change's bill (`:preview_change`) |
+| **Payouts** | the payout schedule read and set (`fetch_payout_schedule/2`, `update_payout_schedule/1`: interval, days, delay days, money kept back), the banks payouts go to with their last four digits (`list_payout_destinations/3`), and **Pay out** now (`create_payout/1`, standard or instant), with Stripe's refusal shown when the balance lacks the money |
 | Every list, live in every tab | `Shop.Pay.Broadcast` (`use MishkaPay.PubSub`) sends each change to the site's topic, and every open page updates |
 
 ## Run it

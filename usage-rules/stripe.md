@@ -127,6 +127,23 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
 - `list_payouts/3` (`status:` `:pending`, `:in_transit`, `:paid`, `:failed`, `:canceled`),
   `fetch_payout/3` and `cancel_payout/3` act on the account the keys act for: the platform, or
   with a site's `account_id` the seller's. Only a `:pending` payout can be canceled.
+- `create_payout/1` is `POST /v1/payouts` from the available balance of the amount's currency:
+  `:reference` is required, makes the idempotency key and is kept in metadata; `:method` is
+  `"standard"` (Stripe's default) or `"instant"` (to a debit card or bank that takes it, for a
+  fee); `:destination_id` is a `ba_...` or `card_...` of the account. A balance without that
+  money is `Errors.Rejected` with code `"balance_insufficient"`. Stripe's API v2 payout intents
+  pay out of a Financial Account (Global Payouts), not the payments balance, so they are not
+  used here.
+- `fetch_payout_schedule/2` and `update_payout_schedule/1` are Balance Settings
+  (`/v1/balance_settings`, Stripe's newest place for them, for Accounts v2 and v1 accounts):
+  `interval`, `weekly_days` (`:monday`..`:friday`), `monthly_days` (1 to 31), `delay_days`
+  (Stripe's `delay_days_override`, up to 31; `:default` clears it), `minimum_balances` (money
+  kept back per currency; `[]` keeps none) and `statement_descriptor`. Only the fields given
+  are sent. Stripe's API has no minimum payout amount: `:minimum_payouts` is `[]`.
+- `list_payout_destinations/3` and `fetch_payout_destination/3` read the external accounts
+  (`ba_...`, `card_...`) of the connected account a site's `account_id` names, as the
+  platform. With the platform's own keys they read its own, which Stripe allows with live keys
+  only: a test key is `Errors.Rejected` (Stripe: "Only live keys can access this method").
 - Ids: transfers `tr_`, payouts `po_`, application fees `fee_`, accounts `acct_`; a wrong kind is
   `Errors.Invalid` before any request.
 - Stripe sends `transfer.created`, `.updated`, `.reversed`; `payout.created`, `.updated`,

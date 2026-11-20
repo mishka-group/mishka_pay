@@ -97,7 +97,9 @@ defmodule MishkaPay do
       `:connected_account_update`, `:connected_account_list`, `:connected_account_close`,
       `:account_link`, `:login_link`, `:application_fee`, `:application_fee_list`,
       `:application_fee_refund`; money between accounts: `:transfer_create`, `:transfer`,
-      `:transfer_list`, `:transfer_reverse`, `:payout`, `:payout_list`, `:payout_cancel`;
+      `:transfer_list`, `:transfer_reverse`, `:payout_create`, `:payout`, `:payout_list`,
+      `:payout_cancel`, `:payout_schedule`, `:payout_schedule_update`, `:payout_destination`,
+      `:payout_destination_list`;
     * events: `:event_list`;
     * a call to the provider's own API: `:raw_request`.
   """
@@ -1740,6 +1742,98 @@ defmodule MishkaPay do
   def cancel_payout(provider, payout_id, tenant \\ nil)
       when is_binary(provider) and is_binary(payout_id) do
     capable(:payout, :payout_cancel, provider, tenant, & &1.cancel_payout(payout_id, &2))
+  end
+
+  @doc """
+  Pays money of the available balance out to the bank or card of the account `attrs.tenant`'s keys
+  act for, now (see `MishkaPay.Balance.Payout`): `:amount` above zero and a `:reference` that pays
+  it out once, with `:method` (`"standard"` or `"instant"`, the provider's default when left out),
+  `:destination_id`, `:statement_descriptor`, `:description` and `:metadata`. Answers the payout,
+  `:pending` until it reaches the bank. Money the balance does not hold is the provider's refusal
+  (`Errors.Rejected`, at Stripe with code `"balance_insufficient"`).
+  """
+  @spec create_payout(map()) :: {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
+  def create_payout(attrs) when is_map(attrs) do
+    span(:payout_create, attrs, fn ->
+      with {:ok, payout} <-
+             built(MishkaPay.Balance.Payout.builder(attrs), [:provider, :amount, :reference]),
+           {:ok, _amount} <- part_amount(payout.amount),
+           {:ok, module} <- Provider.capable(payout.provider, :payout),
+           {:ok, keys} <- Credentials.fetch(payout.provider, payout.tenant) do
+        module.create_payout(payout, keys)
+      end
+    end)
+  end
+
+  @doc """
+  When the balance of the account `tenant`'s keys act for is paid out by itself
+  (`MishkaPay.Balance.PayoutSchedule`): its interval and days, how many days a payment's money
+  waits, the money kept back, and the smallest payout when the provider says.
+  """
+  @spec fetch_payout_schedule(String.t(), term()) ::
+          {:ok, MishkaPay.Balance.PayoutSchedule.t()} | {:error, Splode.Error.t()}
+  def fetch_payout_schedule(provider, tenant \\ nil) when is_binary(provider) do
+    capable(:payout_schedule, :payout_schedule, provider, tenant, fn module, keys ->
+      module.fetch_payout_schedule(keys)
+    end)
+  end
+
+  @doc """
+  Changes when the balance is paid out, from `attrs` (see `MishkaPay.Balance.PayoutSchedule`):
+  only the fields given, such as `interval: :weekly, weekly_days: [:monday]`, `delay_days: 7`
+  (`:default` for the provider's own), `minimum_balances:` or `statement_descriptor:`. A weekly
+  interval needs its days, a monthly one its days of the month. Answers the whole schedule after.
+  """
+  @spec update_payout_schedule(map()) ::
+          {:ok, MishkaPay.Balance.PayoutSchedule.t()} | {:error, Splode.Error.t()}
+  def update_payout_schedule(attrs) when is_map(attrs) do
+    span(:payout_schedule_update, attrs, fn ->
+      with {:ok, schedule} <- built(MishkaPay.Balance.PayoutSchedule.builder(attrs), [:provider]),
+           :ok <- MishkaPay.Balance.schedule_days(schedule),
+           {:ok, module} <- Provider.capable(schedule.provider, :payout_schedule),
+           {:ok, keys} <- Credentials.fetch(schedule.provider, schedule.tenant) do
+        module.update_payout_schedule(schedule, keys)
+      end
+    end)
+  end
+
+  @doc """
+  One page of the bank accounts and cards the account `tenant`'s keys act for is paid out to
+  (`MishkaPay.Page` of `MishkaPay.Balance.PayoutDestination`, with the bank's name and the last four
+  digits): `type:` `:bank_account` or `:card` only, plus `limit:` and `after:`.
+  """
+  @spec list_payout_destinations(String.t(), term(), keyword()) ::
+          {:ok, Page.t()} | {:error, Splode.Error.t()}
+  def list_payout_destinations(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
+    capable(:payout_destination, :payout_destination_list, provider, tenant, fn module, keys ->
+      case opts[:type] in [nil, :bank_account, :card] do
+        true ->
+          module.list_payout_destinations(limited(opts), keys)
+
+        false ->
+          ProviderKit.invalid(
+            :type,
+            Messages.text(:choices, field: :type, choices: "bank_account, card")
+          )
+      end
+    end)
+  end
+
+  @doc """
+  Reads bank account or card `destination_id` (`MishkaPay.Balance.PayoutDestination`) the account
+  `tenant`'s keys act for is paid out to, such as a payout's `:destination_id`.
+  """
+  @spec fetch_payout_destination(String.t(), String.t(), term()) ::
+          {:ok, MishkaPay.Balance.PayoutDestination.t()} | {:error, Splode.Error.t()}
+  def fetch_payout_destination(provider, destination_id, tenant \\ nil)
+      when is_binary(provider) and is_binary(destination_id) do
+    capable(
+      :payout_destination,
+      :payout_destination,
+      provider,
+      tenant,
+      & &1.fetch_payout_destination(destination_id, &2)
+    )
   end
 
   # The options of a part given back: its checked amount, and the tenant its reference is for.

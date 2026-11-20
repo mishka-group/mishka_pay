@@ -107,7 +107,9 @@ defmodule MishkaPay.Provider do
       `:application_fee_percent`, `:destination` and `:on_behalf_of`);
     * `:transfer`: `create_transfer/2`, `fetch_transfer/2`, `list_transfers/2`,
       `reverse_transfer/3`;
-    * `:payout`: `fetch_payout/2`, `list_payouts/2`, `cancel_payout/2`;
+    * `:payout`: `create_payout/2`, `fetch_payout/2`, `list_payouts/2`, `cancel_payout/2`;
+    * `:payout_schedule`: `fetch_payout_schedule/1`, `update_payout_schedule/2`;
+    * `:payout_destination`: `list_payout_destinations/2`, `fetch_payout_destination/2`;
     * `:webhook`: `verify_webhook/3`;
     * `:event_list`: `list_events/2`;
     * `:raw_request`: `raw_request/2`.
@@ -162,6 +164,8 @@ defmodule MishkaPay.Provider do
     :connect,
     :transfer,
     :payout,
+    :payout_schedule,
+    :payout_destination,
     :webhook,
     :event_list,
     :raw_request,
@@ -235,7 +239,12 @@ defmodule MishkaPay.Provider do
       `:on_behalf_of`) and gives it back.
     * `:transfer`: sends money from the platform's balance to a connected account, and takes it
       back.
-    * `:payout`: reads the payouts of an account's balance to its bank, and stops a pending one.
+    * `:payout`: pays an account's available balance out to its bank now, reads its payouts, and
+      stops a pending one.
+    * `:payout_schedule`: reads and sets when the balance is paid out by itself (interval, days,
+      how long a payment's money waits) and what stays in it.
+    * `:payout_destination`: reads the bank accounts and cards an account's payouts go to, with
+      the bank's name and the last four digits.
     * `:webhook`: sends signed messages when something changes.
     * `:event_list`: lists the messages it sent, to deliver again those a site missed.
     * `:raw_request`: calls any path of its own API with the tenant's keys, for what Mishka Pay
@@ -279,6 +288,8 @@ defmodule MishkaPay.Provider do
           | :connect
           | :transfer
           | :payout
+          | :payout_schedule
+          | :payout_destination
           | :payment_list
           | :webhook
           | :event_list
@@ -1090,6 +1101,15 @@ defmodule MishkaPay.Provider do
               MishkaPay.Credentials.t()
             ) :: {:ok, MishkaPay.Transfer.t()} | {:error, Splode.Error.t()}
 
+  @doc """
+  With `:payout`. Pays money of the available balance out to the account's bank or card now, from
+  a `MishkaPay.Balance.Payout` with `:amount` and `:reference` (its idempotency key), and the
+  `:method`, `:destination_id`, `:statement_descriptor`, `:description` and `:metadata` it gives.
+  Refuses a method the provider has not before any request.
+  """
+  @callback create_payout(MishkaPay.Balance.Payout.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
+
   @doc "With `:payout`. Reads one payout of the account the keys act for."
   @callback fetch_payout(payout_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
@@ -1101,6 +1121,31 @@ defmodule MishkaPay.Provider do
   @doc "With `:payout`. Stops a payout that is still pending; its money stays in the balance."
   @callback cancel_payout(payout_id :: String.t(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payout_schedule`. Reads when the balance of the account the keys act for is paid out."
+  @callback fetch_payout_schedule(MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Balance.PayoutSchedule.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:payout_schedule`. Sets the fields the `MishkaPay.Balance.PayoutSchedule` gives, leaving the
+  others as they are, and answers the whole schedule after.
+  """
+  @callback update_payout_schedule(
+              MishkaPay.Balance.PayoutSchedule.t(),
+              MishkaPay.Credentials.t()
+            ) ::
+              {:ok, MishkaPay.Balance.PayoutSchedule.t()} | {:error, Splode.Error.t()}
+
+  @doc """
+  With `:payout_destination`. One page of the bank accounts and cards the account the keys act for
+  is paid out to; only one `:type` (`:bank_account` or `:card`) when given.
+  """
+  @callback list_payout_destinations(opts :: keyword(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}
+
+  @doc "With `:payout_destination`. Reads one bank account or card payouts go to, by its id."
+  @callback fetch_payout_destination(destination_id :: String.t(), MishkaPay.Credentials.t()) ::
+              {:ok, MishkaPay.Balance.PayoutDestination.t()} | {:error, Splode.Error.t()}
 
   @doc """
   With `:webhook`. Checks a provider's signed message (the raw body and headers as they came) with
@@ -1278,9 +1323,14 @@ defmodule MishkaPay.Provider do
                       fetch_transfer: 2,
                       list_transfers: 2,
                       reverse_transfer: 3,
+                      create_payout: 2,
                       fetch_payout: 2,
                       list_payouts: 2,
                       cancel_payout: 2,
+                      fetch_payout_schedule: 1,
+                      update_payout_schedule: 2,
+                      list_payout_destinations: 2,
+                      fetch_payout_destination: 2,
                       raw_request: 2,
                       verify_webhook: 3
 
@@ -1443,7 +1493,9 @@ defmodule MishkaPay.Provider do
       refund_application_fee: 3
     ],
     transfer: [create_transfer: 2, fetch_transfer: 2, list_transfers: 2, reverse_transfer: 3],
-    payout: [fetch_payout: 2, list_payouts: 2, cancel_payout: 2],
+    payout: [create_payout: 2, fetch_payout: 2, list_payouts: 2, cancel_payout: 2],
+    payout_schedule: [fetch_payout_schedule: 1, update_payout_schedule: 2],
+    payout_destination: [list_payout_destinations: 2, fetch_payout_destination: 2],
     webhook: [verify_webhook: 3],
     raw_request: [raw_request: 2]
   }

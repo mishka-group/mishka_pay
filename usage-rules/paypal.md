@@ -28,7 +28,7 @@ Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
   `upcoming_invoice/3`. Cancel with `at: :now`; PayPal has no cancel at the period's end, so
   that and `resume_subscription/3` are refused.
 - Not supported: a subscription with more than one price, listing or searching subscriptions
-  (`:subscription_list`), invoice items (`:invoice_item`), credit notes (`:credit_note`), subscription schedules (`:subscription_schedule`), fraud warnings and reviews (`:fraud`), payment and setup intents for a card form of the site's own (`:intent`), tax rates (`:tax_rate`), tax registrations and settings (`:tax_setup`), connected accounts, their links, application fees and a checkout for a seller (`:connect`; keys' `account_id` is ignored), transfers (`:transfer`), payouts (`:payout`), a customer's bills, one bill by id,
+  (`:subscription_list`), invoice items (`:invoice_item`), credit notes (`:credit_note`), subscription schedules (`:subscription_schedule`), fraud warnings and reviews (`:fraud`), payment and setup intents for a card form of the site's own (`:intent`), tax rates (`:tax_rate`), tax registrations and settings (`:tax_setup`), connected accounts, their links, application fees and a checkout for a seller (`:connect`; keys' `account_id` is ignored), transfers (`:transfer`), payouts, their schedule and the bank they go to (`:payout`, `:payout_schedule`, `:payout_destination`), a customer's bills, one bill by id,
   changing or pausing a subscription, provider price ids, merchant of record, metadata, currencies PayPal
   does not take, decimals in HUF, JPY, TWD, coupons and promotion codes, ending a checkout, and the
   checkout options (`discounts`, `allow_promotion_codes`, `automatic_tax`, `customer_creation`,

@@ -143,6 +143,10 @@ defmodule MishkaPay.Messages do
           | :billing_mode_when_made
           | :schedule_moves
           | :choices
+          | :payout_days
+          | :delay_days
+          | :payout_interval_days
+          | :delay_days_most
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
@@ -754,6 +758,22 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:choices),
     do: dgettext_noop("mishka_pay", "The %{field} field takes only: %{choices}")
+
+  defp msgid(:payout_days),
+    do: dgettext_noop("mishka_pay", "The monthly_days field takes days of the month, 1 to 31")
+
+  defp msgid(:delay_days),
+    do: dgettext_noop("mishka_pay", "The delay_days field takes a number of days, or :default")
+
+  defp msgid(:delay_days_most),
+    do: dgettext_noop("mishka_pay", "Stripe takes at most %{days} delay days")
+
+  defp msgid(:payout_interval_days),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A weekly schedule takes weekly_days and a monthly one monthly_days; no other takes days"
+      )
 
   defp msgid(:tax_percentage),
     do: dgettext_noop("mishka_pay", "The percentage field must be an exact number from 0 to 100")

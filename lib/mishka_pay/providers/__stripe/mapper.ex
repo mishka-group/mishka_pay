@@ -3175,9 +3175,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc "A Stripe Payout as a `MishkaPay.Balance.Payout`."
   @spec payout(map()) :: {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
   def payout(payout) do
+    metadata = payout["metadata"] || %{}
+
     %{
       provider: "stripe",
       id: payout["id"],
+      reference: metadata[@reference],
+      metadata: Map.delete(metadata, @reference),
+      statement_descriptor: payout["statement_descriptor"],
       amount: money(payout["amount"], payout["currency"]),
       status: known(payout["status"], ~w(pending in_transit paid failed canceled)a),
       arrival_at: time(payout["arrival_date"]),
@@ -3190,6 +3195,122 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       created_at: time(payout["created"])
     }
     |> MishkaPay.Balance.Payout.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/payouts`: the amount in Stripe's places, and what the payout gives; its
+  reference goes in its metadata.
+  """
+  @spec payout_params(MishkaPay.Balance.Payout.t()) :: map()
+  def payout_params(payout) do
+    reject_nil(%{
+      "amount" => minor(payout.amount),
+      "currency" => lower_currency(payout.amount),
+      "method" => payout.method,
+      "destination" => payout.destination_id,
+      "statement_descriptor" => payout.statement_descriptor,
+      "description" => payout.description,
+      "metadata" => with_reference(payout.metadata, payout.reference)
+    })
+  end
+
+  @weekdays ~w(monday tuesday wednesday thursday friday)a
+
+  @doc """
+  Stripe's Balance Settings as a `MishkaPay.Balance.PayoutSchedule`: the payouts' schedule, the
+  delay of a payment's money (`settlement_timing.delay_days`, the override when set), the money
+  kept per currency and the statement descriptor.
+  """
+  @spec payout_schedule(map()) ::
+          {:ok, MishkaPay.Balance.PayoutSchedule.t()} | {:error, Splode.Error.t()}
+  def payout_schedule(settings) do
+    payouts = get_in(settings, ["payments", "payouts"]) || %{}
+    schedule = payouts["schedule"] || %{}
+    timing = get_in(settings, ["payments", "settlement_timing"]) || %{}
+
+    %{
+      provider: "stripe",
+      interval: known(schedule["interval"], ~w(manual daily weekly monthly)a),
+      weekly_days:
+        schedule["weekly_payout_days"] &&
+          Enum.flat_map(schedule["weekly_payout_days"], &List.wrap(known(&1, @weekdays))),
+      monthly_days: schedule["monthly_payout_days"],
+      delay_days: timing["delay_days_override"] || timing["delay_days"],
+      minimum_balances: by_currency(payouts["minimum_balance_by_currency"]),
+      statement_descriptor: payouts["statement_descriptor"],
+      status: known(payouts["status"], ~w(enabled disabled)a),
+      minimum_payouts: []
+    }
+    |> MishkaPay.Balance.PayoutSchedule.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp by_currency(%{} = amounts) do
+    for {currency, minor} <- amounts, money = money(minor, currency), do: money
+  end
+
+  defp by_currency(_none), do: []
+
+  @doc """
+  Params of `POST /v1/balance_settings`: only what the schedule gives. `delay_days: :default`
+  clears the override (Stripe's empty value), and `minimum_balances: []` keeps nothing back.
+  """
+  @spec payout_schedule_params(MishkaPay.Balance.PayoutSchedule.t()) :: map()
+  def payout_schedule_params(schedule) do
+    plan =
+      reject_nil(%{
+        "interval" => schedule.interval && Atom.to_string(schedule.interval),
+        "weekly_payout_days" =>
+          schedule.weekly_days && Enum.map(schedule.weekly_days, &to_string/1),
+        "monthly_payout_days" => schedule.monthly_days
+      })
+
+    payouts =
+      reject_nil(%{
+        "schedule" => if(plan != %{}, do: plan),
+        "minimum_balance_by_currency" => minimum_balances(schedule.minimum_balances),
+        "statement_descriptor" => schedule.statement_descriptor
+      })
+
+    timing = reject_nil(%{"delay_days_override" => delay_override(schedule.delay_days)})
+
+    payments =
+      reject_nil(%{
+        "payouts" => if(payouts != %{}, do: payouts),
+        "settlement_timing" => if(timing != %{}, do: timing)
+      })
+
+    %{"payments" => payments}
+  end
+
+  defp minimum_balances(nil), do: nil
+  defp minimum_balances([]), do: ""
+
+  defp minimum_balances(list),
+    do: Map.new(list, fn money -> {lower_currency(money), minor(money)} end)
+
+  defp delay_override(:default), do: ""
+  defp delay_override(days), do: days
+
+  @doc "A Stripe external account (a bank account or a card) as a `MishkaPay.Balance.PayoutDestination`."
+  @spec payout_destination(map()) ::
+          {:ok, MishkaPay.Balance.PayoutDestination.t()} | {:error, Splode.Error.t()}
+  def payout_destination(account) do
+    %{
+      provider: "stripe",
+      id: account["id"],
+      type: known(account["object"], ~w(bank_account card)a),
+      bank_name: account["bank_name"],
+      card_brand: account["brand"],
+      last4: account["last4"],
+      currency: account["currency"],
+      country: account["country"],
+      default: account["default_for_currency"] == true,
+      holder_name: account["account_holder_name"] || account["name"],
+      status: account["status"]
+    }
+    |> MishkaPay.Balance.PayoutDestination.builder()
     |> MishkaPay.Errors.from_builder()
   end
 

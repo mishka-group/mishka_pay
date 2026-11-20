@@ -705,6 +705,137 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, "POST", "/v1/application_fees/fee_123/refunds", _}
     end
 
+    test "a payout is made once per reference, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.Balance.Payout{id: "po_" <> _, method: "instant"}} =
+               MishkaPay.create_payout(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 amount: %{amount: "12.50", currency: "EUR"},
+                 method: :instant,
+                 destination_id: "ba_123",
+                 statement_descriptor: "SHOP PAYOUT",
+                 reference: "payout-7"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/payouts", sent, key}
+
+      assert sent == %{
+               "amount" => "1250",
+               "currency" => "eur",
+               "method" => "instant",
+               "destination" => "ba_123",
+               "statement_descriptor" => "SHOP PAYOUT",
+               "metadata[mishka_pay_reference]" => "payout-7"
+             }
+
+      assert {:ok, _payout} =
+               MishkaPay.create_payout(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 amount: %{amount: "12.50", currency: "EUR"},
+                 method: :instant,
+                 destination_id: "ba_123",
+                 statement_descriptor: "SHOP PAYOUT",
+                 reference: "payout-7"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/payouts", _sent, ^key}
+    end
+
+    test "the payout schedule is read and set, and only what is given is sent, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.Balance.PayoutSchedule{provider: "stripe", minimum_payouts: []}} =
+               MishkaPay.fetch_payout_schedule("stripe", "site-a")
+
+      assert_received {:stripe_sent, "GET", "/v1/balance_settings", _query, nil}
+
+      assert {:ok, %MishkaPay.Balance.PayoutSchedule{}} =
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 interval: "weekly",
+                 weekly_days: [:friday, "monday"],
+                 delay_days: 7,
+                 minimum_balances: [%{amount: "15.00", currency: "USD"}],
+                 statement_descriptor: "SHOP"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/balance_settings", schedule, _key}
+
+      assert schedule == %{
+               "payments[payouts][schedule][interval]" => "weekly",
+               "payments[payouts][schedule][weekly_payout_days][0]" => "friday",
+               "payments[payouts][schedule][weekly_payout_days][1]" => "monday",
+               "payments[payouts][minimum_balance_by_currency][usd]" => "1500",
+               "payments[payouts][statement_descriptor]" => "SHOP",
+               "payments[settlement_timing][delay_days_override]" => "7"
+             }
+
+      assert {:ok, %MishkaPay.Balance.PayoutSchedule{}} =
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 delay_days: :default,
+                 minimum_balances: []
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/balance_settings", back, _key}
+
+      assert back == %{
+               "payments[payouts][minimum_balance_by_currency]" => "",
+               "payments[settlement_timing][delay_days_override]" => ""
+             }
+    end
+
+    test "a seller's banks are read as the platform, with their last four digits, as Stripe's spec answers" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(
+          test,
+          {:account_header, conn.request_path, Plug.Conn.get_req_header(conn, "stripe-account")}
+        )
+
+        StripeMock.forward_telling(conn, test)
+      end)
+
+      MishkaPay.Test.put_keys(
+        "stripe",
+        %{secret_key: "sk_test_123", account_id: "acct_seller"},
+        "seller"
+      )
+
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [%MishkaPay.Balance.PayoutDestination{type: :bank_account} = bank | _]
+              }} = MishkaPay.list_payout_destinations("stripe", "seller", type: :bank_account)
+
+      assert is_binary(bank.bank_name) and is_binary(bank.last4)
+
+      assert_received {:stripe_sent, "GET", "/v1/accounts/acct_seller/external_accounts", query,
+                       nil}
+
+      assert query["object"] == "bank_account"
+
+      # The platform reads a seller's bank, so no Stripe-Account goes with it.
+      assert_received {:account_header, "/v1/accounts/acct_seller/external_accounts", []}
+
+      assert {:ok, %MishkaPay.Balance.PayoutDestination{id: "ba_" <> _}} =
+               MishkaPay.fetch_payout_destination("stripe", "ba_123", "seller")
+
+      assert_received {:stripe_sent, "GET", "/v1/accounts/acct_seller/external_accounts/ba_123",
+                       _query, nil}
+
+      assert {:ok, %MishkaPay.Page{}} = MishkaPay.list_payout_destinations("stripe", "site-a")
+      assert_received {:stripe_sent, "GET", "/v1/account", _query, nil}
+      assert_received {:stripe_sent, "GET", "/v1/accounts/" <> _own, _query, nil}
+    end
+
     test "a checkout for a seller sends its fee and destination where Stripe takes them" do
       test = self()
 
@@ -4738,6 +4869,69 @@ defmodule MishkaPay.Providers.StripeTest do
             {fn ->
                MishkaPay.create_connected_account(%{provider: "stripe", dashboard: :platform})
              end, :dashboard}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} = call.()
+      end
+    end
+
+    test "a payout, a schedule or a destination that cannot be right never reaches Stripe" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      payout = %{
+        provider: "stripe",
+        amount: %{amount: "5.00", currency: "USD"},
+        reference: "p-1"
+      }
+
+      for {call, field} <- [
+            {fn -> MishkaPay.create_payout(Map.delete(payout, :reference)) end, :reference},
+            {fn -> MishkaPay.create_payout(Map.delete(payout, :amount)) end, :amount},
+            {fn ->
+               MishkaPay.create_payout(%{payout | amount: %{amount: "0", currency: "USD"}})
+             end, :amount},
+            {fn -> MishkaPay.create_payout(Map.put(payout, :method, "overnight")) end, :method},
+            {fn -> MishkaPay.create_payout(Map.put(payout, :destination_id, "acct_1")) end,
+             :destination_id},
+            {fn -> MishkaPay.create_payout(Map.put(payout, :destination_id, "ba_1/../x")) end,
+             :destination_id},
+            {fn ->
+               MishkaPay.create_payout(
+                 Map.put(payout, :statement_descriptor, String.duplicate("a", 23))
+               )
+             end, :statement_descriptor},
+            {fn -> MishkaPay.update_payout_schedule(%{provider: "stripe", interval: :hourly}) end,
+             :interval},
+            {fn -> MishkaPay.update_payout_schedule(%{provider: "stripe", interval: :weekly}) end,
+             :interval},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 interval: :daily,
+                 monthly_days: [1]
+               })
+             end, :interval},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 interval: :weekly,
+                 weekly_days: [:sunday]
+               })
+             end, :weekly_days},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 interval: :monthly,
+                 monthly_days: [0, 32]
+               })
+             end, :monthly_days},
+            {fn -> MishkaPay.update_payout_schedule(%{provider: "stripe", delay_days: 40}) end,
+             :delay_days},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{provider: "stripe", minimum_balances: [nil]})
+             end, :minimum_balances},
+            {fn -> MishkaPay.list_payout_destinations("stripe", nil, type: :wallet) end, :type},
+            {fn -> MishkaPay.fetch_payout_destination("stripe", "po_1") end, :destination_id},
+            {fn -> MishkaPay.fetch_payout_destination("stripe", "card_1?x") end, :destination_id}
           ] do
         assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} = call.()
       end

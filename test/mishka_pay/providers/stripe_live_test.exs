@@ -2828,6 +2828,129 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     }
   end
 
+  test "the payout schedule and bank are read and set for a seller, and a payout the balance cannot pay is a plain refusal" do
+    run = run_id()
+
+    assert {:ok, %MishkaPay.Balance.PayoutSchedule{interval: interval, minimum_payouts: []}} =
+             MishkaPay.fetch_payout_schedule("stripe")
+
+    assert interval in [:manual, :daily, :weekly, :monthly]
+
+    # Stripe lets only live keys read the platform's own bank accounts.
+    assert {:error, %Errors.Rejected{status: 400}} = MishkaPay.list_payout_destinations("stripe")
+
+    assert {:ok, %MishkaPay.Balance{available: available}} = MishkaPay.fetch_balance("stripe")
+    refute Enum.any?(available, &(&1.currency == :USD and Money.positive?(&1)))
+
+    assert {:error, %Errors.Rejected{code: "balance_insufficient"}} =
+             MishkaPay.create_payout(%{
+               provider: "stripe",
+               amount: %{amount: "1.00", currency: "USD"},
+               reference: "payout-#{run}"
+             })
+
+    case MishkaPay.request(%{
+           provider: "stripe",
+           method: :post,
+           path: "/v2/core/accounts",
+           params: test_seller(run),
+           reference: "payout-seller-#{run}"
+         }) do
+      {:ok, %{"id" => "acct_" <> _ = id}} -> with_account(id, fn -> seller_payouts(id, run) end)
+      {:error, %Errors.Rejected{code: "connect_not_set_up"}} -> :ok
+    end
+  end
+
+  defp seller_payouts(id, run) do
+    assert {:ok, %{"id" => "ba_" <> _ = bank}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               method: :post,
+               path: "/v1/accounts/#{id}/external_accounts",
+               params: %{"external_account" => "btok_us_verified"},
+               reference: "bank-#{run}"
+             })
+
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: System.fetch_env!("STRIPE_SECRET_KEY"), account_id: id},
+      "seller"
+    )
+
+    assert {:ok,
+            %MishkaPay.Page{
+              items: [
+                %MishkaPay.Balance.PayoutDestination{
+                  id: ^bank,
+                  type: :bank_account,
+                  bank_name: "STRIPE TEST BANK",
+                  last4: "6789",
+                  currency: "usd",
+                  default: true
+                }
+              ]
+            }} = MishkaPay.list_payout_destinations("stripe", "seller", type: :bank_account)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_payout_destinations("stripe", "seller", type: :card)
+
+    assert {:ok, %MishkaPay.Balance.PayoutDestination{id: ^bank, last4: "6789"}} =
+             MishkaPay.fetch_payout_destination("stripe", bank, "seller")
+
+    assert {:ok, %MishkaPay.Balance.PayoutSchedule{}} =
+             MishkaPay.fetch_payout_schedule("stripe", "seller")
+
+    assert {:ok,
+            %MishkaPay.Balance.PayoutSchedule{
+              interval: :weekly,
+              weekly_days: [:monday, :thursday],
+              delay_days: delay
+            }} =
+             MishkaPay.update_payout_schedule(%{
+               provider: "stripe",
+               tenant: "seller",
+               interval: :weekly,
+               weekly_days: [:monday, :thursday]
+             })
+
+    assert is_integer(delay)
+
+    assert {:ok,
+            %MishkaPay.Balance.PayoutSchedule{
+              interval: :monthly,
+              monthly_days: [1, 15],
+              minimum_balances: [%Money{currency: :USD} = kept]
+            }} =
+             MishkaPay.update_payout_schedule(%{
+               provider: "stripe",
+               tenant: "seller",
+               interval: :monthly,
+               monthly_days: [15, 1],
+               minimum_balances: [%{amount: "5.00", currency: "USD"}]
+             })
+
+    assert Money.equal?(kept, Money.new(:USD, "5.00"))
+
+    assert {:ok, %MishkaPay.Balance.PayoutSchedule{interval: :manual, minimum_balances: []}} =
+             MishkaPay.update_payout_schedule(%{
+               provider: "stripe",
+               tenant: "seller",
+               interval: :manual,
+               minimum_balances: []
+             })
+
+    assert {:error, %Errors.Rejected{} = refused} =
+             MishkaPay.create_payout(%{
+               provider: "stripe",
+               tenant: "seller",
+               amount: %{amount: "1.00", currency: "USD"},
+               destination_id: bank,
+               reference: "seller-payout-#{run}"
+             })
+
+    assert refused.code in ["balance_insufficient", "payouts_not_allowed"]
+  end
+
   # Stripe makes no new v1 accounts for a platform that turned Connect on lately, and says so.
   test "an account made on Accounts v1 where Stripe allows only v2 is a plain refusal" do
     run = run_id()

@@ -168,9 +168,21 @@ defmodule MishkaPay.Providers.Stripe do
       answers its fee expanded, in one request.
     * `create_transfer/2`, `fetch_transfer/2`, `list_transfers/2` and `reverse_transfer/3` use
       Transfers (`tr_...`): the reference makes the idempotency key and is kept in metadata, and a
-      reversal answers its transfer expanded. `fetch_payout/2`, `list_payouts/2` and
-      `cancel_payout/2` read and stop Payouts (`po_...`) of the account the keys act for. Stripe
-      sends `transfer.*`, `payout.*` and `application_fee.*` about them.
+      reversal answers its transfer expanded. `create_payout/2`, `fetch_payout/2`,
+      `list_payouts/2` and `cancel_payout/2` make, read and stop Payouts (`po_...`) of the
+      account the keys act for; a new one's reference makes the idempotency key and is kept in
+      metadata. Stripe sends `transfer.*`, `payout.*` and `application_fee.*` about them.
+    * `fetch_payout_schedule/1` and `update_payout_schedule/2` use Balance Settings
+      (`/v1/balance_settings`, Stripe's newest home of the schedule, made for Accounts v2 and v1
+      alike): `payments.payouts.schedule` (`interval`, `weekly_payout_days`,
+      `monthly_payout_days`), `payments.settlement_timing.delay_days_override` (read back as
+      `delay_days`), `payments.payouts.minimum_balance_by_currency` and its statement
+      descriptor. Stripe's API has no minimum payout amount, so `:minimum_payouts` is `[]`.
+    * `list_payout_destinations/2` and `fetch_payout_destination/2` read External Accounts
+      (`ba_...`, `card_...`) of the connected account the keys name, as the platform
+      (`/v1/accounts/<account>/external_accounts`); Stripe's API v2 has payout methods only for
+      Global Payouts. Without an `:account_id` the keys' own account is read, which Stripe
+      allows with live keys only: a test key gets its plain refusal.
     * `raw_request/2` calls any path of `api.stripe.com` with the tenant's key, the pinned
       version or the call's own `api_version` (`Stripe-Version`) and its `expand[]`, and answers
       Stripe's JSON as it is; a write's reference, with its method and path, makes the
@@ -259,6 +271,8 @@ defmodule MishkaPay.Providers.Stripe do
       :connect,
       :transfer,
       :payout,
+      :payout_schedule,
+      :payout_destination,
       :raw_request,
       :webhook,
       :event_list
@@ -2874,6 +2888,106 @@ defmodule MishkaPay.Providers.Stripe do
   defp part_key(kind, id, opts),
     do:
       ProviderKit.idempotency_key(kind, opts[:tenant], opts[:reference] && {id, opts[:reference]})
+
+  @impl MishkaPay.Provider
+  def create_payout(%MishkaPay.Balance.Payout{} = payout, keys) do
+    with :ok <- payout_method(payout.method),
+         :ok <- maybe_destination(payout.destination_id),
+         :ok <- metadata(payout.metadata),
+         :ok <- money_off(payout.amount),
+         {:ok, answer} <-
+           request(:post, "/v1/payouts", Mapper.payout_params(payout), keys,
+             key: ProviderKit.idempotency_key("payout", payout.tenant, payout.reference)
+           ) do
+      Mapper.payout(answer)
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payout_schedule(keys) do
+    with {:ok, answer} <- request(:get, "/v1/balance_settings", [], keys),
+         do: Mapper.payout_schedule(answer)
+  end
+
+  @impl MishkaPay.Provider
+  def update_payout_schedule(%MishkaPay.Balance.PayoutSchedule{} = schedule, keys) do
+    with :ok <- delay_days(schedule.delay_days),
+         :ok <- money_off_all(schedule.minimum_balances),
+         {:ok, answer} <-
+           request(:post, "/v1/balance_settings", Mapper.payout_schedule_params(schedule), keys) do
+      Mapper.payout_schedule(answer)
+    end
+  end
+
+  # External accounts are read as the platform, the account in the path: Stripe refuses the
+  # account's own read of them in test mode.
+  @impl MishkaPay.Provider
+  def list_payout_destinations(opts, keys) do
+    filters = [object: opts[:type] && Atom.to_string(opts[:type])]
+
+    with {:ok, account, platform} <- payout_account(keys) do
+      page(
+        "/v1/accounts/#{account}/external_accounts",
+        filters,
+        opts,
+        platform,
+        &Mapper.payout_destination/1
+      )
+    end
+  end
+
+  @impl MishkaPay.Provider
+  def fetch_payout_destination(destination_id, keys) do
+    with :ok <- destination_id(destination_id),
+         {:ok, account, platform} <- payout_account(keys),
+         {:ok, answer} <-
+           request(
+             :get,
+             "/v1/accounts/#{account}/external_accounts/#{destination_id}",
+             [],
+             platform
+           ) do
+      Mapper.payout_destination(answer)
+    end
+  end
+
+  # The connected account the keys name, read as the platform; or the keys' own account, by its id.
+  defp payout_account(%{account_id: "acct_" <> _ = account} = keys) do
+    with :ok <- stripe_id(account, "acct_", :account_id),
+         do: {:ok, account, %{keys | account_id: nil}}
+  end
+
+  defp payout_account(keys) do
+    with {:ok, %{"id" => "acct_" <> _ = account}} <- request(:get, "/v1/account", [], keys),
+         do: {:ok, account, keys}
+  end
+
+  defp payout_method(method) when method in [nil, "standard", "instant"], do: :ok
+
+  defp payout_method(_method),
+    do: invalid(:method, Messages.text(:choices, field: :method, choices: "standard, instant"))
+
+  defp maybe_destination(nil), do: :ok
+  defp maybe_destination(id), do: destination_id(id)
+
+  defp destination_id("card_" <> _ = id), do: stripe_id(id, "card_", :destination_id)
+  defp destination_id(id), do: stripe_id(id, "ba_", :destination_id)
+
+  defp delay_days(days) when is_integer(days) and days > 31,
+    do: invalid(:delay_days, Messages.text(:delay_days_most, days: 31))
+
+  defp delay_days(_days), do: :ok
+
+  defp money_off_all(nil), do: :ok
+
+  defp money_off_all(list),
+    do:
+      Enum.reduce_while(list, :ok, fn money, :ok ->
+        case money_off(money) do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
 
   @impl MishkaPay.Provider
   def fetch_payout(payout_id, keys) do
