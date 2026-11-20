@@ -486,15 +486,19 @@ defmodule MishkaPay.Providers.PayPalTest do
           %{
             "id" => "C1",
             "status" => "COMPLETED",
-            "amount" => %{"currency_code" => "USD", "value" => "19.99"}
+            "amount" => %{"currency_code" => "USD", "value" => "19.99"},
+            "seller_receivable_breakdown" => %{
+              "paypal_fee" => %{"currency_code" => "USD", "value" => "0.99"}
+            }
           }
         ]
       )
 
-      assert {:ok, %Payment{amount_captured: captured}} =
+      assert {:ok, %Payment{amount_captured: captured, charge_id: "C1", fee: fee}} =
                MishkaPay.fetch_payment("paypal", "ORDERC", "site-a")
 
       assert captured == Money.new(:USD, "19.99")
+      assert fee == Money.new(:USD, "0.99")
 
       PayPalStub.order("ORDERP", "COMPLETED",
         captures: [
@@ -506,7 +510,7 @@ defmodule MishkaPay.Providers.PayPalTest do
         ]
       )
 
-      assert {:ok, %Payment{amount_captured: nil}} =
+      assert {:ok, %Payment{amount_captured: nil, charge_id: "C2", fee: nil}} =
                MishkaPay.fetch_payment("paypal", "ORDERP", "site-a")
     end
 

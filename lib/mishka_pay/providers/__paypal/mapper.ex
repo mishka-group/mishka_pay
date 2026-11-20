@@ -148,7 +148,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
 
   @doc """
   An Order as a `MishkaPay.Payment`: its id is the payment's id; its capture says whether it was
-  paid, and the capture's refunds how much went back.
+  paid (its id is the payment's `:charge_id`, its PayPal fee the `:fee`), and the capture's
+  refunds how much went back.
   """
   @spec payment(map()) :: {:ok, Payment.t()} | {:error, Splode.Error.t()}
   def payment(order) do
@@ -187,6 +188,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       payment_method: method(order["payment_source"]),
       card_brand: card["brand"] && String.downcase(card["brand"]),
       card_last4: card["last_digits"],
+      charge_id: capture && capture["id"],
+      fee: capture && money_of(get_in(capture, ["seller_receivable_breakdown", "paypal_fee"])),
       failure_code: reason,
       failure_message: reason,
       refunds: Enum.flat_map(refunds, &refund_of(&1, order["id"])),

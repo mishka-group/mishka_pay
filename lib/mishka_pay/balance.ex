@@ -34,6 +34,9 @@ defmodule MishkaPay.Balance do
         * `:net`: what the balance changed by, `:amount` less `:fee`.
         * `:type`: the provider's own name for it, such as `"charge"`, `"refund"` or `"payout"`.
         * `:source_id`: the provider object it came from, such as a charge or a refund.
+        * `:payment_id`: the payment that object belongs to (a charge's, a refund's or a
+          dispute's PaymentIntent at Stripe), so a movement names its sale exactly; `nil` for
+          one that is not about a payment, such as a payout or a transfer.
         * `:status`: `:available` or `:pending`.
         * `:description`, `:available_at` (when its money is available), `:created_at`.
       """ do
@@ -44,6 +47,7 @@ defmodule MishkaPay.Balance do
       field :net, Money.t(), validator: {MishkaPay.Money, :signed_field}
       field :type, String.t(), derives: "validate(string)"
       field :source_id, String.t(), derives: "validate(string)"
+      field :payment_id, String.t(), derives: "validate(string)"
       field :status, :available | :pending, derives: "validate(enum=Atom[available::pending])"
       field :description, String.t(), derives: "validate(string)"
       field :available_at, DateTime.t(), derives: "validate(struct)"

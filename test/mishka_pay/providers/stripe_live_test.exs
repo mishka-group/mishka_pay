@@ -213,6 +213,48 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.list_refunds("stripe", nil, payment_id: id)
   end
 
+  test "a paid payment names its charge, balance movement and fee, and its movements name it back",
+       %{key: key} do
+    # Captured at once, so the charge's balance movement is there in the answer; Stripe's
+    # default (automatic_async) sets it a moment later and sends charge.updated.
+    {200, %{"id" => id}} = pay(key, "pm_card_mastercard", %{"capture_method" => "automatic"})
+
+    assert {:ok,
+            %Payment{
+              charge_id: "ch_" <> _ = charge,
+              balance_transaction_id: "txn_" <> _ = movement,
+              fee: %Money{} = fee
+            }} = MishkaPay.fetch_payment("stripe", id)
+
+    assert Money.positive?(fee)
+
+    assert {:ok, %Refund{}} =
+             MishkaPay.refund(%{
+               provider: "stripe",
+               payment_id: id,
+               amount: %{amount: "5", currency: "USD"}
+             })
+
+    assert {:ok, %MishkaPay.Page{items: items, has_more: false}} =
+             MishkaPay.list_balance_transactions("stripe", nil, payment_id: id)
+
+    assert Enum.all?(items, &(&1.payment_id == id))
+    assert Enum.sort(Enum.map(items, & &1.type)) == ["charge", "refund"]
+
+    assert %MishkaPay.Balance.Transaction{id: ^movement, source_id: ^charge, fee: ^fee} =
+             Enum.find(items, &(&1.type == "charge"))
+
+    assert {:ok,
+            %MishkaPay.Page{
+              items: [%MishkaPay.Balance.Transaction{id: ^movement, payment_id: ^id}]
+            }} = MishkaPay.list_balance_transactions("stripe", nil, source_id: charge)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = recent}} =
+             MishkaPay.list_balance_transactions("stripe", nil, type: "charge", limit: 5)
+
+    assert Enum.any?(recent, &(&1.id == movement and &1.payment_id == id))
+  end
+
   test "a declined card is Stripe's 402 with its decline code", %{key: key} do
     assert {402, %{"error" => %{"decline_code" => "generic_decline"}}} =
              pay(key, "pm_card_chargeDeclined")

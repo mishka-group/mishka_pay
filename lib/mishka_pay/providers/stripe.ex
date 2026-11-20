@@ -339,6 +339,7 @@ defmodule MishkaPay.Providers.Stripe do
     "payment_intent.requires_action" => [:payment],
     "payment_intent.amount_capturable_updated" => [:payment],
     "charge.succeeded" => [:payment],
+    "charge.updated" => [:payment],
     "charge.failed" => [:payment],
     "charge.refunded" => [:payment],
     "charge.captured" => [:payment],
@@ -744,6 +745,7 @@ defmodule MishkaPay.Providers.Stripe do
     do: [
       {"expand[]", "latest_charge"},
       {"expand[]", "latest_charge.refunds"},
+      {"expand[]", "latest_charge.balance_transaction"},
       {"expand[]", "customer"}
     ]
 
@@ -980,6 +982,7 @@ defmodule MishkaPay.Providers.Stripe do
         Mapper.customer_param(opts[:customer_id]),
         "expand[]": "data.latest_charge",
         "expand[]": "data.latest_charge.refunds",
+        "expand[]": "data.latest_charge.balance_transaction",
         "expand[]": "data.customer"
       ]
 
@@ -2561,14 +2564,48 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def list_balance_transactions(opts, keys) do
     with :ok <- maybe_id(opts[:payout_id], "po_", :payout_id),
-         :ok <- maybe_id(opts[:type], "", :type) do
-      page(
-        "/v1/balance_transactions",
-        [payout: opts[:payout_id], type: opts[:type]],
-        opts,
-        keys,
-        &Mapper.balance_transaction/1
-      )
+         :ok <- maybe_id(opts[:type], "", :type),
+         :ok <- maybe_id(opts[:source_id], "", :source_id),
+         :ok <- maybe_id(opts[:payment_id], "pi_", :payment_id) do
+      movements(opts[:payment_id], opts, keys)
+    end
+  end
+
+  # The movements of the balance, each with its source expanded so it names its payment.
+  defp movements(nil, opts, keys) do
+    filters = [
+      payout: opts[:payout_id],
+      type: opts[:type],
+      source: opts[:source_id],
+      "expand[]": "data.source"
+    ]
+
+    page("/v1/balance_transactions", filters, opts, keys, &Mapper.balance_transaction/1)
+  end
+
+  # One payment's movements, in one read of it: its charge's and each of its refunds'.
+  defp movements(payment_id, opts, keys) do
+    expand = [
+      {"expand[]", "latest_charge.balance_transaction"},
+      {"expand[]", "latest_charge.refunds.data.balance_transaction"}
+    ]
+
+    with :ok <- payment_alone(opts),
+         {:ok, intent} <- request(:get, "/v1/payment_intents/#{payment_id}", expand, keys),
+         {:ok, items} <-
+           intent
+           |> Mapper.payment_movements()
+           |> Enum.map(&Mapper.balance_transaction/1)
+           |> all_ok() do
+      wanted = Enum.filter(items, &(is_nil(opts[:type]) or &1.type == opts[:type]))
+      {:ok, struct(Page, items: wanted, has_more: false, next: nil)}
+    end
+  end
+
+  defp payment_alone(opts) do
+    case Enum.find([:payout_id, :source_id, :after], &(not is_nil(opts[&1]))) do
+      nil -> :ok
+      other -> invalid(other, Messages.text(:payment_id_alone, field: other))
     end
   end
 

@@ -147,6 +147,7 @@ defmodule MishkaPay.Messages do
           | :delay_days
           | :payout_interval_days
           | :delay_days_most
+          | :payment_id_alone
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
@@ -764,6 +765,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:delay_days),
     do: dgettext_noop("mishka_pay", "The delay_days field takes a number of days, or :default")
+
+  defp msgid(:payment_id_alone),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The payment_id filter answers one payment's movements on one page: leave %{field} out"
+      )
 
   defp msgid(:delay_days_most),
     do: dgettext_noop("mishka_pay", "Stripe takes at most %{days} delay days")

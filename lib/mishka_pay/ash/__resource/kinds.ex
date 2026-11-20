@@ -139,6 +139,8 @@ if Code.ensure_loaded?(Ash) do
         {:customer_name, :string, public()},
         {:card_brand, :string, public()},
         {:card_last4, :string, public()},
+        {:charge_id, :string, public()},
+        {:balance_transaction_id, :string, public()},
         {:failure_code, :string, public()},
         {:failure_message, :string, public()},
         {:disputed, :boolean, required(default: false)},

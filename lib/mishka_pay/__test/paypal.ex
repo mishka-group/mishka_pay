@@ -385,7 +385,12 @@ defmodule MishkaPay.Test.PayPal do
     %{
       "id" => "CAPTURE" <> id,
       "status" => "COMPLETED",
-      "amount" => %{"currency_code" => "USD", "value" => "39.98"}
+      "amount" => %{"currency_code" => "USD", "value" => "39.98"},
+      "seller_receivable_breakdown" => %{
+        "gross_amount" => %{"currency_code" => "USD", "value" => "39.98"},
+        "paypal_fee" => %{"currency_code" => "USD", "value" => "1.88"},
+        "net_amount" => %{"currency_code" => "USD", "value" => "38.10"}
+      }
     }
   end
 

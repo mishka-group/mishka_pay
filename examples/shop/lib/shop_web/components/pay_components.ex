@@ -905,6 +905,14 @@ defmodule ShopWeb.PayComponents do
                 <dd data-testid="live-card">
                   {paid_with(live.payment_method, live.card_brand, live.card_last4)}
                 </dd>
+                <dt class="opacity-70">Charge</dt>
+                <dd class="font-mono text-xs" data-testid="live-charge">{live.charge_id || "–"}</dd>
+                <dt class="opacity-70">Balance movement</dt>
+                <dd class="font-mono text-xs" data-testid="live-balance-transaction">
+                  {live.balance_transaction_id || "–"}
+                </dd>
+                <dt class="opacity-70">Provider fee</dt>
+                <dd data-testid="live-fee">{(live.fee && Money.to_string!(live.fee)) || "–"}</dd>
                 <dt :if={live.failure_message} class="opacity-70">Failed because</dt>
                 <dd :if={live.failure_message} class="text-error" data-testid="live-failure">
                   <.failure message={live.failure_message} code={live.failure_code} />

@@ -1001,8 +1001,10 @@ defmodule MishkaPay.Provider do
               {:ok, MishkaPay.Balance.t()} | {:error, Splode.Error.t()}
 
   @doc """
-  With `:balance`. One page of the balance's movements, newest first; only those a `:payout_id`
-  paid out, or of `:type`, when given.
+  With `:balance`. One page of the balance's movements, newest first, each naming its
+  `:payment_id` when it is about one; only those a `:payout_id` paid out, of `:type`, or made by
+  `:source_id` (a charge, a refund), when given. `:payment_id` answers the movements of one
+  payment (its charge's and its refunds') on one page, and takes no other filter.
   """
   @callback list_balance_transactions(opts :: keyword(), MishkaPay.Credentials.t()) ::
               {:ok, MishkaPay.Page.t()} | {:error, Splode.Error.t()}

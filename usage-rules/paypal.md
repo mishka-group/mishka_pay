@@ -13,8 +13,10 @@ Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
   webhook id (`WH-...`), `mode` sandbox (`:test`) or live.
 - A checkout is a PayPal Order; the buyer returns to `success_url` with the Order id in `token`.
   Read it back with `fetch_checkout("paypal", order_id, tenant)`: an approved Order is captured
-  then, once, whoever reads it first. The payment's id is the Order's id, and `:amount_captured`
-  is what the capture took.
+  then, once, whoever reads it first. The payment's id is the Order's id, `:amount_captured`
+  is what the capture took, `:charge_id` the capture's id and `:fee` PayPal's fee on it
+  (`seller_receivable_breakdown.paypal_fee`). PayPal has no balance movements
+  (`:balance`), so `:balance_transaction_id` stays `nil`.
 - The reference and the checkout's `:owner` travel together in PayPal's one caller field
   (`custom_id`, 127 characters at most; longer is refused before any request), so a PayPal
   payment or subscription comes back with its owner and `belongs_to_user` and `subscribed?` work

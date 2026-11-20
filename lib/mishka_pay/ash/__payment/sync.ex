@@ -53,6 +53,8 @@ if Code.ensure_loaded?(Ash) do
         customer_name: payment.customer_name,
         card_brand: payment.card_brand,
         card_last4: payment.card_last4,
+        charge_id: payment.charge_id,
+        balance_transaction_id: payment.balance_transaction_id,
         failure_code: payment.failure_code,
         failure_message: payment.failure_message,
         disputed: payment.disputed,

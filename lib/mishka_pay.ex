@@ -1422,8 +1422,11 @@ defmodule MishkaPay do
 
   @doc """
   One page of the movements of the seller's balance, newest first (`MishkaPay.Page` of
-  `MishkaPay.Balance.Transaction`): `payout_id:` those one payout paid out, `type:` only one kind
-  (the provider's name, such as `"charge"`), plus `limit:` and `after:`.
+  `MishkaPay.Balance.Transaction`, each naming its `:payment_id` when it is about a payment):
+  `payout_id:` those one payout paid out, `type:` only one kind (the provider's name, such as
+  `"charge"`), `source_id:` those one object made (a charge, a refund), plus `limit:` and
+  `after:`. `payment_id:` answers one payment's movements (its charge's and its refunds') on one
+  page, with `type:` and no other filter.
   """
   @spec list_balance_transactions(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}

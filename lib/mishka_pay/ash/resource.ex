@@ -174,7 +174,9 @@ if Code.ensure_loaded?(Ash) do
     the `:amount`, `:amount_refunded` and `:currency` (the `:money` and `:money_refunded`
     calculations give them as `Money`), the caller's `:reference` from the checkout, the buyer
     (`:customer_id`, `:customer_email`, `:customer_name`), the card (`:card_brand`,
-    `:card_last4`), why the last try failed (`:failure_code`, `:failure_message`), whether the
+    `:card_last4`), the charge that took the money and the balance movement it made
+    (`:charge_id`, `:balance_transaction_id`, to join `MishkaPay.Balance.Transaction`s to the
+    row exactly), why the last try failed (`:failure_code`, `:failure_message`), whether the
     buyer's bank asked for it back (`:disputed`), when the provider made it and when it was last
     synced. An identity on provider and payment id keeps one row per payment.
 

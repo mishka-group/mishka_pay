@@ -652,7 +652,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     card = get_in(charge, ["payment_method_details", "card"]) || %{}
     failure = intent["last_payment_error"] || %{}
 
+    balance = expanded(charge["balance_transaction"])
+
     %{
+      charge_id: id_of(intent["latest_charge"]),
+      balance_transaction_id: id_of(charge["balance_transaction"]),
+      fee: money(balance["fee"], balance["currency"]),
       payment_method: get_in(charge, ["payment_method_details", "type"]),
       card_brand: card["brand"],
       card_last4: card["last4"],
@@ -2736,6 +2741,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       net: signed_money(txn["net"], currency),
       type: txn["type"],
       source_id: id_of(txn["source"]),
+      payment_id: payment_of(txn["source"]),
       status: known(txn["status"], ~w(available pending)a),
       description: txn["description"],
       available_at: time(txn["available_on"]),
@@ -2743,6 +2749,30 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
     |> MishkaPay.Balance.Transaction.builder()
     |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  The balance transactions of a PaymentIntent read with its latest charge's and refunds' balance
+  transactions expanded, newest first, each with its source as the object it came from, so it
+  names the payment.
+  """
+  @spec payment_movements(map()) :: [map()]
+  def payment_movements(intent) do
+    charge = expanded(intent["latest_charge"])
+    refunds = get_in(charge, ["refunds", "data"]) || []
+    payment = %{"payment_intent" => intent["id"]}
+
+    [charge | refunds]
+    |> Enum.flat_map(fn object ->
+      case expanded(object["balance_transaction"]) do
+        %{"id" => _id} = txn ->
+          [Map.put(txn, "source", Map.merge(payment, %{"id" => object["id"]}))]
+
+        _not_read ->
+          []
+      end
+    end)
+    |> Enum.sort_by(& &1["created"], :desc)
   end
 
   @doc """

@@ -4315,6 +4315,46 @@ defmodule MishkaPay.Providers.StripeTest do
                )
     end
 
+    test "a payment names its charge, balance movement and fee, and each movement names its payment, as Stripe's spec answers" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        query = conn.query_string |> URI.query_decoder() |> Enum.to_list()
+        send(test, {:read, conn.request_path, query})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok,
+              %Payment{
+                charge_id: "ch_" <> _,
+                balance_transaction_id: "txn_" <> _,
+                fee: %Money{}
+              }} = MishkaPay.fetch_payment("stripe", "pi_123", "site-a")
+
+      assert_received {:read, "/v1/payment_intents/pi_123", read}
+      assert {"expand[]", "latest_charge.balance_transaction"} in read
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Balance.Transaction{} = movement]}} =
+               MishkaPay.list_balance_transactions("stripe", "site-a", source_id: "ch_123")
+
+      assert_received {:read, "/v1/balance_transactions", listed}
+      assert {"source", "ch_123"} in listed
+      assert {"expand[]", "data.source"} in listed
+      assert byte_size(movement.source_id) > 0
+
+      assert {:ok, %MishkaPay.Page{items: items, has_more: false}} =
+               MishkaPay.list_balance_transactions("stripe", "site-a", payment_id: "pi_123")
+
+      assert [_ | _] = items
+      assert Enum.all?(items, &(&1.payment_id == "pi_123"))
+      assert_received {:read, "/v1/payment_intents/pi_123", one}
+
+      assert Enum.sort(one) == [
+               {"expand[]", "latest_charge.balance_transaction"},
+               {"expand[]", "latest_charge.refunds.data.balance_transaction"}
+             ]
+    end
+
     test "a customer's balance is credited and listed as Stripe's spec accepts" do
       assert {:ok,
               %MishkaPay.Customer.BalanceTransaction{
@@ -4412,6 +4452,83 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Money.equal?(net, Money.new(:USD, "-100.25"))
     end
 
+    test "a balance movement names the payment its charge, refund or dispute belongs to" do
+      for {source, payment} <- [
+            {%{"id" => "ch_1", "object" => "charge", "payment_intent" => "pi_1"}, "pi_1"},
+            {%{"id" => "re_1", "object" => "refund", "payment_intent" => %{"id" => "pi_2"}},
+             "pi_2"},
+            {%{"id" => "du_1", "object" => "dispute", "payment_intent" => "pi_3"}, "pi_3"},
+            {%{"id" => "po_1", "object" => "payout"}, nil},
+            {"ch_9", nil}
+          ] do
+        assert {:ok, %MishkaPay.Balance.Transaction{payment_id: ^payment, source_id: "" <> _}} =
+                 Stripe.Mapper.balance_transaction(%{
+                   "id" => "txn_1",
+                   "amount" => 1000,
+                   "fee" => 59,
+                   "net" => 941,
+                   "currency" => "eur",
+                   "source" => source,
+                   "type" => "charge",
+                   "status" => "available"
+                 })
+      end
+    end
+
+    test "one payment's movements are its charge's and its refunds', newest first, from one read" do
+      txn = fn id, amount, created ->
+        %{
+          "id" => id,
+          "amount" => amount,
+          "fee" => 0,
+          "net" => amount,
+          "currency" => "usd",
+          "type" => if(amount < 0, do: "refund", else: "charge"),
+          "status" => "available",
+          "created" => created
+        }
+      end
+
+      MishkaPay.Test.stub_http(fn conn ->
+        Req.Test.json(conn, %{
+          "id" => "pi_7",
+          "object" => "payment_intent",
+          "latest_charge" => %{
+            "id" => "ch_7",
+            "balance_transaction" => txn.("txn_charge", 2000, 100),
+            "refunds" => %{
+              "data" => [
+                %{"id" => "re_1", "balance_transaction" => txn.("txn_refund", -500, 200)},
+                %{"id" => "re_2", "balance_transaction" => "txn_not_read"}
+              ]
+            }
+          }
+        })
+      end)
+
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [
+                  %MishkaPay.Balance.Transaction{
+                    id: "txn_refund",
+                    source_id: "re_1",
+                    payment_id: "pi_7"
+                  },
+                  %MishkaPay.Balance.Transaction{
+                    id: "txn_charge",
+                    source_id: "ch_7",
+                    payment_id: "pi_7"
+                  }
+                ]
+              }} = MishkaPay.list_balance_transactions("stripe", nil, payment_id: "pi_7")
+
+      assert {:ok, %MishkaPay.Page{items: [%{id: "txn_refund"}]}} =
+               MishkaPay.list_balance_transactions("stripe", nil,
+                 payment_id: "pi_7",
+                 type: "refund"
+               )
+    end
+
     test "usage, entitlements and balances that cannot be right are refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
       usage = %{provider: "stripe", event_name: "api_call", customer_id: "cus_1"}
@@ -4464,6 +4581,17 @@ defmodule MishkaPay.Providers.StripeTest do
             {MishkaPay.list_entitlements("stripe", "sub_1"), :customer_id},
             {MishkaPay.list_balance_transactions("stripe", nil, payout_id: "tr_1"), :payout_id},
             {MishkaPay.list_balance_transactions("stripe", nil, type: "a&b"), :type},
+            {MishkaPay.list_balance_transactions("stripe", nil, source_id: "ch_1&x=y"),
+             :source_id},
+            {MishkaPay.list_balance_transactions("stripe", nil, payment_id: "ch_1"), :payment_id},
+            {MishkaPay.list_balance_transactions("stripe", nil,
+               payment_id: "pi_1",
+               payout_id: "po_1"
+             ), :payout_id},
+            {MishkaPay.list_balance_transactions("stripe", nil,
+               payment_id: "pi_1",
+               after: "txn_1"
+             ), :after},
             {MishkaPay.adjust_customer_balance("stripe", "cus_1", %{amount: "x", currency: "USD"}),
              :amount},
             {MishkaPay.adjust_customer_balance("stripe", "cus_1", Money.new(:ISK, "-0.5")),

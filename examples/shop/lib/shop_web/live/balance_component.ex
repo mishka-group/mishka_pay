@@ -2,7 +2,8 @@ defmodule ShopWeb.BalanceComponent do
   @moduledoc """
   Money held at Stripe, read live: the seller's balance, available and pending per currency
   (`MishkaPay.fetch_balance/2`), its movements page by page
-  (`MishkaPay.list_balance_transactions/3`), and a customer's own balance: give credit taken off
+  (`MishkaPay.list_balance_transactions/3`), each naming the payment it belongs to, and one
+  payment's movements (`payment_id:`), and a customer's own balance: give credit taken off
   their next bills or add a debit (`MishkaPay.adjust_customer_balance/5`), and list its changes
   (`MishkaPay.list_customer_balance/4`).
   """
@@ -25,6 +26,7 @@ defmodule ShopWeb.BalanceComponent do
        balance: nil,
        movements: nil,
        movements_next: nil,
+       payment_id: "",
        customer_id: "",
        balance_form: @balance_form,
        customer_balance: nil,
@@ -49,6 +51,27 @@ defmodule ShopWeb.BalanceComponent do
 
   def handle_event("more_movements", _params, socket),
     do: {:noreply, movements(socket, socket.assigns.movements_next)}
+
+  def handle_event("payment_movements", %{"payment_id" => id}, socket) do
+    payment_id = String.trim(id)
+
+    case MishkaPay.list_balance_transactions("stripe", socket.assigns.tenant,
+           payment_id: payment_id
+         ) do
+      {:ok, page} ->
+        {:noreply,
+         assign(socket,
+           payment_id: payment_id,
+           movements: page.items,
+           movements_next: nil,
+           notice: nil,
+           error: nil
+         )}
+
+      {:error, error} ->
+        {:noreply, socket |> assign(payment_id: payment_id) |> failed(error)}
+    end
+  end
 
   def handle_event("draft_customer_balance", params, socket),
     do: {:noreply, keep(socket, params)}
@@ -205,6 +228,26 @@ defmodule ShopWeb.BalanceComponent do
         </div>
       </div>
 
+      <form
+        id="balance-payment-movements-form"
+        phx-submit="payment_movements"
+        phx-target={@myself}
+        class="flex flex-wrap items-end gap-2"
+        data-testid="balance-payment-movements-form"
+      >
+        <label class="fieldset">
+          <span class="fieldset-legend">One payment's movements</span>
+          <input
+            name="payment_id"
+            value={@payment_id}
+            placeholder="pi_..."
+            class="input input-sm font-mono"
+            data-testid="balance-payment-id"
+          />
+        </label>
+        <button class="btn btn-sm" data-testid="balance-payment-movements">Read its movements</button>
+      </form>
+
       <div :if={@movements} class="overflow-x-auto rounded-box border border-base-300">
         <table class="table table-sm">
           <thead>
@@ -215,11 +258,12 @@ defmodule ShopWeb.BalanceComponent do
               <th>Fee</th>
               <th>Net</th>
               <th>State</th>
+              <th>Payment</th>
             </tr>
           </thead>
           <tbody data-testid="balance-movement-rows">
             <tr :if={@movements == []}>
-              <td colspan="6" class="text-center opacity-70" data-testid="balance-movements-empty">
+              <td colspan="7" class="text-center opacity-70" data-testid="balance-movements-empty">
                 No movements.
               </td>
             </tr>
@@ -230,6 +274,9 @@ defmodule ShopWeb.BalanceComponent do
               <td>{money(txn.fee)}</td>
               <td data-testid="balance-movement-net">{money(txn.net)}</td>
               <td>{txn.status}</td>
+              <td class="font-mono text-xs" data-testid="balance-movement-payment">
+                {txn.payment_id || "–"}
+              </td>
             </tr>
           </tbody>
         </table>

@@ -116,7 +116,9 @@ The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.
 
 ## What the rows hold
 
-- Payment rows: `checkout_id`, `price_ids`, `product_ids` (what was sold). Subscription rows:
+- Payment rows: `checkout_id`, `price_ids`, `product_ids` (what was sold), `charge_id` and
+  `balance_transaction_id` (join a `MishkaPay.Balance.Transaction` to its row by these, or by its
+  `:payment_id`, never by amount and time). Subscription rows:
   `price_ids`, `product_ids`, calculations `active?`, `on_trial?`, `canceling?`.
 - Kind attributes are `writable?: false`: never put them in an action's `accept`; write your own
   attributes beside them.

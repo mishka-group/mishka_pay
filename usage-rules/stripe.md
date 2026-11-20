@@ -605,9 +605,21 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 - `fetch_balance/2` reads the account's payments balance: `available` and `pending`, one money
   per currency, below zero when Stripe's is.
-- `list_balance_transactions/3` filters by `payout_id:` (`po_...`, automatic payouts only) and
-  `type:` (Stripe's type, such as `"charge"`, `"refund"` or `"payout"`). Each has `:amount`,
-  `:fee`, `:net`, `:type`, `:source_id`, `:status` and `:available_at`.
+- `list_balance_transactions/3` filters by `payout_id:` (`po_...`, automatic payouts only),
+  `type:` (Stripe's type, such as `"charge"`, `"refund"` or `"payout"`) and `source_id:` (the
+  object that made it, Stripe's `source`). Each has `:amount`, `:fee`, `:net`, `:type`,
+  `:source_id`, `:payment_id` (the PaymentIntent of a charge, refund or dispute; the list
+  expands `data.source` to find it, in the same request), `:status` and `:available_at`.
+- `payment_id:` (`pi_...`) lists one payment's movements: its charge's and each refund's, read
+  in one request (`latest_charge.balance_transaction` and
+  `latest_charge.refunds.data.balance_transaction` expanded), on one page; it takes `type:` and
+  refuses `payout_id:`, `source_id:` and `after:`. A dispute's movements name the payment
+  through `:payment_id` in the full list.
+- A payment read with `fetch_payment/3` or `list_payments/3` carries `:charge_id` (its
+  `latest_charge`), `:balance_transaction_id` and `:fee` (Stripe's fee, in the balance's
+  settlement currency), all from the same request. A payment captured asynchronously (Stripe's
+  default, `automatic_async`) has neither for a moment: Stripe sets them later and sends
+  `charge.updated`, which the webhook handles (the Ash payment row syncs again).
 - A customer's balance (`adjust_customer_balance/5`) is Stripe's customer credit balance:
   below zero is credit taken off the next invoices, above zero is a debit added to them. It is
   in the customer's one currency; the first change sets it. Its `:reference` makes the
