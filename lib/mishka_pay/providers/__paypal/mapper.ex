@@ -79,8 +79,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
         "paypal" =>
           %{
             "experience_context" => %{
-              "return_url" => checkout.success_url,
-              "cancel_url" => checkout.cancel_url,
+              "return_url" => without_session(checkout.success_url),
+              "cancel_url" => without_session(checkout.cancel_url),
               "user_action" => "PAY_NOW",
               "shipping_preference" => "NO_SHIPPING"
             }
@@ -345,8 +345,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       "quantity" => Integer.to_string(quantity || 1),
       "custom_id" => custom_id(checkout),
       "application_context" => %{
-        "return_url" => checkout.success_url,
-        "cancel_url" => checkout.cancel_url,
+        "return_url" => without_session(checkout.success_url),
+        "cancel_url" => without_session(checkout.cancel_url),
         "user_action" => "SUBSCRIBE_NOW",
         "shipping_preference" => "NO_SHIPPING"
       }
@@ -552,6 +552,33 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   defp subscription_of("subscription", %{"id" => id}), do: id
   defp subscription_of("sale", %{"billing_agreement_id" => id}), do: id
   defp subscription_of(_other, _resource), do: nil
+
+  @doc """
+  A return URL without Stripe's `{CHECKOUT_SESSION_ID}` placeholder (and the parameter that holds
+  it), so one URL serves both providers: PayPal adds its own `token` (or `subscription_id`), which
+  `MishkaPay.return_checkout_id/2` reads.
+  """
+  @spec without_session(String.t() | nil) :: String.t() | nil
+  def without_session(nil), do: nil
+
+  def without_session(url) do
+    case String.contains?(url, "{CHECKOUT_SESSION_ID}") do
+      true -> url |> URI.parse() |> without_placeholder()
+      false -> url
+    end
+  end
+
+  defp without_placeholder(uri) do
+    query =
+      (uri.query || "")
+      |> URI.query_decoder()
+      |> Enum.reject(fn {_name, value} -> value == "{CHECKOUT_SESSION_ID}" end)
+
+    case query do
+      [] -> URI.to_string(%{uri | query: nil})
+      kept -> URI.to_string(%{uri | query: URI.encode_query(kept)})
+    end
+  end
 
   @doc """
   PayPal keeps one caller field, `custom_id` (127 characters at most): the reference alone, or,

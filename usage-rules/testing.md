@@ -33,7 +33,7 @@ end
 - Wait on messages or telemetry (`:telemetry_test.attach_event_handlers/2`, `assert_receive`),
   never on `Process.sleep`.
 - PayPal with no keys and no network: `MishkaPay.Test.PayPal.stub!()` answers as PayPal does
-  (Orders, captures, refunds, plans, subscriptions, webhook checks); `MishkaPay.Test.PayPal.order/3`
+  (Orders, captures, refunds, plans, subscriptions, the site's webhooks, webhook checks); `MishkaPay.Test.PayPal.order/3`
   and `subscription/3` put one in a state (`"APPROVED"`, `"ACTIVE"`...). A webhook message passes
   PayPal's check when its `paypal-transmission-sig` header is `"good"`.
 - `MishkaPay.Test.start_plugin!/1` only awaits a plugin the host's application already runs (a

@@ -149,6 +149,7 @@ defmodule MishkaPay.Messages do
           | :delay_days_most
           | :payment_id_alone
           | :registration_past
+          | :return_no_checkout
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
@@ -766,6 +767,9 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:delay_days),
     do: dgettext_noop("mishka_pay", "The delay_days field takes a number of days, or :default")
+
+  defp msgid(:return_no_checkout),
+    do: dgettext_noop("mishka_pay", "The return page's query names no checkout of this provider")
 
   defp msgid(:registration_past),
     do:

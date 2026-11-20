@@ -836,6 +836,39 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:stripe_sent, "GET", "/v1/accounts/" <> _own, _query, nil}
     end
 
+    test "the buyer's return names the session: Mishka Pay adds session_id to a page without Stripe's placeholder" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test, {:stripe, Plug.Conn.Query.decode(body)})
+        Req.Test.json(conn, %{"object" => "checkout.session", "id" => "cs_1", "status" => "open"})
+      end)
+
+      for {given, sent} <- [
+            {"https://shop.test/thanks",
+             "https://shop.test/thanks?session_id={CHECKOUT_SESSION_ID}"},
+            {"https://shop.test/thanks?lang=de",
+             "https://shop.test/thanks?lang=de&session_id={CHECKOUT_SESSION_ID}"},
+            {"https://shop.test/thanks?sid={CHECKOUT_SESSION_ID}",
+             "https://shop.test/thanks?sid={CHECKOUT_SESSION_ID}"}
+          ] do
+        assert {:ok, _checkout} = MishkaPay.checkout(%{@checkout | success_url: given})
+        assert_received {:stripe, %{"success_url" => ^sent}}
+      end
+
+      assert {:ok, "cs_test_a1"} =
+               MishkaPay.return_checkout_id("stripe", %{"session_id" => "cs_test_a1"})
+
+      assert {:ok, "cs_test_a2"} =
+               MishkaPay.return_checkout_id("stripe", %{sid: "cs_test_a2", lang: "de"})
+
+      for params <- [%{}, %{"token" => "ORDER7AB12"}, %{"session_id" => "cs_1/../x"}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :checkout_id}]}} =
+                 MishkaPay.return_checkout_id("stripe", params)
+      end
+    end
+
     test "a checkout for a seller sends its fee and destination where Stripe takes them" do
       test = self()
 
@@ -4682,13 +4715,13 @@ defmodule MishkaPay.Providers.StripeTest do
         })
 
       assert {params["ui_mode"], params["return_url"]} ==
-               {"embedded_page", "https://shop.test/return"}
+               {"embedded_page", "https://shop.test/return?session_id={CHECKOUT_SESSION_ID}"}
 
       refute Map.has_key?(params, "success_url")
       assert params["payment_intent_data"]["capture_method"] == "manual"
 
       hosted = Stripe.Mapper.checkout_params(params_checkout())
-      assert hosted["success_url"] == "https://shop.test/thanks"
+      assert hosted["success_url"] == "https://shop.test/thanks?session_id={CHECKOUT_SESSION_ID}"
       refute Map.has_key?(hosted, "ui_mode")
       refute Map.has_key?(hosted["payment_intent_data"], "capture_method")
     end

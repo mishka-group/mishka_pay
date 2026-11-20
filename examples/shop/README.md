@@ -79,8 +79,13 @@ PAYPAL_CLIENT_SECRET=...
 PAYPAL_WEBHOOK_ID=WH-...
 ```
 
+The webhook can be made from code instead of the dashboard:
+`MishkaPay.Providers.PayPal.WebhookEndpoint.ensure("demo", "https://<public host>/pay/webhooks/paypal/demo")`
+answers its `WH-...` id with every event Mishka Pay acts on.
+
 Then "Pay with: PayPal" is on, and `mix shop.sandbox paypal` makes PayPal Orders and a
-subscription for a sandbox buyer to approve. PayPal has a smaller set than Stripe:
+subscription for a sandbox buyer to approve. Both providers send the buyer back to the same page
+(`/?provider=...`), which reads the checkout with `MishkaPay.return_checkout_id/2`. PayPal has a smaller set than Stripe:
 [Capabilities by provider](https://mishka.tools/pay/docs/capabilities).
 
 ### Test payments in every status

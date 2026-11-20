@@ -1175,8 +1175,17 @@ defmodule MishkaPay.Provider do
   """
   @callback check_keys(MishkaPay.Credentials.t()) :: :ok | {:error, Splode.Error.t()}
 
+  @doc """
+  Optional, with `:checkout`. The checkout id the provider put in the query of the page the buyer
+  came back to (`MishkaPay.return_checkout_id/2`), checked by shape, or an `Errors.Invalid` on
+  `:checkout_id` when the query names none. Left out, Mishka Pay answers `Errors.Unsupported`.
+  """
+  @callback return_checkout_id(params :: map()) ::
+              {:ok, String.t()} | {:error, Splode.Error.t()}
+
   @optional_callbacks offered?: 0,
                       check_keys: 1,
+                      return_checkout_id: 1,
                       checkout: 2,
                       fetch_checkout: 2,
                       fetch_payment: 2,

@@ -11,7 +11,10 @@ Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
 
 - Keys: `publishable_key` is the app's client id, `secret_key` its secret, `webhook_secret` the
   webhook id (`WH-...`), `mode` sandbox (`:test`) or live.
-- A checkout is a PayPal Order; the buyer returns to `success_url` with the Order id in `token`.
+- A checkout is a PayPal Order; the buyer returns to `success_url` with the Order id in `token`
+  (`MishkaPay.return_checkout_id/2` reads it, or a subscription's `subscription_id`). A
+  `success_url` made for Stripe (`?session_id={CHECKOUT_SESSION_ID}`) is sent without the
+  placeholder, so an extension uses one URL for both.
   Read it back with `fetch_checkout("paypal", order_id, tenant)`: an approved Order is captured
   then, once, whoever reads it first. The payment's id is the Order's id, `:amount_captured`
   is what the capture took, `:charge_id` the capture's id and `:fee` PayPal's fee on it
@@ -38,6 +41,15 @@ Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
   `tax_behavior` and `tax_rate_ids`), payment links and the catalog: each is refused with
   `Errors.Unsupported`.
 - Webhooks are verified by PayPal's own API; they cannot be simulated locally.
+  `MishkaPay.Providers.PayPal.WebhookEndpoint.ensure(tenant, url)` makes the site's webhook in
+  its PayPal app with `MishkaPay.Providers.PayPal.handled_events/0` (or adds the ones it lacks),
+  and answers its id (`WH-...`): keep it as the site's `webhook_secret`. `check/2` changes
+  nothing; `delete/2` takes the id; `MishkaPay.Check.run(provider: "paypal", webhook_url: url)`
+  checks it. The URL must be `https`.
+- Every event names the Order it is about as `:payment_id`: the Order's own events, a capture's
+  (`supplementary_data`), and a refund's, whose capture is read once to find its Order (a read
+  PayPal refuses answers 400, so PayPal sends it again). An approval's webhook alone captures the
+  Order through the Ash payment sync, so a buyer who never comes back still pays once.
 - `MishkaPay.request/1` calls any PayPal REST path (`"/v2/checkout/orders/<id>"`) with the
   site's OAuth token; a write's body is JSON and its `:reference` makes `PayPal-Request-Id`.
   PayPal has no API version or expand: `options:` with either is `Errors.Invalid` on `:options`.

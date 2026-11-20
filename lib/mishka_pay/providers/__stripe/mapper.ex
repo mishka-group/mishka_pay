@@ -128,11 +128,32 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp setup_customer(_chosen), do: %{}
   # A hosted page sends the buyer back to one of two pages; an embedded form to its return page.
+  # The page the buyer comes back to names the session as `session_id`, unless the caller put
+  # Stripe's `{CHECKOUT_SESSION_ID}` in it already: `MishkaPay.return_checkout_id/2` reads it.
   defp ui_params(%Checkout{ui_mode: :embedded} = checkout),
-    do: %{"ui_mode" => "embedded_page", "return_url" => checkout.return_url}
+    do: %{"ui_mode" => "embedded_page", "return_url" => with_session(checkout.return_url)}
 
   defp ui_params(checkout),
-    do: %{"success_url" => checkout.success_url, "cancel_url" => checkout.cancel_url}
+    do: %{
+      "success_url" => with_session(checkout.success_url),
+      "cancel_url" => checkout.cancel_url
+    }
+
+  @session "{CHECKOUT_SESSION_ID}"
+
+  @doc false
+  @spec with_session(String.t() | nil) :: String.t() | nil
+  def with_session(nil), do: nil
+
+  def with_session(url) do
+    case String.contains?(url, @session) do
+      true ->
+        url
+
+      false ->
+        url <> if(String.contains?(url, "?"), do: "&", else: "?") <> "session_id=" <> @session
+    end
+  end
 
   # The checkout's own choice, else the tenant's default, else the Stripe account's (not sent).
   defp automatic_tax(%{automatic_tax: choice}, _settings) when is_boolean(choice),

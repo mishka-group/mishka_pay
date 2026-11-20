@@ -105,6 +105,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 |---|---|
 | `MishkaPay.checkout(attrs)` | `{:ok, %MishkaPay.Checkout{url: url}}`: redirect the buyer to `url` |
 | `MishkaPay.fetch_checkout(provider, checkout_id, tenant)` | the checkout read back, with `:payment_id` or `:subscription_id` once paid |
+| `MishkaPay.return_checkout_id(provider, params)` | `{:ok, checkout_id}` from the query of the page the buyer came back to (Stripe's `session_id`, PayPal's `token` or `subscription_id`), so one success page serves every provider; none is `Errors.Invalid` on `:checkout_id` |
 | `MishkaPay.fetch_payment(provider, payment_id, tenant)` | `%MishkaPay.Payment{}` with status, buyer, card, refunds |
 | `MishkaPay.checkout(%{ui_mode: :embedded, return_url: url, ...})` | `%MishkaPay.Checkout{client_secret: secret}`: the provider's form inside the site's page |
 | `MishkaPay.capture_payment(provider, payment_id, tenant, amount: money)`, `cancel_payment/3` | the `%MishkaPay.Payment{}` after: a held (`:authorized`) payment taken, all or part, or let go |
@@ -217,7 +218,11 @@ redirect(conn, external: checkout.url)
 - A **saved card** is a checkout with `mode: :setup` and a `currency:`, without items. It needs a
   provider with `:payment_method`. Name the customer with `customer: %{id: id}`, or the provider
   makes one. Options of a sale (discounts, tax, trial, invoice) are refused in setup mode.
-- A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
+- A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`. One success page serves
+  every provider: Stripe gets `session_id={CHECKOUT_SESSION_ID}` added when the URL has no
+  `{CHECKOUT_SESSION_ID}`, PayPal gets the URL without that placeholder (it adds its own
+  `token`), and the page reads the id with `MishkaPay.return_checkout_id/2`, then
+  `fetch_checkout/3`.
 - **Embedded:** `ui_mode: :embedded` shows the provider's form inside the site's own page. It takes
   one `return_url` instead of `success_url` and `cancel_url`, and answers `:client_secret` (no
   `:url`). Give the secret to that buyer's page only; Stripe.js mounts the form with it. The

@@ -713,6 +713,18 @@ defmodule MishkaPay.Providers.Stripe do
     end
   end
 
+  # The session id Stripe put in the return URL: in `session_id` (as Mishka Pay adds it), or in a
+  # parameter of the caller's own naming.
+  @impl MishkaPay.Provider
+  def return_checkout_id(params) do
+    candidates = [params["session_id"] | Map.values(params)]
+
+    case Enum.find(candidates, &(is_binary(&1) and String.starts_with?(&1, "cs_"))) do
+      nil -> invalid(:checkout_id, Messages.text(:return_no_checkout))
+      id -> with :ok <- stripe_id(id, "cs_", :checkout_id), do: {:ok, id}
+    end
+  end
+
   @impl MishkaPay.Provider
   def fetch_payment(payment_id, keys) do
     with {:ok, payment} <- read_payment(payment_id, keys),

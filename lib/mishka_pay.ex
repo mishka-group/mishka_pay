@@ -156,6 +156,34 @@ defmodule MishkaPay do
     end)
   end
 
+  @doc """
+  The checkout id `provider` put in the query of the page the buyer came back to (`params`, such
+  as a LiveView's `handle_params/3` params), so one success page serves every provider and then
+  calls `fetch_checkout/3` with it: Stripe's `session_id` (Mishka Pay adds
+  `session_id={CHECKOUT_SESSION_ID}` to a success or return URL that has no
+  `{CHECKOUT_SESSION_ID}`), PayPal's `token` (an Order) or `subscription_id`. A query naming
+  none is `Errors.Invalid` on `:checkout_id`; a provider that cannot say, `Errors.Unsupported`.
+
+      with {:ok, id} <- MishkaPay.return_checkout_id(provider, params),
+           {:ok, checkout} <- MishkaPay.fetch_checkout(provider, id, site.id),
+           do: show(checkout)
+  """
+  @spec return_checkout_id(String.t(), map()) :: {:ok, String.t()} | {:error, Splode.Error.t()}
+  def return_checkout_id(provider, params) when is_binary(provider) and is_map(params) do
+    params = Map.new(params, fn {name, value} -> {to_string(name), value} end)
+
+    with {:ok, module} <- Provider.capable(provider, :checkout) do
+      case function_exported?(module, :return_checkout_id, 1) do
+        true ->
+          module.return_checkout_id(params)
+
+        false ->
+          {:error,
+           Errors.Unsupported.exception(provider: provider, operation: :return_checkout_id)}
+      end
+    end
+  end
+
   @doc "Reads payment `payment_id` again from `provider`, with `tenant`'s keys."
   @spec fetch_payment(String.t(), String.t(), term()) ::
           {:ok, MishkaPay.Payment.t()} | {:error, Splode.Error.t()}
