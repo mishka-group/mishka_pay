@@ -251,6 +251,29 @@ defmodule MishkaPay.WebhookTest do
     refute Map.has_key?(meta, :tenant)
   end
 
+  test "every answer is followed by its answer time, with a tenant only once proven" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :webhook, :answered]])
+    body = payload()
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+
+    assert_received {[:mishka_pay, :webhook, :answered], ^ref,
+                     %{answer_ms: ms, duration: duration},
+                     %{status: 200, tenant: "site-a", outcome: :ok}}
+
+    assert ms >= 0 and duration > 0
+
+    for {path, status} <- [
+          {"/pay/webhooks/stripe/made-up-tenant", 400},
+          {"/pay/webhooks/nope/site-a", 404}
+        ] do
+      assert post(path, body, signed(body)).status == status
+      assert_received {[:mishka_pay, :webhook, :answered], ^ref, %{answer_ms: _}, meta}
+      assert meta.status == status
+      refute Map.has_key?(meta, :tenant)
+    end
+  end
+
   test "the plug must be given a path of its own" do
     for opts <- [[], [at: "/"], [at: ""]] do
       assert_raise ArgumentError, ~r/path of its own/, fn -> Webhook.init(opts) end

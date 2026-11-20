@@ -9,6 +9,7 @@ defmodule MishkaPay.Support.Domain do
 
   resources do
     resource MishkaPay.Support.WebhookEvent
+    resource MishkaPay.Support.WebhookRejection
     resource MishkaPay.Support.Payment
     resource MishkaPay.Support.Subscription
     resource MishkaPay.Support.Customer

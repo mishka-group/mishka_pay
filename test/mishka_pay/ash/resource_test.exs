@@ -95,7 +95,7 @@ defmodule MishkaPay.Ash.ResourceTest do
                      compile(quote(do: [kind: :payment, tenant_from: :site_id]))
                    end
 
-      assert_raise Spark.Error.DslError, ~r/An :inbox stays global/, fn ->
+      assert_raise Spark.Error.DslError, ~r/:inbox stays global/, fn ->
         compile(quote(do: [kind: :inbox, tenant_from: :site_id]))
       end
     end
@@ -114,6 +114,8 @@ defmodule MishkaPay.Ash.ResourceTest do
 
       assert MishkaPay.Ash.listeners(Domain) == [
                WebhookEvent.MishkaPayListener,
+               WebhookEvent.MishkaPayAnswerListener,
+               MishkaPay.Support.WebhookRejection.MishkaPayListener,
                MishkaPay.Support.Payment.MishkaPayListener,
                MishkaPay.Support.Subscription.MishkaPayListener,
                MishkaPay.Support.Customer.MishkaPayListener,

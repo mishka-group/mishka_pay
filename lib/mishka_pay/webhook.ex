@@ -49,12 +49,23 @@ defmodule MishkaPay.Webhook do
   such a listener. The listeners run like the keys plugins, in a task that cannot take the request
   down.
 
+  ## After the answer
+
+  Once the answer went out, `mishka_pay:webhook:answered` (`MishkaPay.Events.webhook_answered/0`)
+  tells its listeners how long the request took from coming in to its answer (`:answer_ms`),
+  with the checked event, or, for a refused message, why (`:outcome`), never its body. The Ash
+  inbox writes the time on the event's row and the `:webhook_rejection` kind counts the refused
+  ones per provider, site, reason and day. A message to a provider that is not installed (404)
+  names no provider there, and a site without keys no tenant, so a stranger cannot add names.
+
   ## Telemetry
 
   `[:mishka_pay, :webhook, :start | :stop]` with `:provider`, and on `:stop` the `:status`, the
   `:outcome`, and for a checked event its `:tenant`, `:type` and `:id`. A tenant from the path is
   reported only once the signature proves it, so strangers cannot fill metrics with made-up ones.
-  Never a body.
+  `[:mishka_pay, :webhook, :answered]` follows once the answer went out, with the measurements
+  `:answer_ms` and `:duration` (native time units, from taking the request in to answering it)
+  and the same metadata. Never a body.
   """
 
   @behaviour Plug
@@ -119,35 +130,89 @@ defmodule MishkaPay.Webhook do
   end
 
   defp handle(conn, provider, tenant) do
+    started = System.monotonic_time()
     meta = %{provider: provider}
 
-    {conn, status} =
+    {conn, status, meta, answer} =
       :telemetry.span([:mishka_pay, :webhook], meta, fn ->
-        {conn, status, extra} = receive_event(conn, provider, tenant)
-        {{conn, status}, meta |> Map.merge(extra) |> Map.put(:status, status)}
+        {conn, status, extra, answer} = receive_event(conn, provider, tenant)
+        meta = meta |> Map.merge(extra) |> Map.put(:status, status)
+        {{conn, status, meta, answer}, meta}
       end)
 
-    conn |> send_resp(status, "") |> halt()
+    conn = conn |> send_resp(status, "") |> halt()
+    answered(answer, meta, started)
+    conn
   end
 
+  # The provider is checked before the body is read, so a refused message names a provider only
+  # when one is installed with webhooks.
   defp receive_event(conn, provider, tenant) do
-    with {:ok, payload, conn} <- raw_body(conn),
-         {:ok, module} <- Provider.capable(provider, :webhook),
-         {:ok, keys} <- Credentials.fetch(provider, tenant),
-         {:ok, event} <- module.verify_webhook(payload, conn.req_headers, keys) do
-      event = %{event | tenant: tenant}
+    answer = %{provider: nil, tenant: nil, event: nil, received_at: DateTime.utc_now()}
 
-      status = delivered(event)
-      {conn, status, %{outcome: outcome(status), tenant: tenant, type: event.type, id: event.id}}
-    else
-      {:error, :too_large, conn} -> {conn, 413, %{outcome: :too_large}}
-      {:error, error} -> {conn, status(error), %{outcome: reason(error)}}
+    case checked(conn, provider, tenant) do
+      {:ok, event, conn} ->
+        event = %{event | tenant: tenant, received_at: answer.received_at}
+        status = delivered(event)
+        outcome = outcome(status)
+        extra = %{outcome: outcome, tenant: tenant, type: event.type, id: event.id}
+        named = %{provider: provider, tenant: tenant, event: event, outcome: outcome}
+        {conn, status, extra, Map.merge(answer, named)}
+
+      {:error, :too_large, %Plug.Conn{} = conn} ->
+        named = %{provider: provider, outcome: :too_large}
+        {conn, 413, %{outcome: :too_large}, Map.merge(answer, named)}
+
+      {:error, error, named} ->
+        outcome = reason(error)
+
+        {conn, status(error), %{outcome: outcome},
+         Map.merge(answer, Map.put(named, :outcome, outcome))}
     end
   end
 
-  defp raw_body(%{private: %{mishka_pay_raw_body: body}} = conn), do: {:ok, body, conn}
+  # The checked event; or the refusal, with what of the path it may name: the provider once it is
+  # installed with webhooks, and the tenant once it has keys.
+  defp checked(conn, provider, tenant) do
+    with {:ok, module} <- capable(provider),
+         {:ok, payload, conn} <- raw_body(conn, provider),
+         {:ok, keys} <- keys(provider, tenant) do
+      case module.verify_webhook(payload, conn.req_headers, keys) do
+        {:ok, event} -> {:ok, event, conn}
+        {:error, error} -> {:error, error, %{provider: provider, tenant: tenant}}
+      end
+    end
+  end
 
-  defp raw_body(conn) do
+  defp capable(provider) do
+    with {:error, error} <- Provider.capable(provider, :webhook), do: {:error, error, %{}}
+  end
+
+  defp keys(provider, tenant) do
+    with {:error, error} <- Credentials.fetch(provider, tenant),
+         do: {:error, error, %{provider: provider}}
+  end
+
+  defp answered(answer, meta, started) do
+    duration = System.monotonic_time() - started
+    answer_ms = System.convert_time_unit(duration, :native, :millisecond)
+
+    :telemetry.execute(
+      [:mishka_pay, :webhook, :answered],
+      %{answer_ms: answer_ms, duration: duration},
+      meta
+    )
+
+    timeout = Application.get_env(:mishka_pay, :webhook_timeout, 15_000)
+    state = Map.merge(answer, %{status: meta.status, answer_ms: answer_ms})
+    _answer = Plugins.call(Events.webhook_answered(), state, timeout)
+    :ok
+  end
+
+  defp raw_body(%{private: %{mishka_pay_raw_body: body}} = conn, _provider),
+    do: {:ok, body, conn}
+
+  defp raw_body(conn, provider) do
     case Plug.Conn.read_body(conn, length: @max_body) do
       {:ok, body, conn} ->
         {:ok, body, conn}
@@ -156,7 +221,8 @@ defmodule MishkaPay.Webhook do
         {:error, :too_large, conn}
 
       {:error, _reason} ->
-        {:error, Errors.BadSignature.exception(provider: nil, reason: :malformed)}
+        {:error, Errors.BadSignature.exception(provider: nil, reason: :malformed),
+         %{provider: provider}}
     end
   end
 

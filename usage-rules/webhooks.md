@@ -84,10 +84,29 @@ and per call:
 | 500 | a listener failed, raised, exited or took over 15 s | sends again later |
 
 An unknown tenant gets the same 400 as a bad signature, so strangers cannot tell which sites exist.
+The provider is checked first: a path naming no installed provider with webhooks is 404 before
+the body is read.
 A tenant whose keys name a connected account (`account_id`) gets 400 (`:account`) for an event
 about any other account; the platform's own URL takes its connected accounts' events with
 `event.account` set (`usage-rules/stripe.md`, Connect).
-A refused message is never stored.
+A refused message is never stored: the Ash layer only counts it (below).
+
+## After the answer: answer time and refused messages
+
+Once the answer went out, `mishka_pay:webhook:answered` (`MishkaPay.Events.webhook_answered/0`)
+gets `%{provider:, tenant:, event:, status:, outcome:, answer_ms:, received_at:}`: the checked
+`MishkaPay.Event` (`nil` when refused) and the milliseconds from taking the request in to
+answering it. `:provider` is `nil` for a 404 and `:tenant` is set only when the tenant has keys,
+so neither can be made up. Telemetry `[:mishka_pay, :webhook, :answered]` carries `:answer_ms`
+and `:duration` with the `:stop` metadata.
+
+- The Ash inbox writes `:answer_ms`, `:answer_status` and `:received_at` on the event's row
+  (`<Inbox>.MishkaPayAnswerListener`, listed by `MishkaPay.Ash.listeners/1`).
+- A resource of kind `:webhook_rejection` counts refused messages per provider, tenant (`nil`
+  for a site without keys), reason (`"mismatch"`, `"too_old"`, `"missing_credentials"`,
+  `"malformed"`, `"too_large"`...) and day, never their bodies; a 404 is not counted.
+- Without Ash, listen to `mishka_pay:webhook:answered` with your own plugin and answer
+  `{:reply, state}`; it runs after the provider got its answer, so it never slows it.
 
 ## The events that change anything
 

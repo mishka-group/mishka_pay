@@ -75,6 +75,7 @@ defmodule ShopWeb.ShopLive do
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
       ShopWeb.Endpoint.subscribe("pay:inbox")
+      ShopWeb.Endpoint.subscribe("pay:rejections")
     end
 
     payments = payments("all")
@@ -98,6 +99,7 @@ defmodule ShopWeb.ShopLive do
      |> assign_last()
      |> stream(:payments, payments)
      |> stream(:inbox, newest_rows(WebhookEvent))
+     |> assign(rejections: rejections())
      |> stream(:telemetry, [], limit: 40)}
   end
 
@@ -419,6 +421,9 @@ defmodule ShopWeb.ShopLive do
   def handle_info(%Phoenix.Socket.Broadcast{topic: "pay:inbox", payload: notification}, socket),
     do: {:noreply, stream_insert(socket, :inbox, notification.data, at: 0)}
 
+  def handle_info(%Phoenix.Socket.Broadcast{topic: "pay:rejections"}, socket),
+    do: {:noreply, assign(socket, rejections: rejections())}
+
   @impl true
   def handle_async(:checkout_back, {:ok, {:ok, checkout, kept}}, socket),
     do: {:noreply, socket |> assign(checkout_read: checkout) |> kept(kept)}
@@ -630,6 +635,7 @@ defmodule ShopWeb.ShopLive do
         <section class="min-w-0" data-testid="inbox">
           <.section_title icon="hero-inbox-arrow-down" title="Webhook inbox" />
           <.inbox_table events={@streams.inbox} />
+          <.rejections_table rejections={@rejections} />
         </section>
         <section class="min-w-0" data-testid="telemetry">
           <.section_title icon="hero-signal" title="Telemetry, live" />
@@ -968,6 +974,16 @@ defmodule ShopWeb.ShopLive do
   defp filter_status(query, status) do
     status = String.to_existing_atom(status)
     Ash.Query.filter(query, status == ^status)
+  end
+
+  # The refused webhook messages of the last week, newest day first.
+  defp rejections do
+    since = Date.add(Date.utc_today(), -7)
+
+    Shop.Pay.WebhookRejection
+    |> Ash.Query.filter(day >= ^since)
+    |> Ash.Query.sort(day: :desc, count: :desc)
+    |> Ash.read!(authorize?: false)
   end
 
   defp newest_rows(resource) do

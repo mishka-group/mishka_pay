@@ -8,6 +8,7 @@ defmodule Shop.Pay do
 
   resources do
     resource Shop.Pay.WebhookEvent
+    resource Shop.Pay.WebhookRejection
     resource Shop.Pay.Payment
     resource Shop.Pay.Subscription
     resource Shop.Pay.Customer

@@ -33,8 +33,8 @@ defmodule Mix.Tasks.MishkaPay.Install.Docs do
 
     Options:
 
-      * `--ash`: the Ash layer: a `<App>.Pay` domain with the webhook inbox, payments,
-        subscriptions, customers and disputes as resources of the project
+      * `--ash`: the Ash layer: a `<App>.Pay` domain with the webhook inbox, the count of refused
+        webhook messages, payments, subscriptions, customers and disputes as resources of the project
         (`MishkaPay.Ash.Resource`), the listener the extension makes for each in the application's
         children, the inbox's Oban queue, `config :ash, default_string_length_count: :codepoints`
         when the project has no such setting, and `:mishka_pay` in the formatter's `import_deps`
@@ -63,6 +63,7 @@ if Code.ensure_loaded?(Igniter) do
 
     @resources [
       {"WebhookEvent", :inbox, "pay_webhook_events"},
+      {"WebhookRejection", :webhook_rejection, "pay_webhook_rejections"},
       {"Payment", :payment, "pay_payments"},
       {"Subscription", :subscription, "pay_subscriptions"},
       {"Customer", :customer, "pay_customers"},
@@ -272,6 +273,10 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
+    # The listeners `MishkaPay.Ash.Resource` makes for a kind (`MishkaPay.Ash.Resource.Kinds.listeners/1`).
+    defp listeners(:inbox), do: [MishkaPayListener, MishkaPayAnswerListener]
+    defp listeners(_kind), do: [MishkaPayListener]
+
     defp ash(igniter, app_name, admin?) do
       resources = @resources ++ ((admin? && @admin_resources) || [])
 
@@ -286,12 +291,16 @@ if Code.ensure_loaded?(Igniter) do
                                                                                igniter ->
           resource = Module.concat(domain, name)
 
-          igniter
-          |> create_once(resource, resource_body(domain, kind, table, repo))
-          |> add_resource(domain, resource)
-          |> Application.add_new_child(Module.concat(resource, MishkaPayListener),
-            after: [MishkaPay.Registry]
-          )
+          igniter =
+            igniter
+            |> create_once(resource, resource_body(domain, kind, table, repo))
+            |> add_resource(domain, resource)
+
+          Enum.reduce(listeners(kind), igniter, fn listener, igniter ->
+            Application.add_new_child(igniter, Module.concat(resource, listener),
+              after: [MishkaPay.Registry]
+            )
+          end)
         end)
 
       igniter

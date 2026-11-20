@@ -462,7 +462,7 @@ end
 ```
 
 The event names live in `MishkaPay.Events` (`checkout_before/0`, `credentials/0`,
-`webhook_received/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
+`webhook_received/0`, `webhook_answered/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
 `customer_changed/0`, `dispute_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
 nothing. Supervise every listener like any child.
 

@@ -13,6 +13,7 @@ defmodule MishkaPay.Events do
   | `mishka_pay:credentials` | the host | gives the keys of a provider for one site |
   | `mishka_pay:checkout:before` | the host | changes or refuses a checkout before the provider sees it |
   | `mishka_pay:webhook:received` | the Ash inbox, or the host | a provider event whose signature was checked |
+  | `mishka_pay:webhook:answered` | the Ash inbox and rejection counter, or the host | a webhook request after it was answered: how long it took, or why it was refused |
   | `mishka_pay:event:process` | the host, or a payment resource | works one event the Ash inbox stored |
   | `mishka_pay:payment:changed` | the host | a payment's state after it was synced from the provider |
   | `mishka_pay:subscription:changed` | the host | a subscription's state after it was synced, cancelled or resumed |
@@ -44,6 +45,21 @@ defmodule MishkaPay.Events do
   """
   @spec webhook_received() :: String.t()
   def webhook_received, do: "mishka_pay:webhook:received"
+
+  @doc """
+  Fired once a webhook request was answered, after the answer went out, so nothing here slows it
+  down. Listeners get `%{provider: id, tenant: tenant, event: event, status: status, outcome:
+  outcome, answer_ms: ms, received_at: time}`: `:event` is the checked `MishkaPay.Event` (`nil`
+  for a refused message), `:status` the HTTP status sent, `:outcome` `:ok`, `:failed` or why
+  it was refused (`:mismatch`, `:too_old`, `:missing_credentials`, `:too_large`...), and
+  `:answer_ms` the milliseconds from taking the request in to answering it. `:provider` is
+  `nil` when the path names no installed provider with webhooks, and `:tenant` is set only
+  when the tenant has keys, so a stranger cannot make up either. Never a body. The inbox records
+  the answer time on its row, and the `:webhook_rejection` kind counts the refused messages
+  (`MishkaPay.Ash.Resource`). Answer `{:reply, state}`.
+  """
+  @spec webhook_answered() :: String.t()
+  def webhook_answered, do: "mishka_pay:webhook:answered"
 
   @doc """
   The inbox (the `:inbox` kind of `MishkaPay.Ash.Resource`) fires this to work one stored event,

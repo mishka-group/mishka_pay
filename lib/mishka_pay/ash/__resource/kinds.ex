@@ -28,6 +28,7 @@ if Code.ensure_loaded?(Ash) do
             | :promotion_code
             | :payment_link
             | :invoice
+            | :webhook_rejection
     @type attribute :: {atom(), atom(), keyword()}
     @type action :: {atom(), Ash.Resource.Actions.action_type(), keyword()}
 
@@ -42,7 +43,8 @@ if Code.ensure_loaded?(Ash) do
       :coupon,
       :promotion_code,
       :payment_link,
-      :invoice
+      :invoice,
+      :webhook_rejection
     ]
 
     @objects MishkaPay.Ash.Object.Spec.kinds()
@@ -72,7 +74,7 @@ if Code.ensure_loaded?(Ash) do
     @pause_behaviors [:void, :keep_as_draft, :mark_uncollectible]
 
     # The inbox fields a webhook fills; the rest is the inbox's own bookkeeping.
-    @inbox_bookkeeping [:status, :last_error, :processed_at]
+    @inbox_bookkeeping [:status, :last_error, :processed_at, :answer_ms, :answer_status]
 
     # Every provider object keeps these three; a sync writes all its other attributes.
     @object_keys [:provider, :provider_id, :tenant]
@@ -92,7 +94,22 @@ if Code.ensure_loaded?(Ash) do
     def listener(:subscription), do: MishkaPay.Ash.Subscription.Listener
     def listener(:customer), do: MishkaPay.Ash.Customer.Listener
     def listener(:dispute), do: MishkaPay.Ash.Dispute.Listener
+    def listener(:webhook_rejection), do: MishkaPay.Ash.Rejection.Listener
     def listener(kind) when kind in @objects, do: MishkaPay.Ash.Object.Listener
+
+    @doc """
+    Every listener a resource of the kind gets, each as `{name, macro module}`: its
+    `MishkaPayListener`, and for the inbox also `MishkaPayAnswerListener`, which writes on each
+    event's row how long its webhook took to answer.
+    """
+    @spec listeners(kind()) :: [{atom(), module()}]
+    def listeners(:inbox),
+      do: [
+        {:MishkaPayListener, listener(:inbox)},
+        {:MishkaPayAnswerListener, MishkaPay.Ash.Inbox.Answer}
+      ]
+
+    def listeners(kind), do: [{:MishkaPayListener, listener(kind)}]
 
     @doc """
     The code interface name of an action. `receive` is an Elixir special form, so the inbox's
@@ -119,10 +136,24 @@ if Code.ensure_loaded?(Ash) do
         {:livemode, :boolean, required(default: false)},
         {:account, :string, public()},
         {:provider_created_at, :utc_datetime_usec, public()},
+        {:received_at, :utc_datetime_usec, public()},
         {:status, :atom,
          required(constraints: [one_of: [:pending, :processed, :failed]], default: :pending)},
         {:last_error, :string, public()},
-        {:processed_at, :utc_datetime_usec, public()}
+        {:processed_at, :utc_datetime_usec, public()},
+        {:answer_ms, :integer, public()},
+        {:answer_status, :integer, public()}
+      ]
+    end
+
+    def attributes(:webhook_rejection) do
+      [
+        {:provider, :string, required()},
+        {:tenant, :string, public()},
+        {:reason, :string, required()},
+        {:day, :date, required()},
+        {:count, :integer, required(default: 1)},
+        {:last_at, :utc_datetime_usec, required()}
       ]
     end
 
@@ -311,6 +342,17 @@ if Code.ensure_loaded?(Ash) do
     def identity(:payment_link), do: {:provider_payment_link, [:provider, :provider_id]}
     def identity(:invoice), do: {:provider_invoice, [:provider, :provider_id]}
 
+    def identity(:webhook_rejection),
+      do: {:provider_rejection, [:provider, :tenant, :reason, :day]}
+
+    @doc """
+    The options of a kind's identity: a rejection's tenant may be nil (a site without keys), and
+    those rows count together, so its nils are not distinct.
+    """
+    @spec identity_options(kind()) :: keyword()
+    def identity_options(:webhook_rejection), do: [nils_distinct?: false]
+    def identity_options(_kind), do: []
+
     @doc """
     The calculations of a kind: its amounts as `Money`, and for a subscription `:active?` (gives
     access now, as `MishkaPay.Ash.Subscribed` counts it by default), `:on_trial?` and `:canceling?`
@@ -363,6 +405,7 @@ if Code.ensure_loaded?(Ash) do
     """
     @spec actions(kind(), keyword()) :: [action()]
     def actions(:inbox, opts), do: kind_actions(:inbox, opts)
+    def actions(:webhook_rejection, opts), do: kind_actions(:webhook_rejection, opts)
 
     # Every provider object's kind also re-reads one row from its provider: `:resync`, the
     # admin's refresh, and what the `resync_after` trigger runs.
@@ -392,12 +435,33 @@ if Code.ensure_loaded?(Ash) do
         {:process, :update,
          [require_atomic?: false, changes: [change(MishkaPay.Ash.Inbox.Process)]]},
         {:note_error, :update, [accept: [:last_error]]},
+        {:answered, :update, [accept: [:answer_ms, :answer_status]]},
         {:forget, :destroy, []},
         {:fail, :update,
          [
            require_atomic?: false,
            arguments: [argument(:error, :term)],
            changes: [change(MishkaPay.Ash.Inbox.Fail)]
+         ]}
+      ]
+    end
+
+    # One more refused message of its provider, site, reason and day: the first makes the row, each
+    # later one adds one to its count in the same statement.
+    defp kind_actions(:webhook_rejection, _opts) do
+      [
+        {:count, :create,
+         [
+           accept: [:provider, :tenant, :reason, :day, :last_at],
+           upsert?: true,
+           upsert_identity: :provider_rejection,
+           upsert_fields: [:last_at],
+           changes: [
+             change(
+               {Ash.Resource.Change.Atomic,
+                attribute: :count, expr: Ash.Expr.expr(count + 1), cast_atomic?: true}
+             )
+           ]
          ]}
       ]
     end

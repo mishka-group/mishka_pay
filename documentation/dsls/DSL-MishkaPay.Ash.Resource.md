@@ -54,7 +54,9 @@ It holds the event's provider, tenant, id, type, object, payment, subscription, 
 and time (see `MishkaPay.Event`), its `:status` (`:pending`, `:processed`, `:failed`), the
 `:last_error` (kept from each failed try, while it is still tried again) and when it was
 processed. An identity on provider and event id keeps each event once, however often the
-provider sends it.
+provider sends it. `:received_at` is when the webhook took the request in, and
+`:answer_ms` and `:answer_status` how long it took to answer it and with which status,
+written by `:answered` once the answer went out (`mishka_pay:webhook:answered`).
 
 1. `:receive` stores it (a second delivery finds the first) and starts the `:process` trigger.
 2. `:process` fires `mishka_pay:event:process` (`MishkaPay.Events.event_process/0`) with the
@@ -65,7 +67,17 @@ provider sends it.
 3. After the last try, `:fail` marks it `:failed` with the reason, for a person to look at.
 
 The trigger's worker and scheduler are `<Resource>.MishkaPayWorker` and
-`<Resource>.MishkaPayScheduler`. Its listener stores each event `MishkaPay.Webhook` checked.
+`<Resource>.MishkaPayScheduler`. Its listener stores each event `MishkaPay.Webhook` checked,
+and `<Resource>.MishkaPayAnswerListener` writes its answer time (`MishkaPay.Ash.Inbox.Answer`).
+
+## `:webhook_rejection`
+
+Counts the webhook messages `MishkaPay.Webhook` refused, never keeping their bodies: one row
+per `:provider`, `:tenant` (`nil` for a site without keys), `:reason` (`"mismatch"`,
+`"too_old"`, `"missing_credentials"`, `"malformed"`, `"too_large"`...) and `:day`, with its
+`:count` and `:last_at`. Its listener (`MishkaPay.Ash.Rejection.Listener`) runs `:count`, an
+upsert that adds one in the same statement. Messages to a provider that is not installed are
+not counted, so a stranger cannot add rows. Keep it global, like the inbox.
 
 ## `:payment`
 
@@ -155,11 +167,12 @@ Its listener syncs the dispute of each `charge.dispute.*` event.
 
 ## Options
 
-* `:kind` - Required. What the resource keeps: `:inbox` (each checked webhook event), `:payment`,
-  `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin:
+* `:kind` - Required. What the resource keeps: `:inbox` (each checked webhook event), `:webhook_rejection` (a
+  count of the webhook messages refused), `:payment`, `:subscription`, `:customer` or
+  `:dispute`; or what a site manages from its admin:
   `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice`
   (`MishkaPay.Ash.Object.Spec`).
-   Valid values are :inbox, :payment, :subscription, :customer, :dispute, :product, :price, :coupon, :promotion_code, :payment_link, :invoice
+   Valid values are :inbox, :payment, :subscription, :customer, :dispute, :product, :price, :coupon, :promotion_code, :payment_link, :invoice, :webhook_rejection
 
 * `:actions` (list of `t:atom/0`) - Only these actions of the kind, besides the primary `:read`. Every action of the kind
   when left out. An `:inbox` needs all of its own.
@@ -223,7 +236,7 @@ end
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`kind`](#mishka_pay-kind){: #mishka_pay-kind .spark-required} | `:inbox \| :payment \| :subscription \| :customer \| :dispute \| :product \| :price \| :coupon \| :promotion_code \| :payment_link \| :invoice` |  | What the resource keeps: `:inbox` (each checked webhook event), `:payment`, `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin: `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice` (`MishkaPay.Ash.Object.Spec`). |
+| [`kind`](#mishka_pay-kind){: #mishka_pay-kind .spark-required} | `:inbox \| :payment \| :subscription \| :customer \| :dispute \| :product \| :price \| :coupon \| :promotion_code \| :payment_link \| :invoice \| :webhook_rejection` |  | What the resource keeps: `:inbox` (each checked webhook event), `:webhook_rejection` (a count of the webhook messages refused), `:payment`, `:subscription`, `:customer` or `:dispute`; or what a site manages from its admin: `:product`, `:price`, `:coupon`, `:promotion_code`, `:payment_link` or `:invoice` (`MishkaPay.Ash.Object.Spec`). |
 | [`actions`](#mishka_pay-actions){: #mishka_pay-actions } | `list(atom)` |  | Only these actions of the kind, besides the primary `:read`. Every action of the kind when left out. An `:inbox` needs all of its own. |
 | [`listen?`](#mishka_pay-listen?){: #mishka_pay-listen? } | `boolean` | `true` | Makes `<Resource>.MishkaPayListener`, the webhook listener that keeps the resource current. `MishkaPay.Ash.listeners/1` lists them for the application's children. |
 | [`announce?`](#mishka_pay-announce?){: #mishka_pay-announce? } | `boolean` | `true` | Fires `mishka_pay:<kind>:changed` after each write the provider answered. The inbox announces nothing either way. |

@@ -13,8 +13,10 @@ defmodule MishkaPay.Ash.InboxTest do
 
   alias MishkaPay.{Event, Webhook}
   alias MishkaPay.Providers.Stripe
-  alias MishkaPay.Support.{EventWorker, WebhookEvent}
+  alias MishkaPay.Support.{EventWorker, WebhookEvent, WebhookRejection}
+  alias MishkaPay.Support.WebhookEvent.MishkaPayAnswerListener, as: InboxAnswer
   alias MishkaPay.Support.WebhookEvent.MishkaPayListener, as: Inbox
+  alias MishkaPay.Support.WebhookRejection.MishkaPayListener, as: Rejections
 
   @event "test/fixtures/stripe/event.json" |> File.read!() |> JSON.decode!()
   @secret "whsec_test_site_a"
@@ -46,6 +48,69 @@ defmodule MishkaPay.Ash.InboxTest do
 
   defp work,
     do: Oban.drain_queue(queue: :mishka_pay_inbox, with_scheduled: true, with_recursion: true)
+
+  test "the inbox row keeps when its webhook came in and how long it took to answer" do
+    MishkaPay.Test.start_plugin!(InboxAnswer)
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :webhook, :answered]])
+    before = DateTime.utc_now()
+
+    assert deliver(%{"id" => "evt_timed"}).status == 200
+
+    assert_received {[:mishka_pay, :webhook, :answered], ^ref, %{answer_ms: answer_ms},
+                     %{status: 200, outcome: :ok, tenant: "site-a", id: "evt_timed"}}
+
+    assert [%{event_id: "evt_timed", answer_ms: ^answer_ms, answer_status: 200} = row] = stored()
+    assert DateTime.compare(row.received_at, before) != :lt
+    assert answer_ms >= 0
+  end
+
+  test "Mishka Pay's listeners of a domain include the inbox's answer listener and the rejection counter" do
+    listeners = MishkaPay.Ash.listeners(MishkaPay.Support.Domain)
+    assert Inbox in listeners and InboxAnswer in listeners and Rejections in listeners
+    assert MishkaPay.Ash.Resource.Info.listeners(WebhookEvent) == [Inbox, InboxAnswer]
+  end
+
+  test "refused messages are counted per provider, site, reason and day, and never stored" do
+    MishkaPay.Test.start_plugin!(Rejections)
+    MishkaPay.Test.start_plugin!(InboxAnswer)
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :webhook, :answered]])
+
+    body = JSON.encode!(Map.put(@event, "id", "evt_forged"))
+    time = System.system_time(:second)
+
+    forged = fn path ->
+      conn(:post, path, body)
+      |> put_req_header("stripe-signature", "t=#{time},v1=#{String.duplicate("0", 64)}")
+      |> Webhook.call(@opts)
+    end
+
+    assert forged.("/pay/webhooks/stripe/site-a").status == 400
+    assert forged.("/pay/webhooks/stripe/site-a").status == 400
+    assert forged.("/pay/webhooks/stripe/no-such-site").status == 400
+    assert forged.("/pay/webhooks/stripe/another-unknown").status == 400
+    assert forged.("/pay/webhooks/acme-not-installed/site-a").status == 404
+
+    for _five <- 1..5 do
+      assert_received {[:mishka_pay, :webhook, :answered], ^ref, %{answer_ms: _}, %{status: _}}
+    end
+
+    assert stored() == []
+    today = Date.utc_today()
+
+    assert [
+             %{
+               provider: "stripe",
+               tenant: nil,
+               reason: "missing_credentials",
+               count: 2,
+               day: ^today
+             },
+             %{provider: "stripe", tenant: "site-a", reason: "mismatch", count: 2, day: ^today}
+           ] =
+             WebhookRejection
+             |> Ash.read!(authorize?: false)
+             |> Enum.sort_by(&{&1.tenant || "", &1.reason})
+  end
 
   test "an event is stored once, however often the provider sends it, and its job is queued" do
     assert deliver(%{"id" => "evt_once"}).status == 200

@@ -49,7 +49,7 @@ if Code.ensure_loaded?(Ash) do
         end)
         |> Builder.add_new_create_timestamp(:inserted_at)
         |> Builder.add_new_update_timestamp(:updated_at)
-        |> identity(Kinds.identity(kind))
+        |> identity(kind)
         |> each(Kinds.calculations(kind), fn dsl, {name, type, calculation} ->
           Builder.add_new_calculation(dsl, name, type, calculation, public?: true)
         end)
@@ -131,9 +131,9 @@ if Code.ensure_loaded?(Ash) do
         {:error, _kind} ->
           {:ok, nil}
 
-        {{:ok, _attribute}, :inbox} ->
+        {{:ok, _attribute}, kind} when kind in [:inbox, :webhook_rejection] ->
           error(module, [:mishka_pay, :tenant_from], """
-          An :inbox stays global: a webhook arrives before any tenant is chosen. Leave
+          #{inspect(kind)} stays global: a webhook arrives before any tenant is chosen. Leave
           `tenant_from` out.
           """)
 
@@ -179,7 +179,14 @@ if Code.ensure_loaded?(Ash) do
       end
     end
 
-    defp identity(dsl, {name, fields}), do: Builder.add_new_identity(dsl, name, fields)
+    defp identity(dsl, kind),
+      do:
+        Builder.add_new_identity(
+          dsl,
+          elem(Kinds.identity(kind), 0),
+          elem(Kinds.identity(kind), 1),
+          Kinds.identity_options(kind)
+        )
 
     defp tenant_change(dsl, nil), do: dsl
 
@@ -295,24 +302,30 @@ if Code.ensure_loaded?(Ash) do
 
     # sobelow_skip ["DOS.ModuleConcat"]
     defp listener({:ok, dsl}, true, kind, module) do
-      listener = Module.concat(module, MishkaPayListener)
-      using = Kinds.listener(kind)
+      listeners =
+        for {name, using} <- Kinds.listeners(kind), do: {Module.concat(module, name), using}
 
-      doc =
-        "Keeps `#{inspect(module)}` current from the webhooks Mishka Pay checked (`#{inspect(using)}`)."
+      dsl =
+        dsl
+        |> Transformer.persist(:mishka_pay_listener, listeners |> hd() |> elem(0))
+        |> Transformer.persist(:mishka_pay_listeners, Enum.map(listeners, &elem(&1, 0)))
 
       {:ok,
-       dsl
-       |> Transformer.persist(:mishka_pay_listener, listener)
-       |> Transformer.eval(
-         [],
-         quote do
-           defmodule unquote(listener) do
-             @moduledoc unquote(doc)
-             use unquote(using), resource: unquote(module), kind: unquote(kind)
+       Enum.reduce(listeners, dsl, fn {listener, using}, dsl ->
+         doc =
+           "Keeps `#{inspect(module)}` current from the webhooks Mishka Pay checked (`#{inspect(using)}`)."
+
+         Transformer.eval(
+           dsl,
+           [],
+           quote do
+             defmodule unquote(listener) do
+               @moduledoc unquote(doc)
+               use unquote(using), resource: unquote(module), kind: unquote(kind)
+             end
            end
-         end
-       )}
+         )
+       end)}
     end
 
     defp listener(result, _listen?, _kind, _module), do: result
