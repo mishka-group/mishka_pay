@@ -3715,6 +3715,27 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert map_size(eu) == 3
 
+      midnight = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+      tomorrow = DateTime.add(midnight, 1, :day)
+
+      for {start, sent} <- [
+            {midnight, "now"},
+            {DateTime.utc_now(), "now"},
+            {tomorrow, tomorrow |> DateTime.to_unix() |> Integer.to_string()}
+          ] do
+        assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
+                 MishkaPay.create_tax_registration(%{
+                   provider: "stripe",
+                   tenant: "site-a",
+                   country: "DE",
+                   type: "oss_union",
+                   active_from: start
+                 })
+
+        assert_received {:stripe_sent, "POST", "/v1/tax/registrations", %{"active_from" => ^sent},
+                         _key}
+      end
+
       ends = ~U[2030-01-01 00:00:00Z]
 
       assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
@@ -3841,6 +3862,12 @@ defmodule MishkaPay.Providers.StripeTest do
                country: "US",
                type: "state_sales_tax"
              }), :state},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "DE",
+               type: "oss_union",
+               active_from: DateTime.add(DateTime.utc_now(), -1, :day)
+             }), :active_from},
             {MishkaPay.create_tax_registration(%{
                provider: "stripe",
                country: "CA",
@@ -4450,6 +4477,32 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Money.equal?(out, Money.new(:USD, "-100.00"))
       assert Money.equal?(fee, Money.new(:USD, "0.25"))
       assert Money.equal?(net, Money.new(:USD, "-100.25"))
+    end
+
+    test "a registration's start earlier today is Stripe's now; a later moment stays, an earlier day is refused" do
+      now = ~U[2026-11-20 15:30:00Z]
+      registration = %MishkaPay.TaxSettings.Registration{provider: "stripe", country: "DE"}
+
+      assert {:ok, %{active_from: nil}} =
+               Stripe.registration_start(
+                 %{registration | active_from: ~U[2026-11-20 00:00:00Z]},
+                 now
+               )
+
+      assert {:ok, %{active_from: nil}} =
+               Stripe.registration_start(%{registration | active_from: now}, now)
+
+      assert {:ok, %{active_from: ~U[2026-11-20 18:00:00Z]}} =
+               Stripe.registration_start(
+                 %{registration | active_from: ~U[2026-11-20 18:00:00Z]},
+                 now
+               )
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :active_from}]}} =
+               Stripe.registration_start(
+                 %{registration | active_from: ~U[2026-11-19 23:59:59Z]},
+                 now
+               )
     end
 
     test "a balance movement names the payment its charge, refund or dispute belongs to" do

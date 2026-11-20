@@ -148,6 +148,7 @@ defmodule MishkaPay.Messages do
           | :payout_interval_days
           | :delay_days_most
           | :payment_id_alone
+          | :registration_past
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
@@ -765,6 +766,13 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:delay_days),
     do: dgettext_noop("mishka_pay", "The delay_days field takes a number of days, or :default")
+
+  defp msgid(:registration_past),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax registration starts today or later: leave active_from out to start it now"
+      )
 
   defp msgid(:payment_id_alone),
     do:

@@ -1613,6 +1613,7 @@ defmodule MishkaPay.Providers.Stripe do
   def create_tax_registration(%MishkaPay.TaxSettings.Registration{} = registration, keys) do
     with :ok <- registration_state(registration),
          :ok <- registration_scheme(registration),
+         {:ok, registration} <- registration_start(registration, DateTime.utc_now()),
          {:ok, answer} <-
            request(
              :post,
@@ -1658,6 +1659,22 @@ defmodule MishkaPay.Providers.Stripe do
     with {:ok, answer} <-
            request(:post, "/v1/tax/settings", Mapper.tax_settings_params(settings), keys) do
       Mapper.tax_settings(answer)
+    end
+  end
+
+  # Stripe takes a start that is `now` or later: a start earlier today (its midnight, as a date
+  # picked in a form gives) is sent as `now`, and an earlier day is refused before any request.
+  @doc false
+  @spec registration_start(MishkaPay.TaxSettings.Registration.t(), DateTime.t()) ::
+          {:ok, MishkaPay.TaxSettings.Registration.t()} | {:error, Splode.Error.t()}
+  def registration_start(%{active_from: nil} = registration, _now), do: {:ok, registration}
+
+  def registration_start(%{active_from: start} = registration, now) do
+    case {DateTime.compare(start, now),
+          Date.compare(DateTime.to_date(start), DateTime.to_date(now))} do
+      {:gt, _day} -> {:ok, registration}
+      {_now_or_before, :eq} -> {:ok, %{registration | active_from: nil}}
+      {_before, :lt} -> invalid(:active_from, Messages.text(:registration_past))
     end
   end
 

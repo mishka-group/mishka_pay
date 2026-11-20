@@ -31,7 +31,8 @@ defmodule ShopWeb.TaxSetupComponent do
     "country" => "DE",
     "type" => "standard",
     "state" => "",
-    "place_of_supply_scheme" => "standard"
+    "place_of_supply_scheme" => "standard",
+    "starts_on" => ""
   }
 
   # The registration kinds Stripe takes in each country (its API's `country_options`).
@@ -128,7 +129,8 @@ defmodule ShopWeb.TaxSetupComponent do
       country: form["country"],
       type: form["type"],
       state: if(state?(form), do: blank(form["state"])),
-      place_of_supply_scheme: if(scheme?(form), do: form["place_of_supply_scheme"])
+      place_of_supply_scheme: if(scheme?(form), do: form["place_of_supply_scheme"]),
+      active_from: starts(form["starts_on"])
     }
 
     case MishkaPay.create_tax_registration(attrs) do
@@ -223,6 +225,14 @@ defmodule ShopWeb.TaxSetupComponent do
 
   # The form as typed, with a kind the country takes and a scheme the kind takes: the first one
   # when the country or the kind changed.
+  # A date picked in the form is its midnight; Mishka Pay sends today's as Stripe's `now`.
+  defp starts(date) do
+    case Date.from_iso8601(to_string(date)) do
+      {:ok, day} -> DateTime.new!(day, ~T[00:00:00], "Etc/UTC")
+      {:error, _empty} -> nil
+    end
+  end
+
   defp registration_form(params) do
     form = Map.merge(@registration_form, Map.take(params, Map.keys(@registration_form)))
     country = form["country"] |> to_string() |> String.trim() |> String.upcase()
@@ -497,6 +507,16 @@ defmodule ShopWeb.TaxSetupComponent do
                 maxlength="2"
                 class="input input-sm w-24"
                 data-testid="tax-registration-state"
+              />
+            </label>
+            <label class="fieldset">
+              <span class="fieldset-legend">Starts on (empty: now)</span>
+              <input
+                type="date"
+                name="starts_on"
+                value={@registration_form["starts_on"]}
+                class="input input-sm"
+                data-testid="tax-registration-starts"
               />
             </label>
             <button class="btn btn-sm btn-primary" data-testid="tax-registration-create">

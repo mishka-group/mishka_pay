@@ -438,6 +438,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   AU, JP, IS and others) `:standard` or `:inbound_goods`.
   `MishkaPay.Providers.Stripe.place_of_supply_schemes/2` gives the list for a country and kind;
   any other scheme, kind or country is `Errors.Invalid` before any request.
+  `:active_from` left out, or earlier today (a date picked in a form is its midnight, which
+  Stripe refuses as a past start), is sent as Stripe's `now`; a later moment as itself; an
+  earlier day is `Errors.Invalid` on `:active_from` before any request.
   `expire_tax_registration/4` sets `expires_at` (`now` unless `at:`); Stripe never deletes one.
   A second registration of the same kind in a country is `Errors.Rejected`.
 - `fetch_tax_settings/2` and `update_tax_settings/1` are `GET` and `POST /v1/tax/settings`:

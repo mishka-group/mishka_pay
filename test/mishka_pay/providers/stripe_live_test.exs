@@ -2542,6 +2542,44 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   # When the last registration an earlier run left in `country` ends, if it still runs or waits.
+  # A form's date of today is its midnight, which Stripe refuses as a past start: the call sends it as
+  # `now`. Stripe takes one registration in a country at a time, so while an earlier run's still
+  # ends, only the refusal of an earlier day is checked.
+  test "a tax registration from today's midnight starts now, and one from yesterday is refused before Stripe",
+       %{key: key} do
+    midnight = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :active_from}]}} =
+             MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "NZ",
+               type: "standard",
+               active_from: DateTime.add(midnight, -1, :day)
+             })
+
+    if is_nil(earlier_end("NZ")) do
+      assert {:ok,
+              %MishkaPay.TaxSettings.Registration{
+                id: "taxreg_" <> _ = registration,
+                status: :active,
+                active_from: %DateTime{} = from
+              }} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 country: "NZ",
+                 type: "standard",
+                 active_from: midnight
+               })
+
+      on_exit(fn -> cleanup(key, &end_registration(registration, &1)) end)
+      assert DateTime.compare(from, midnight) == :gt
+      ends = from |> DateTime.add(60) |> DateTime.truncate(:second)
+
+      assert {:ok, %MishkaPay.TaxSettings.Registration{expires_at: ^ends}} =
+               MishkaPay.expire_tax_registration("stripe", registration, nil, at: ends)
+    end
+  end
+
   defp earlier_end(country) do
     {:ok, %MishkaPay.Page{items: registrations}} =
       MishkaPay.list_tax_registrations("stripe", nil, status: :all, limit: 100)
