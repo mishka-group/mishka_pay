@@ -128,9 +128,10 @@ defmodule MishkaPay.Providers.PayPal do
          :ok <- no_options(checkout),
          :ok <- named_prices(checkout.items),
          :ok <- currencies(checkout.items, :checkout),
+         params = Mapper.order_params(checkout),
          {:ok, order} <-
-           request(:post, "/v2/checkout/orders", Mapper.order_params(checkout), keys,
-             key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
+           request(:post, "/v2/checkout/orders", params, keys,
+             key: ProviderKit.request_key("checkout", checkout.tenant, checkout.reference, params)
            ) do
       {:ok, Mapper.checkout(order, checkout)}
     end

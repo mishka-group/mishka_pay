@@ -4920,6 +4920,76 @@ defmodule MishkaPay.Providers.StripeTest do
       refute same == other
     end
 
+    test "a checkout asked again with the same reference and other details is a new request, the same one sent twice is one" do
+      test = self()
+      seen = :ets.new(:stripe_keys, [:public])
+
+      # Stripe keeps a key's first params: the same key with other params is an idempotency_error,
+      # as the store met when it asked again without a customer account Stripe had refused.
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = Plug.Conn.Query.decode(body)
+        [key] = Plug.Conn.get_req_header(conn, "idempotency-key")
+        send(test, {:sent, key, params})
+
+        case {:ets.lookup(seen, key), params} do
+          {[{^key, first}], params} when first != params ->
+            conn
+            |> Plug.Conn.put_status(400)
+            |> Req.Test.json(%{
+              "error" => %{
+                "type" => "idempotency_error",
+                "message" =>
+                  "Keys for idempotent requests can only be used with the same parameters."
+              }
+            })
+
+          {_first_or_same, %{"customer_account" => account}} ->
+            :ets.insert(seen, {key, params})
+
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{
+              "error" => %{
+                "type" => "invalid_request_error",
+                "code" => "resource_missing",
+                "param" => "customer_account",
+                "message" => "No such customer_account: '#{account}'"
+              }
+            })
+
+          _new_or_same ->
+            :ets.insert(seen, {key, params})
+
+            Req.Test.json(conn, %{
+              "object" => "checkout.session",
+              "id" => "cs_test_again",
+              "url" => "https://checkout.stripe.com/c/pay/cs_test_again",
+              "mode" => "payment",
+              "status" => "open"
+            })
+        end
+      end)
+
+      with_account = %{@checkout | customer: %{id: "acct_refused"}, reference: "order-9"}
+
+      assert {:error, %Errors.Rejected{code: "resource_missing", param: "customer_account"}} =
+               MishkaPay.checkout(with_account)
+
+      assert_received {:sent, first_key, _params}
+
+      assert {:ok, %Checkout{id: "cs_test_again"}} =
+               MishkaPay.checkout(%{@checkout | reference: "order-9"})
+
+      assert_received {:sent, second_key, _params}
+      refute second_key == first_key
+
+      assert {:ok, %Checkout{id: "cs_test_again"}} =
+               MishkaPay.checkout(%{@checkout | reference: "order-9"})
+
+      assert_received {:sent, ^second_key, _params}
+    end
+
     test "refunding once: two refunds of one payment sent at once carry one key, so Stripe makes one" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
 

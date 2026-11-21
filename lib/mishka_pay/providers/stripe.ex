@@ -23,7 +23,10 @@ defmodule MishkaPay.Providers.Stripe do
       session; an account with Managed Payments on by default needs a tax code
       on every price. The caller's
       `:reference` goes to Stripe as `client_reference_id` and as metadata on the session and its
-      payment, and it makes the idempotency key, so the same reference never opens two sessions.
+      payment, and with the session's params it makes the idempotency key
+      (`MishkaPay.ProviderKit.request_key/4`), so the same request sent twice opens one session,
+      and the same reference asked again with other details (another customer after Stripe refused
+      the first) is a new request rather than a reused key.
     * `fetch_checkout/2` reads a Checkout Session back, with the PaymentIntent it made.
     * `capture: :automatic`, on a checkout or a PaymentIntent, is Stripe's `automatic_async`
       (its default and recommended way), `:automatic_sync` its older `automatic`; `:manual`
@@ -622,9 +625,10 @@ defmodule MishkaPay.Providers.Stripe do
          :ok <- shipping_rates(checkout.shipping_rates),
          :ok <- for_seller(checkout),
          :ok <- buyer_fits(checkout, keys),
+         params = Mapper.checkout_params(checkout, keys),
          {:ok, session} <-
-           request(:post, "/v1/checkout/sessions", Mapper.checkout_params(checkout, keys), keys,
-             key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
+           request(:post, "/v1/checkout/sessions", params, keys,
+             key: ProviderKit.request_key("checkout", checkout.tenant, checkout.reference, params)
            ) do
       {:ok, Mapper.checkout(session, checkout)}
     end

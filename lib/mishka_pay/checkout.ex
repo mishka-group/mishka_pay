@@ -25,8 +25,9 @@ defmodule MishkaPay.Checkout do
     * `:customer`: an optional buyer: `%{id: "cus_..."}` for a customer the provider keeps, or
       `%{email: "..."}` to fill in a new buyer's email; one or the other (`MishkaPay.Customer`).
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
-      it comes back on the payment, and it makes the request's idempotency key, so the same
-      reference never opens two checkouts.
+      it comes back on the payment, and with the request's details it makes the idempotency key,
+      so the same request sent twice never opens two checkouts, and the same reference asked again
+      with other details is a new request.
     * `:owner`: who the sale is for in the caller's app, such as the signed-in user's id. The
       provider keeps it on the payment or the subscription, and it comes back on either
       (`MishkaPay.Payment`, `MishkaPay.Subscription`), so access can be given to that user. The
