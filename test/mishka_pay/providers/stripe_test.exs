@@ -2276,6 +2276,25 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert get_in(params, ["line_items", Access.at(0), "price_data", "product_data", "tax_code"]) ==
                "txcd_10302000"
+
+      chosen =
+        Stripe.Mapper.checkout_params(%{
+          defaults
+          | items: [
+              %MishkaPay.Price{
+                name: "Ebook",
+                amount: Money.new(:USD, "7"),
+                quantity: 1,
+                product_id: "prod_ebook",
+                tax_code: "txcd_10302000"
+              }
+            ]
+        })
+
+      assert [%{"price_data" => price_data}] = chosen["line_items"]
+      assert price_data["product"] == "prod_ebook"
+      assert price_data["unit_amount"] == 700
+      refute Map.has_key?(price_data, "product_data")
     end
 
     test "checkout options and discounts are sent as Stripe's spec accepts, and a checkout is ended" do

@@ -405,24 +405,31 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp line_item(%Price{id: id, quantity: quantity} = price) when is_binary(id),
     do: reject_nil(%{"price" => id, "quantity" => quantity, "tax_rates" => price.tax_rate_ids})
 
-  defp line_item(
-         %Price{name: name, amount: amount, quantity: quantity, tax_code: tax_code} = price
-       ) do
+  defp line_item(%Price{amount: amount, quantity: quantity} = price) do
     %{
       "tax_rates" => price.tax_rate_ids,
       "price_data" =>
         %{
           "currency" => amount.currency |> to_string() |> String.downcase(),
           "unit_amount" => minor(amount),
-          "product_data" => %{"name" => name, "tax_code" => tax_code},
           "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
         }
         |> Map.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.merge(line_product(price))
         |> Map.merge(recurring(price)),
       "quantity" => quantity
     }
     |> reject_nil()
   end
+
+  # An inline price of a product Stripe already has names it, so the product's own name and tax
+  # code apply (Managed Payments refuses a line with no tax code); otherwise the product is made
+  # inline from the line's name and tax code.
+  defp line_product(%Price{product_id: product}) when is_binary(product),
+    do: %{"product" => product}
+
+  defp line_product(%Price{name: name, tax_code: tax_code}),
+    do: %{"product_data" => reject_nil(%{"name" => name, "tax_code" => tax_code})}
 
   defp recurring(%Price{interval: nil}), do: %{}
 

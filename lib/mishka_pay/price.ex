@@ -15,6 +15,10 @@ defmodule MishkaPay.Price do
       for a downloaded e-book. A provider that is the merchant of record (Stripe Managed
       Payments) needs it to work out the tax. A price the provider already knows (`:id`) carries
       its own tax code there, so this one is not sent with it.
+    * `:product_id`: on a checkout's line with its own `:amount`, the provider's id of a product
+      it already has: the line is charged at that amount for that product, whose own name and tax
+      code apply (`:name` and `:tax_code` are not sent). Left out, the line is a new product named
+      `:name`.
     * `:id`: the provider's own id of a price it already knows (`price_...` at Stripe). With it,
       the provider's price is used and `:name` and `:amount` may be left out.
     * `:tax_behavior`: `:exclusive` (tax is added on top, as in the US) or `:inclusive` (the
