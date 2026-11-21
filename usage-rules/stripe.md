@@ -451,6 +451,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 - A product may take the host's own `id` (`"ebook"`): letters, digits, `_` and `-`.
 - A Stripe price reads its name from its product (expanded), so a listed price says what it sells.
+- A price's `:currency_options` go as Stripe's `currency_options[<cur>][unit_amount]` and
+  `[tax_behavior]` (the price's own; Stripe gives an option none of its own otherwise), and are
+  read back on every create, fetch and list (`expand[]=currency_options`), the price's own
+  currency left out. Stripe adds an option on update but never removes one
+  (`parameter_invalid_empty`), so a change is a new price with `transfer_lookup_key: true`. A
+  checkout's `:currency` is the session's `currency`; a price with no amount in it is refused
+  by Stripe. A sold line and a subscription item read back in the currency they were charged in
+  (the line's subtotal for each one, the price's option for the subscription's currency).
 - A page's `:next` is the last item's id (Stripe's `starting_after`).
 - `list_payments/3` reads each PaymentIntent with its charge, refunds and customer, as
   `fetch_payment/3` does.

@@ -615,6 +615,7 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def checkout(%Checkout{} = checkout, keys) do
     with :ok <- currencies(checkout.items),
+         :ok <- catalog_currencies(checkout.items),
          :ok <- tax_rates(List.wrap(checkout.items)),
          :ok <- rates_without_automatic_tax(checkout, keys),
          :ok <- metadata(checkout.metadata),
@@ -631,6 +632,15 @@ defmodule MishkaPay.Providers.Stripe do
              key: ProviderKit.request_key("checkout", checkout.tenant, checkout.reference, params)
            ) do
       {:ok, Mapper.checkout(session, checkout)}
+    end
+  end
+
+  # Other currencies belong to a catalog price: a checkout line made with its own amount is charged
+  # in the checkout's one currency.
+  defp catalog_currencies(items) do
+    case Enum.find(List.wrap(items), &match?(%{currency_options: [_ | _]}, &1)) do
+      nil -> :ok
+      _line -> invalid(:items, Messages.text(:currency_options_catalog))
     end
   end
 
@@ -1338,6 +1348,7 @@ defmodule MishkaPay.Providers.Stripe do
     do: [
       {"expand[]", "customer"},
       {"expand[]", "items.data.price.product"},
+      {"expand[]", "items.data.price.currency_options"},
       {"expand[]", "default_payment_method"}
     ]
 
@@ -2108,7 +2119,7 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- line_rates_only([price]),
          :ok <- plain_id(price.product_id, :product_id),
          :ok <- maybe_id(price.meter_id, "mtr_", :meter_id),
-         :ok <- currencies([price]),
+         :ok <- currencies([price | Enum.map(price.currency_options || [], &%{amount: &1})]),
          :ok <- metadata(price.metadata),
          {:ok, answer} <- request(:post, "/v1/prices", Mapper.price_params(price), keys) do
       Mapper.price(answer)
@@ -2119,7 +2130,12 @@ defmodule MishkaPay.Providers.Stripe do
   def fetch_price(price_id, keys) do
     with :ok <- stripe_id(price_id, "price_", :price_id),
          {:ok, answer} <-
-           request(:get, "/v1/prices/#{price_id}", [{"expand[]", "product"}], keys) do
+           request(
+             :get,
+             "/v1/prices/#{price_id}",
+             [{"expand[]", "product"}, {"expand[]", "currency_options"}],
+             keys
+           ) do
       Mapper.price(answer)
     end
   end
@@ -2146,7 +2162,8 @@ defmodule MishkaPay.Providers.Stripe do
         product: opts[:product_id],
         "lookup_keys[]": opts[:lookup_key],
         active: opts[:active],
-        "expand[]": "data.product"
+        "expand[]": "data.product",
+        "expand[]": "data.currency_options"
       ]
 
       page("/v1/prices", filters, opts, keys, &Mapper.price/1)

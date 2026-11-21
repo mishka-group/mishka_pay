@@ -164,7 +164,7 @@ defmodule MishkaPay.Balance do
       field :weekly_days, list(), validator: {MishkaPay.Balance, :weekly_days}
       field :monthly_days, list(), validator: {MishkaPay.Balance, :monthly_days}
       field :delay_days, non_neg_integer() | :default, validator: {MishkaPay.Balance, :delay_days}
-      field :minimum_balances, list(), validator: {MishkaPay.Balance, :minimum_balances}
+      field :minimum_balances, list(), validator: {MishkaPay.Money, :list_field}
 
       field :statement_descriptor, String.t(),
         derives: "sanitize(trim) validate(string, not_empty, max_len=22)"
@@ -242,30 +242,6 @@ defmodule MishkaPay.Balance do
   def delay_days(field, days) when is_integer(days) and days >= 0, do: {:ok, field, days}
 
   def delay_days(field, _other), do: {:error, field, MishkaPay.Messages.text(:delay_days)}
-
-  @doc false
-  def minimum_balances(field, nil), do: {:ok, field, nil}
-
-  def minimum_balances(field, list) when is_list(list) do
-    list
-    |> Enum.reduce_while({:ok, []}, fn
-      nil, _done ->
-        {:halt, minimum_balances(field, :none)}
-
-      money, {:ok, done} ->
-        case MishkaPay.Money.field(field, money) do
-          {:ok, _field, money} -> {:cont, {:ok, [money | done]}}
-          error -> {:halt, error}
-        end
-    end)
-    |> case do
-      {:ok, all} -> {:ok, field, Enum.reverse(all)}
-      error -> error
-    end
-  end
-
-  def minimum_balances(field, _other),
-    do: {:error, field, MishkaPay.Messages.text(:money_field, field: field)}
 
   @doc """
   Whether a payout schedule's days go with its interval: `:weekly_days` only with `:weekly`,

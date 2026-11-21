@@ -1235,6 +1235,83 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
   end
 
+  test "a price in other currencies opens a Checkout Session in EUR at its EUR amount, and a new price takes over its lookup key" do
+    run = run_id()
+
+    {:ok, %MishkaPay.Product{id: product_id}} =
+      MishkaPay.create_product(%{
+        provider: "stripe",
+        name: "Live currencies #{run}",
+        tax_code: "txcd_10302000"
+      })
+
+    price = %{
+      provider: "stripe",
+      product_id: product_id,
+      amount: %{amount: "10.00", currency: "USD"},
+      tax_behavior: :exclusive,
+      lookup_key: "live-cur-#{run}",
+      currency_options: [%{amount: "9.00", currency: "EUR"}, %{amount: "8.00", currency: "GBP"}]
+    }
+
+    assert {:ok, %MishkaPay.Price{id: price_id, currency_options: options}} =
+             MishkaPay.create_price(price)
+
+    on_exit(fn ->
+      MishkaPay.archive_price("stripe", price_id)
+      MishkaPay.archive_product("stripe", product_id)
+    end)
+
+    assert [{:EUR, eur}, {:GBP, gbp}] = options |> Enum.map(&{&1.currency, &1}) |> Enum.sort()
+    assert Money.equal?(eur, Money.new(:EUR, "9.00"))
+    assert Money.equal?(gbp, Money.new(:GBP, "8.00"))
+
+    assert {:ok, %MishkaPay.Price{currency_options: [_, _]}} =
+             MishkaPay.fetch_price("stripe", price_id)
+
+    sale = %{
+      provider: "stripe",
+      items: [%{id: price_id, quantity: 1}],
+      success_url: "https://shop.test/thanks",
+      cancel_url: "https://shop.test/cart",
+      reference: "live-cur-#{run}"
+    }
+
+    assert {:ok, %Checkout{id: checkout_id, amount_total: total}} =
+             MishkaPay.checkout(Map.put(sale, :currency, "eur"))
+
+    assert total.currency == :EUR
+    assert Money.compare(total, Money.new(:EUR, "9.00")) in [:eq, :gt]
+
+    assert {:ok, %Checkout{items: [%MishkaPay.Price{amount: sold}]}} =
+             MishkaPay.fetch_checkout("stripe", checkout_id)
+
+    assert Money.equal?(sold, Money.new(:EUR, "9.00"))
+
+    assert {:error, %Errors.Rejected{}} =
+             MishkaPay.checkout(
+               %{sale | reference: "live-cur-jpy-#{run}"}
+               |> Map.put(:currency, "jpy")
+             )
+
+    assert {:ok, %MishkaPay.Price{id: new_id}} =
+             MishkaPay.create_price(
+               %{
+                 price
+                 | currency_options: [%{amount: "9.50", currency: "EUR"}]
+               }
+               |> Map.put(:transfer_lookup_key, true)
+             )
+
+    on_exit(fn -> MishkaPay.archive_price("stripe", new_id) end)
+
+    assert {:ok,
+            %MishkaPay.Page{items: [%MishkaPay.Price{id: ^new_id, currency_options: [only]}]}} =
+             MishkaPay.list_prices("stripe", nil, lookup_key: "live-cur-#{run}")
+
+    assert Money.equal?(only, Money.new(:EUR, "9.50"))
+  end
+
   # Some twenty Stripe calls in a row, against a sandbox that answers in seconds each.
   @tag timeout: 180_000
   test "a one-off bill is made with its items, opened, sent, paid by hand, and another voided or given up" do

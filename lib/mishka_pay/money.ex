@@ -66,6 +66,36 @@ defmodule MishkaPay.Money do
     do: {:error, name, Messages.text(:money_field, field: name)}
 
   @doc """
+  Like `field/2`, for a list of money: `validator: {MishkaPay.Money, :list_field}`. Each entry is
+  checked with `field/2` and kept in its order; `nil` stays `nil`, and a list with a `nil` in it
+  or anything but a list is refused.
+  """
+  @spec list_field(atom(), term()) ::
+          {:ok, atom(), [Money.t()] | nil} | {:error, atom(), String.t()}
+  def list_field(name, nil), do: {:ok, name, nil}
+
+  def list_field(name, list) when is_list(list) do
+    list
+    |> Enum.reduce_while({:ok, []}, fn
+      nil, _done ->
+        {:halt, list_field(name, :none)}
+
+      money, {:ok, done} ->
+        case field(name, money) do
+          {:ok, _name, money} -> {:cont, {:ok, [money | done]}}
+          error -> {:halt, error}
+        end
+    end)
+    |> case do
+      {:ok, all} -> {:ok, name, Enum.reverse(all)}
+      error -> error
+    end
+  end
+
+  def list_field(name, _other),
+    do: {:error, name, Messages.text(:money_field, field: name)}
+
+  @doc """
   Like `field/2`, for money that may be below zero: an invoice line that credits time not used,
   or credit given to a customer. The amount, in a `Money` or a map, is checked as its size and
   keeps its sign.

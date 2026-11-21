@@ -1149,6 +1149,133 @@ defmodule MishkaPay.Providers.StripeTest do
                })
     end
 
+    test "a price in other currencies is made with Stripe's currency options and a checkout in one of them names it" do
+      assert {:ok, %MishkaPay.Price{id: "price_" <> _ = price_id}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 product_id: "prod_123",
+                 amount: %{amount: "10", currency: "USD"},
+                 tax_behavior: :exclusive,
+                 lookup_key: "mfs-1",
+                 transfer_lookup_key: true,
+                 currency_options: [
+                   %{amount: "9", currency: "EUR"},
+                   %{amount: "8", currency: "GBP"}
+                 ]
+               })
+
+      assert {:ok, %MishkaPay.Price{}} = MishkaPay.fetch_price("stripe", price_id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_prices("stripe", "site-a", lookup_key: "mfs-1")
+
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{items: [%{id: price_id}], currency: "eur"})
+               )
+
+      params =
+        Stripe.Mapper.price_params(%MishkaPay.Price{
+          product_id: "prod_1",
+          amount: Money.new(:USD, "10"),
+          tax_behavior: :exclusive,
+          transfer_lookup_key: true,
+          currency_options: [Money.new(:EUR, "9"), Money.new(:JPY, "1500")]
+        })
+
+      assert params["currency_options"] == %{
+               "eur" => %{"unit_amount" => 900, "tax_behavior" => "exclusive"},
+               "jpy" => %{"unit_amount" => 1500, "tax_behavior" => "exclusive"}
+             }
+
+      assert params["transfer_lookup_key"] == true
+      assert params["expand"] == ["currency_options"]
+
+      assert Stripe.Mapper.price_params(%MishkaPay.Price{
+               product_id: "prod_1",
+               amount: Money.new(:USD, "10")
+             })["currency_options"] == nil
+
+      assert Stripe.Mapper.checkout_params(%{
+               params_checkout()
+               | items: [%MishkaPay.Price{id: "price_1", quantity: 1}],
+                 currency: :EUR
+             })["currency"] == "eur"
+
+      refute Map.has_key?(Stripe.Mapper.checkout_params(params_checkout()), "currency")
+    end
+
+    test "a price read back brings the other currencies Stripe keeps, its own one left out" do
+      # The shape Stripe answered in the sandbox for a price made with `expand[]=currency_options`.
+      recorded = %{
+        "id" => "price_1UeDYzEFIHHOoMs6oRsbEUtO",
+        "currency" => "usd",
+        "unit_amount" => 1000,
+        "tax_behavior" => "exclusive",
+        "currency_options" => %{
+          "eur" => %{
+            "custom_unit_amount" => nil,
+            "tax_behavior" => "unspecified",
+            "unit_amount" => 900,
+            "unit_amount_decimal" => "900"
+          },
+          "gbp" => %{
+            "custom_unit_amount" => nil,
+            "tax_behavior" => "exclusive",
+            "unit_amount" => 800,
+            "unit_amount_decimal" => "800"
+          },
+          "usd" => %{
+            "custom_unit_amount" => nil,
+            "tax_behavior" => "exclusive",
+            "unit_amount" => 1000,
+            "unit_amount_decimal" => "1000"
+          }
+        }
+      }
+
+      assert {:ok, %MishkaPay.Price{amount: own, currency_options: options}} =
+               Stripe.Mapper.price(recorded)
+
+      assert Money.equal?(own, Money.new(:USD, "10"))
+
+      assert [{:EUR, eur}, {:GBP, gbp}] =
+               options |> Enum.map(&{&1.currency, &1}) |> Enum.sort()
+
+      assert Money.equal?(eur, Money.new(:EUR, "9"))
+      assert Money.equal?(gbp, Money.new(:GBP, "8"))
+
+      assert {:ok, %MishkaPay.Price{currency_options: nil}} =
+               Stripe.Mapper.price(Map.delete(recorded, "currency_options"))
+
+      # A Checkout Session in EUR lists its line in EUR, its price still in USD.
+      assert [%MishkaPay.Price{amount: sold, quantity: 2}] =
+               Stripe.Mapper.sold(%{
+                 "data" => [
+                   %{
+                     "currency" => "eur",
+                     "amount_subtotal" => 1800,
+                     "quantity" => 2,
+                     "description" => "Ebook",
+                     "price" => Map.delete(recorded, "currency_options")
+                   }
+                 ]
+               })
+
+      assert Money.equal?(sold, Money.new(:EUR, "9"))
+
+      assert {:ok, %Subscription{items: [%MishkaPay.Price{amount: charged}]}} =
+               Stripe.Mapper.subscription(%{
+                 "id" => "sub_1",
+                 "status" => "active",
+                 "currency" => "gbp",
+                 "items" => %{"data" => [%{"id" => "si_1", "price" => recorded}]}
+               })
+
+      assert Money.equal?(charged, Money.new(:GBP, "8"))
+    end
+
     test "the chosen payment methods filter Stripe's own set, and none chosen leaves it to Stripe" do
       params =
         Stripe.Mapper.checkout_params(%{params_checkout() | payment_methods: ["card", "link"]})
@@ -3159,7 +3286,7 @@ defmodule MishkaPay.Providers.StripeTest do
             {Map.put(setup, :allow_promotion_codes, true), :allow_promotion_codes},
             {Map.put(setup, :automatic_tax, false), :automatic_tax},
             {Map.put(setup, :submit_type, :pay), :submit_type},
-            {Map.put(@checkout, :currency, "usd"), :currency}
+            {Map.put(@checkout, :currency, "eur"), :currency}
           ] do
         assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.checkout(attrs)
         assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
@@ -5103,6 +5230,40 @@ defmodule MishkaPay.Providers.StripeTest do
   end
 
   describe "before any request" do
+    test "other currencies that cannot be right never reach Stripe" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      price = %{
+        provider: "stripe",
+        product_id: "prod_1",
+        amount: %{amount: "10", currency: "USD"}
+      }
+
+      for options <- [
+            [%{amount: "10", currency: "USD"}],
+            [%{amount: "9", currency: "EUR"}, %{amount: "8", currency: "eur"}],
+            [nil],
+            "EUR"
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :currency_options} | _]}} =
+                 MishkaPay.create_price(Map.put(price, :currency_options, options))
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :currency} | _]}} =
+               MishkaPay.checkout(Map.put(@checkout, :currency, "eur"))
+
+      line = %{
+        name: "Ebook",
+        amount: %{amount: "10", currency: "USD"},
+        currency_options: [%{amount: "9", currency: "EUR"}]
+      }
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :items}]}} =
+               MishkaPay.checkout(Map.put(@checkout, :items, [line]))
+
+      assert {:error, _bad} = MishkaPay.checkout(Map.put(@checkout, :currency, "not money"))
+    end
+
     test "a connected account that is not an account id, or would end the header, is never sent" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
 

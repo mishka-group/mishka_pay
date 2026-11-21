@@ -300,6 +300,14 @@ MishkaPay.checkout(%{
 MishkaPay.checkout(%{..., items: [%{id: price.id, quantity: 1}]})
 ```
 
+A price may keep its amount in other currencies: `currency_options: [%{amount: "17", currency:
+"EUR"}]`, each with the price's own `tax_behavior`. A checkout of catalog prices names the one to
+charge with `currency: "eur"`, which charges that amount, never a conversion; left out, the
+provider picks (Stripe: the buyer's local currency when the price has it). The provider never
+takes an option away, so to change them make a new price with the same `lookup_key` and
+`transfer_lookup_key: true`, then archive the old one. PayPal has no catalog: its checkout line
+carries the chosen currency's amount itself.
+
 - A price's amount never changes: make a new price and `archive_price/3` the old one.
 - `archive_product/3` takes a product off sale; a provider never deletes what sold.
 - `lookup_key` names a price for the host (`list_prices(p, t, lookup_key: "ebook")`), so code

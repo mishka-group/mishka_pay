@@ -94,7 +94,9 @@ defmodule MishkaPay.Messages do
           | :invoice_mode
           | :setup_takes_no
           | :setup_currency
-          | :currency_setup_only
+          | :currency_items
+          | :currency_options_once
+          | :currency_options_catalog
           | :rejected_missing
           | :rejected_exists
           | :keys_answer
@@ -598,11 +600,25 @@ defmodule MishkaPay.Messages do
         "A setup checkout needs a currency: it decides which payment methods the page offers"
       )
 
-  defp msgid(:currency_setup_only),
+  defp msgid(:currency_items),
     do:
       dgettext_noop(
         "mishka_pay",
-        "The currency field goes only with a setup checkout: a sale takes its currency from its items"
+        "The currency of a sale must be the currency of every item that carries its own amount"
+      )
+
+  defp msgid(:currency_options_once),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Give each other currency of a price once, and not the price's own currency"
+      )
+
+  defp msgid(:currency_options_catalog),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Other currencies belong to a catalog price: a checkout line is charged in the checkout's currency"
       )
 
   defp msgid(:plain_id),

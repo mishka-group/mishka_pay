@@ -110,16 +110,25 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   # offered. Managed Payments takes no setup mode, so it is off even on an account where it is on
   # by default. Without a known customer Stripe makes one, so the card is kept.
   defp sale_params(%Checkout{mode: :setup} = checkout, _settings) do
-    %{"currency" => checkout.currency |> Atom.to_string() |> String.downcase()}
+    checkout.currency
+    |> currency_param()
     |> Map.merge(managed_payments(false))
     |> Map.merge(setup_customer(checkout))
   end
 
   defp sale_params(checkout, settings) do
     %{"line_items" => Enum.map(checkout.items, &line_item/1)}
+    |> Map.merge(currency_param(checkout.currency))
     |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(automatic_tax(checkout, settings))
   end
+
+  # A setup's currency picks the payment methods; a sale's picks the amount each catalog price
+  # keeps for it, and left out Stripe picks.
+  defp currency_param(nil), do: %{}
+
+  defp currency_param(currency),
+    do: %{"currency" => currency |> Atom.to_string() |> String.downcase()}
 
   defp setup_customer(%Checkout{customer: %{id: id}}) when is_binary(id), do: %{}
 
@@ -715,7 +724,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       provider: "stripe",
       id: sub["id"],
       status: known(sub["status"], @subscription_statuses),
-      items: Enum.flat_map(items, &subscription_item/1),
+      items: Enum.flat_map(items, &subscription_item(&1, sub["currency"])),
       customer_id: customer_ref(sub),
       customer_email: customer["email"],
       customer_name: customer["name"],
@@ -741,8 +750,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
-  defp subscription_item(%{"price" => %{} = price} = item) do
-    case money(price["unit_amount"], price["currency"]) do
+  defp subscription_item(%{"price" => %{} = price} = item, currency) do
+    case charged(price, currency) do
       nil ->
         []
 
@@ -762,7 +771,18 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     end
   end
 
-  defp subscription_item(_no_price), do: []
+  defp subscription_item(_no_price, _currency), do: []
+
+  # A subscription in one of its price's other currencies is charged that option's amount, when the
+  # price came with them (`expand[]=items.data.price.currency_options`).
+  defp charged(%{"currency" => own} = price, currency) when currency != own do
+    case get_in(price, ["currency_options", currency, "unit_amount"]) do
+      minor when is_integer(minor) -> money(minor, currency)
+      _not_included -> money(price["unit_amount"], own)
+    end
+  end
+
+  defp charged(price, _currency), do: money(price["unit_amount"], price["currency"])
 
   defp interval(interval) when is_binary(interval), do: known(interval, ~w(day week month year)a)
   defp interval(_none), do: nil
@@ -2362,12 +2382,41 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "unit_amount" => minor(price.amount),
       "nickname" => price.name,
       "lookup_key" => price.lookup_key,
+      "transfer_lookup_key" => price.transfer_lookup_key,
       "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior),
-      "metadata" => price.metadata
+      "metadata" => price.metadata,
+      "currency_options" => currency_options(price),
+      "expand" => ["currency_options"]
     }
     |> Map.merge(recurring(price))
     |> metered(price.meter_id)
   end
+
+  # The price in other currencies, each with the price's own tax behavior: Stripe gives an option
+  # none of its own ("unspecified") when it is not sent.
+  defp currency_options(%Price{currency_options: [_ | _] = options} = price) do
+    Map.new(options, fn money ->
+      {lower_currency(money),
+       reject_nil(%{
+         "unit_amount" => minor(money),
+         "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
+       })}
+    end)
+  end
+
+  defp currency_options(_none), do: nil
+
+  # The other currencies Stripe keeps, when the answer includes them (`expand[]=currency_options`):
+  # the price's own currency, which Stripe lists too, is left out.
+  defp other_currencies(%{"currency_options" => %{} = options, "currency" => own}) do
+    for {currency, %{"unit_amount" => minor}} <- options,
+        currency != own,
+        money = money(minor, currency),
+        money != nil,
+        do: money
+  end
+
+  defp other_currencies(_not_included), do: nil
 
   # A price on a meter bills each period's usage the meter counted, not a quantity.
   defp metered(params, nil), do: params
@@ -2397,6 +2446,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       meter_id: get_in(price, ["recurring", "meter"]),
       tax_behavior: tax_behavior(price["tax_behavior"]),
       tax_code: id_of(expanded(price["product"])["tax_code"]),
+      currency_options: other_currencies(price),
       metadata: price["metadata"],
       created_at: time(price["created"])
     }
@@ -2516,7 +2566,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       id: price["id"],
       product_id: id_of(price["product"]),
       name: item["description"],
-      amount: money(price["unit_amount"], price["currency"]),
+      amount: unit_amount(item, price),
       quantity: item["quantity"] || 1,
       interval: interval(get_in(price, ["recurring", "interval"])),
       interval_count: get_in(price, ["recurring", "interval_count"])
@@ -2524,6 +2574,16 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Price.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # A line sold in another currency than its price's own (one of the price's currency options) is
+  # charged that option's amount: the line's subtotal for each one.
+  defp unit_amount(%{"currency" => currency, "amount_subtotal" => subtotal} = item, %{
+         "currency" => own
+       })
+       when currency != own and is_integer(subtotal),
+       do: money(div(subtotal, max(item["quantity"] || 1, 1)), currency)
+
+  defp unit_amount(_item, price), do: money(price["unit_amount"], price["currency"])
 
   @doc "The payment with the checkout that took it and what it sold, from Stripe's list of sessions."
   @spec with_checkout(Payment.t(), map() | nil) :: Payment.t()
