@@ -167,6 +167,10 @@ if Code.ensure_loaded?(Ash) do
        (30 seconds) leaves the event pending, its reason noted by `:note_error`: AshOban tries
        again, ten times in all.
     3. After the last try, `:fail` marks it `:failed` with the reason, for a person to look at.
+    4. A person may `:skip` an event that failed or is still being tried (`reason` and `by`
+       arguments, kept as `:skip_reason`, `:skipped_by_id` and `:skipped_at`): it is `:skipped`
+       and never tried again. `:bring_back` makes it `:failed` again
+       (`MishkaPay.Ash.Inbox.Skip`, `MishkaPay.Ash.Inbox.BringBack`).
 
     The trigger's worker and scheduler are `<Resource>.MishkaPayWorker` and
     `<Resource>.MishkaPayScheduler`. Its listener stores each event `MishkaPay.Webhook` checked,

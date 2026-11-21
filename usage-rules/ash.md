@@ -167,7 +167,7 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 | Resource | Action | Args |
 |---|---|---|
 | Inbox | `:receive` (by the listener) | the event; stored once per provider event id |
-| Inbox | `:process`, `:note_error`, `:fail` (by its AshOban trigger) | none; `fail` takes `error` |
+| Inbox | `:process`, `:note_error`, `:fail` (by its AshOban trigger); `:skip`, `:bring_back` (by a person) | none; `fail` takes `error`, `skip` takes `reason` and `by` |
 | Inbox | `:answered` (by its answer listener) | `answer_ms`, `answer_status` |
 | Webhook rejection | `:count` (by its listener) | `provider`, `tenant`, `reason`, `day`, `last_at`; adds one to the day's row |
 | Payment | `:sync` | `provider`, `payment_id`, `tenant` |

@@ -65,6 +65,10 @@ written by `:answered` once the answer went out (`mishka_pay:webhook:answered`).
    (30 seconds) leaves the event pending, its reason noted by `:note_error`: AshOban tries
    again, ten times in all.
 3. After the last try, `:fail` marks it `:failed` with the reason, for a person to look at.
+4. A person may `:skip` an event that failed or is still being tried (`reason` and `by`
+   arguments, kept as `:skip_reason`, `:skipped_by_id` and `:skipped_at`): it is `:skipped`
+   and never tried again. `:bring_back` makes it `:failed` again
+   (`MishkaPay.Ash.Inbox.Skip`, `MishkaPay.Ash.Inbox.BringBack`).
 
 The trigger's worker and scheduler are `<Resource>.MishkaPayWorker` and
 `<Resource>.MishkaPayScheduler`. Its listener stores each event `MishkaPay.Webhook` checked,
@@ -114,8 +118,9 @@ Holds the provider and its subscription id, the tenant, the `:status` (see
 `:currency`, with the `:money` calculation) and how often (`:interval`, `:interval_count`),
 how many (`:quantity`), the end of the period paid for (`:current_period_end`), whether it ends
 then (`:cancel_at_period_end`), `:canceled_at`, `:trial_end`, a pause (`:pause_behavior`,
-`:resumes_at`), the buyer, the caller's `:reference`, when the provider made it and when it was
-last synced. A subscription starts with a checkout in `mode: :subscription`.
+`:resumes_at`), the buyer, the card its invoices are charged to (`:card_brand`, `:card_last4`,
+from its own default payment method), the caller's `:reference`, when the provider made it and
+when it was last synced. A subscription starts with a checkout in `mode: :subscription`.
 
   * `:sync` takes `:provider`, `:subscription_id` and `:tenant` and writes what the provider
     says (`MishkaPay.fetch_subscription/3`).
