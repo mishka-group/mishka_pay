@@ -708,6 +708,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     items = get_in(sub, ["items", "data"]) || []
     first = List.first(items) || %{}
     customer = expanded(sub["customer"])
+    card = expanded(sub["default_payment_method"])["card"] || %{}
 
     %{
       provider: "stripe",
@@ -724,6 +725,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       canceled_at: time(sub["canceled_at"]),
       trial_end: time(sub["trial_end"]),
       latest_invoice_id: id_of(sub["latest_invoice"]),
+      default_payment_method: id_of(sub["default_payment_method"]),
+      card_brand: card["brand"],
+      card_last4: card["last4"],
       schedule_id: id_of(sub["schedule"]),
       pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
       resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),

@@ -5836,6 +5836,29 @@ defmodule MishkaPay.Providers.StripeTest do
              Stripe.Mapper.subscription(%{sub | "status" => "something_new"})
   end
 
+  test "a subscription brings its own default card, not the customer's" do
+    card = %{
+      "id" => "pm_4242",
+      "object" => "payment_method",
+      "type" => "card",
+      "card" => %{"brand" => "visa", "last4" => "4242"}
+    }
+
+    base = %{"id" => "sub_card", "status" => "active", "customer" => "cus_1", "items" => %{}}
+
+    assert {:ok, %Subscription{} = paid} =
+             Stripe.Mapper.subscription(Map.put(base, "default_payment_method", card))
+
+    assert {paid.default_payment_method, paid.card_brand, paid.card_last4} ==
+             {"pm_4242", "visa", "4242"}
+
+    assert {:ok, %Subscription{default_payment_method: "pm_4242", card_last4: nil}} =
+             Stripe.Mapper.subscription(Map.put(base, "default_payment_method", "pm_4242"))
+
+    assert {:ok, %Subscription{default_payment_method: nil, card_last4: nil}} =
+             Stripe.Mapper.subscription(base)
+  end
+
   test "an invoice brings its subscription from either place Stripe puts it" do
     invoice = %{
       "id" => "in_1",

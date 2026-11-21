@@ -1335,7 +1335,11 @@ defmodule MishkaPay.Providers.Stripe do
   end
 
   defp subscription_expand,
-    do: [{"expand[]", "customer"}, {"expand[]", "items.data.price.product"}]
+    do: [
+      {"expand[]", "customer"},
+      {"expand[]", "items.data.price.product"},
+      {"expand[]", "default_payment_method"}
+    ]
 
   # A customer is made on the customer's own API, else the tenant's `:customer_api`, else
   # Accounts v2: an account with the customer configuration. Its reference makes the idempotency

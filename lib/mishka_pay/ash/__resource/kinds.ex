@@ -201,6 +201,8 @@ if Code.ensure_loaded?(Ash) do
         {:customer_id, :string, public()},
         {:customer_email, :string, public()},
         {:customer_name, :string, public()},
+        {:card_brand, :string, public()},
+        {:card_last4, :string, public()},
         {:reference, :string, public()}
       ])
     end
