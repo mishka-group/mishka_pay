@@ -6,6 +6,8 @@ defmodule MishkaPay.WebhookTest do
   # Starts the Stripe and listener plugins, which change events every test sees.
   use ExUnit.Case, async: false
 
+  @moduletag :capture_log
+
   import Plug.Conn
   import Plug.Test
 
@@ -230,6 +232,45 @@ defmodule MishkaPay.WebhookTest do
     elsewhere = conn(:post, "/checkout", "{}") |> Webhook.call(@opts)
     refute elsewhere.halted
     assert elsewhere.status == nil
+  end
+
+  test "a refused message leaves one plain line in the log, never its body or a secret" do
+    body = payload()
+    other = "whsec_other_secret"
+
+    mismatch =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: other)).status ==
+                 400
+      end)
+
+    assert mismatch =~ "answered 400 to a stripe webhook"
+    assert mismatch =~ "does not match the webhook secret"
+    refute mismatch =~ other
+    refute mismatch =~ @secret
+    refute mismatch =~ "evt_123"
+
+    no_keys =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-without-keys", body, signed(body)).status == 400
+      end)
+
+    assert no_keys =~ ~s(tenant "site-without-keys")
+    assert no_keys =~ "no keys, or no webhook secret"
+
+    unsigned =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-a", body, nil).status == 400
+      end)
+
+    assert unsigned =~ "no signature header"
+
+    taken =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+      end)
+
+    refute taken =~ "answered"
   end
 
   test "a signed event with an odd shape or time is refused or read, never a crash" do

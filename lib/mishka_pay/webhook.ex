@@ -58,6 +58,13 @@ defmodule MishkaPay.Webhook do
   ones per provider, site, reason and day. A message to a provider that is not installed (404)
   names no provider there, and a site without keys no tenant, so a stranger cannot add names.
 
+  ## The log
+
+  Every answer but `200` leaves one warning saying why in plain words (the outcome above: no
+  signature, a signature that does not match the webhook secret, no keys for the tenant, a body
+  over 1 MB...), with the provider and the tenant the path named. Never the body, the signature or
+  a secret.
+
   ## Telemetry
 
   `[:mishka_pay, :webhook, :start | :stop]` with `:provider`, and on `:stop` the `:status`, the
@@ -71,6 +78,8 @@ defmodule MishkaPay.Webhook do
   @behaviour Plug
 
   import Plug.Conn
+
+  require Logger
 
   alias MishkaPay.{Credentials, Errors, Events, Provider}
   alias MishkaPay.Helpers.Plugins
@@ -141,8 +150,38 @@ defmodule MishkaPay.Webhook do
       end)
 
     conn = conn |> send_resp(status, "") |> halt()
+    logged(status, meta, provider, tenant)
     answered(answer, meta, started)
     conn
+  end
+
+  @why %{
+    missing: "it has no signature header",
+    malformed: "its signature header or its body cannot be read",
+    too_old: "it was signed outside the allowed time window (a replay, or a clock that is off)",
+    mismatch:
+      "its signature does not match the webhook secret (signed with another secret, or changed on the way)",
+    mode: "a live message was checked with test keys, or a test message with live keys",
+    account: "it is about another account than the connected account the tenant acts for",
+    missing_credentials: "the tenant has no keys, or no webhook secret, for this provider",
+    unknown_provider: "no such provider is installed",
+    unsupported: "the provider takes no webhooks",
+    too_large: "its body is over 1 MB",
+    failed: "a listener could not take the event, so the provider sends it again",
+    invalid: "it cannot be trusted"
+  }
+
+  # Every answer but 200 leaves one line in the log saying why, in plain words, so whoever runs the
+  # endpoint can tell a wrong secret from missing keys. The tenant is the one the path named; the
+  # body, the signature and the secrets never reach the log.
+  defp logged(200, _meta, _provider, _tenant), do: :ok
+
+  defp logged(status, meta, provider, tenant) do
+    why = Map.get(@why, meta[:outcome], "it cannot be trusted")
+
+    Logger.warning(
+      "mishka_pay: answered #{status} to a #{provider} webhook for tenant #{inspect(tenant, printable_limit: 64)}: #{why}"
+    )
   end
 
   # The provider is checked before the body is read, so a refused message names a provider only
