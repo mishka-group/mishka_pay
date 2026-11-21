@@ -213,6 +213,80 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.list_refunds("stripe", nil, payment_id: id)
   end
 
+  # A refund as fraudulent makes Stripe put the card's fingerprint on the account's Radar block list
+  # (`card_fingerprint_blocklist`) at once, and every later charge with that card is blocked. So the
+  # test pays with a card no other test uses, never the Visa 4242 or the Mastercard 4444 the rest
+  # pay with, and takes the item off the list again, in the test and in `on_exit` when it fails
+  # before that.
+  @fraud_card "pm_card_mastercard_debit"
+
+  test "a refund as fraudulent is sent and read back as fraudulent, and the card Stripe blocks for it is let go again",
+       %{key: key} do
+    {200, %{"id" => id}} = pay(key, @fraud_card)
+
+    assert {:ok, %{"latest_charge" => %{"payment_method_details" => %{"card" => card}}}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               path: "/v1/payment_intents/#{id}",
+               options: %{expand: ["latest_charge"]}
+             })
+
+    %{"fingerprint" => fingerprint, "last4" => "8210"} = card
+    on_exit(fn -> unblock(key, fingerprint) end)
+
+    assert {:ok, %Refund{status: :succeeded, reason: :fraudulent}} =
+             MishkaPay.refund(%{provider: "stripe", payment_id: id, reason: :fraudulent})
+
+    assert {:ok, %Payment{status: :refunded, refunds: [%Refund{reason: :fraudulent}]}} =
+             MishkaPay.fetch_payment("stripe", id)
+
+    assert [%{"value" => ^fingerprint}] = blocked(key, fingerprint)
+
+    unblock(key, fingerprint)
+    assert blocked(key, fingerprint) == []
+  end
+
+  # The items of the Radar card block list that hold `fingerprint`.
+  defp blocked(key, fingerprint) do
+    {200, %{"data" => [%{"id" => list}]}} =
+      radar(key, :get, "/v1/radar/value_lists", %{"alias" => "card_fingerprint_blocklist"})
+
+    {200, %{"data" => items}} =
+      radar(key, :get, "/v1/radar/value_list_items", %{
+        "value_list" => list,
+        "value" => fingerprint
+      })
+
+    items
+  end
+
+  # Takes `fingerprint` off the block list. It runs from `on_exit` too, a process of its own, so it
+  # stubs the client there and sends the key itself.
+  defp unblock(key, fingerprint) do
+    MishkaPay.Test.stub_http(&StripeMock.forward_live/1)
+
+    for %{"id" => item} <- blocked(key, fingerprint) do
+      {200, %{"deleted" => true}} = radar(key, :delete, "/v1/radar/value_list_items/#{item}", %{})
+    end
+
+    :ok
+  end
+
+  defp radar(key, method, path, params) do
+    {:ok, %{status: status, body: body}} =
+      Client.request(%{
+        provider: "stripe",
+        method: method,
+        base_url: "https://api.stripe.com",
+        path: path,
+        auth: {:bearer, key},
+        headers: %{"stripe-version" => Stripe.version()},
+        params: params
+      })
+
+    {status, body}
+  end
+
   test "a paid payment names its charge, balance movement and fee, and its movements name it back",
        %{key: key} do
     # Captured at once, so the charge's balance movement is there in the answer; Stripe's
@@ -2356,8 +2430,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
   end
 
-  # Mastercard: this sandbox's Radar block list holds the test Visa card (a refund as fraudulent
-  # puts a card there), so a Visa charge is blocked.
+  # Mastercard, as every payment of this file: the test Visa card is the one a person refunds as
+  # fraudulent by hand in a sandbox, which puts it on the Radar block list and blocks its charges.
   test "a payment intent is made once, changed, confirmed on the server with a test card and read as a payment; a held one is let go",
        %{key: key} do
     run = run_id()
