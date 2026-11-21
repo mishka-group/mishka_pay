@@ -50,6 +50,11 @@ defmodule MishkaPay.Checkout do
       Tax); each price then needs its `:tax_code`.
     * `:customer_creation`: in a one-time or setup checkout, `:always` makes a provider customer
       for the buyer, `:if_required` only when the provider needs one.
+    * `:payment_methods`: the provider's own names of the only ways to pay the page may offer
+      (Stripe's payment method types: `["card", "link", "sepa_debit"]`). At Stripe it is
+      `allowed_payment_method_types`, a filter on the methods it works out for the buyer from the
+      Dashboard, so a type the account has not switched on is simply not offered. Left out, the
+      provider chooses, its recommended way.
     * `:locale`: the language of the provider's page (`"de"`, `"auto"`).
     * `:terms`: `true` makes the buyer accept the site's terms of service before paying (the
       terms page is set in the provider's account). It helps when a buyer later disputes a sale.
@@ -117,7 +122,8 @@ defmodule MishkaPay.Checkout do
   refused in setup mode.
 
   A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
-  leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
+  leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard,
+  unless `:payment_methods` names them.
 
   What the provider fills in:
 
@@ -245,6 +251,11 @@ defmodule MishkaPay.Checkout do
       validator: {__MODULE__, :customer_creation}
 
     field :locale, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=10)"
+
+    field :payment_methods, list(),
+      derives:
+        ~S"sanitize(each=[trim, downcase]) validate(list, not_empty, each=[string, regex=\A[a-z_]{2,40}\z])"
+
     field :expires_at, DateTime.t(), derives: "validate(struct)", validator: {__MODULE__, :later}
 
     field :billing_address, :auto | :required,

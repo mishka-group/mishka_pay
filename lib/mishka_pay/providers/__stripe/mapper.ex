@@ -171,6 +171,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "allow_promotion_codes" => checkout.allow_promotion_codes,
       "customer_creation" => checkout.customer_creation && to_string(checkout.customer_creation),
       "locale" => checkout.locale,
+      "allowed_payment_method_types" => checkout.payment_methods,
       "expires_at" => checkout.expires_at && DateTime.to_unix(checkout.expires_at),
       "billing_address_collection" =>
         checkout.billing_address && to_string(checkout.billing_address),

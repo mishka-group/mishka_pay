@@ -461,6 +461,7 @@ defmodule MishkaPay.Providers.PayPal do
     automatic_tax: "automatic tax",
     customer_creation: "customer creation",
     locale: "a page language",
+    payment_methods: "chosen payment methods",
     expires_at: "an expiry",
     billing_address: "billing address collection",
     tax_id_collection: "tax id collection",

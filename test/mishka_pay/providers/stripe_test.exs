@@ -1149,6 +1149,22 @@ defmodule MishkaPay.Providers.StripeTest do
                })
     end
 
+    test "the chosen payment methods filter Stripe's own set, and none chosen leaves it to Stripe" do
+      params =
+        Stripe.Mapper.checkout_params(%{params_checkout() | payment_methods: ["card", "link"]})
+
+      assert params["allowed_payment_method_types"] == ["card", "link"]
+      refute Map.has_key?(params, "payment_method_types")
+
+      refute Map.has_key?(
+               Stripe.Mapper.checkout_params(params_checkout()),
+               "allowed_payment_method_types"
+             )
+
+      assert {:error, _bad} =
+               MishkaPay.Checkout.builder(Map.put(@checkout, :payment_methods, ["no way!"]))
+    end
+
     test "the site's automatic tax applies when a checkout or link does not say, and theirs wins" do
       on = %{automatic_tax: true}
 
