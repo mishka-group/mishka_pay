@@ -159,6 +159,61 @@ defmodule MishkaPay.Ash.InboxTest do
              stored()
   end
 
+  test "a failed event is skipped with who and why, is never tried again, and is brought back as failed" do
+    MishkaPay.Test.start_plugin!(EventWorker)
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :inbox, :skipped]])
+    deliver(%{"id" => "evt_skip", "type" => "work.fails"})
+    Oban.drain_queue(queue: :mishka_pay_inbox)
+
+    assert [%{status: :pending, last_error: error} = event] = stored()
+    assert is_binary(error)
+
+    reason = "  " <> String.duplicate("a", 250) <> "  "
+
+    assert {:ok, %{status: :skipped, skipped_by_id: "user-1", skip_reason: kept} = skipped} =
+             Ash.update(event, %{reason: reason, by: "user-1"},
+               action: :skip,
+               authorize?: false
+             )
+
+    assert String.length(kept) == 200
+    assert %DateTime{} = skipped.skipped_at
+
+    assert_received {[:mishka_pay, :inbox, :skipped], ^ref, %{count: 1},
+                     %{event_id: "evt_skip", tenant: "site-a"}}
+
+    work()
+    assert [%{status: :skipped}] = stored()
+
+    assert {:ok, %{status: :failed, skipped_at: nil, skipped_by_id: nil, skip_reason: nil} = back} =
+             Ash.update(skipped, %{}, action: :bring_back, authorize?: false)
+
+    assert {:error, %Ash.Error.Invalid{}} =
+             Ash.update(back, %{}, action: :bring_back, authorize?: false)
+  end
+
+  test "a processed or waiting event cannot be skipped, and a blank reason is kept as none" do
+    MishkaPay.Test.start_plugin!(EventWorker)
+    deliver(%{"id" => "evt_fine", "type" => "payment_intent.succeeded"})
+    [waiting] = stored()
+
+    assert {:error, %Ash.Error.Invalid{}} =
+             Ash.update(waiting, %{}, action: :skip, authorize?: false)
+
+    work()
+    [processed] = stored()
+
+    assert {:error, %Ash.Error.Invalid{}} =
+             Ash.update(processed, %{}, action: :skip, authorize?: false)
+
+    deliver(%{"id" => "evt_bad_blank", "type" => "work.fails"})
+    work()
+    failed = Enum.find(stored(), &(&1.event_id == "evt_bad_blank"))
+
+    assert {:ok, %{status: :skipped, skip_reason: nil}} =
+             Ash.update(failed, %{reason: "   "}, action: :skip, authorize?: false)
+  end
+
   test "a processed event older than the days it is kept is forgotten daily; a failed one stays" do
     MishkaPay.Test.start_plugin!(EventWorker)
     test_pid = self()

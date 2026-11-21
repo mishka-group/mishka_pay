@@ -74,7 +74,16 @@ if Code.ensure_loaded?(Ash) do
     @pause_behaviors [:void, :keep_as_draft, :mark_uncollectible]
 
     # The inbox fields a webhook fills; the rest is the inbox's own bookkeeping.
-    @inbox_bookkeeping [:status, :last_error, :processed_at, :answer_ms, :answer_status]
+    @inbox_bookkeeping [
+      :status,
+      :last_error,
+      :processed_at,
+      :answer_ms,
+      :answer_status,
+      :skipped_at,
+      :skipped_by_id,
+      :skip_reason
+    ]
 
     # Every provider object keeps these three; a sync writes all its other attributes.
     @object_keys [:provider, :provider_id, :tenant]
@@ -138,11 +147,17 @@ if Code.ensure_loaded?(Ash) do
         {:provider_created_at, :utc_datetime_usec, public()},
         {:received_at, :utc_datetime_usec, public()},
         {:status, :atom,
-         required(constraints: [one_of: [:pending, :processed, :failed]], default: :pending)},
+         required(
+           constraints: [one_of: [:pending, :processed, :failed, :skipped]],
+           default: :pending
+         )},
         {:last_error, :string, public()},
         {:processed_at, :utc_datetime_usec, public()},
         {:answer_ms, :integer, public()},
-        {:answer_status, :integer, public()}
+        {:answer_status, :integer, public()},
+        {:skipped_at, :utc_datetime_usec, public()},
+        {:skipped_by_id, :string, public()},
+        {:skip_reason, :string, public(constraints: [max_length: 200])}
       ]
     end
 
@@ -444,7 +459,15 @@ if Code.ensure_loaded?(Ash) do
            require_atomic?: false,
            arguments: [argument(:error, :term)],
            changes: [change(MishkaPay.Ash.Inbox.Fail)]
-         ]}
+         ]},
+        {:skip, :update,
+         [
+           require_atomic?: false,
+           arguments: [argument(:reason, :string), argument(:by, :string)],
+           changes: [change(MishkaPay.Ash.Inbox.Skip)]
+         ]},
+        {:bring_back, :update,
+         [require_atomic?: false, changes: [change(MishkaPay.Ash.Inbox.BringBack)]]}
       ]
     end
 
