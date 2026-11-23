@@ -165,8 +165,10 @@ defmodule MishkaPay.Ash.InboxTest do
     deliver(%{"id" => "evt_skip", "type" => "work.fails"})
     Oban.drain_queue(queue: :mishka_pay_inbox)
 
-    assert [%{status: :pending, last_error: error} = event] = stored()
-    assert is_binary(error)
+    assert [
+             %{status: :pending, last_error: "the event was not processed: the store is down"} =
+               event
+           ] = stored()
 
     reason = "  " <> String.duplicate("a", 250) <> "  "
 
