@@ -218,6 +218,8 @@ if Code.ensure_loaded?(Ash) do
         {:customer_name, :string, public()},
         {:card_brand, :string, public()},
         {:card_last4, :string, public()},
+        {:card_exp_month, :integer, public()},
+        {:card_exp_year, :integer, public()},
         {:reference, :string, public()}
       ])
     end

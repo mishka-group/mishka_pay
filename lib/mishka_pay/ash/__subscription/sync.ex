@@ -68,6 +68,8 @@ if Code.ensure_loaded?(Ash) do
         customer_name: subscription.customer_name,
         card_brand: subscription.card_brand,
         card_last4: subscription.card_last4,
+        card_exp_month: subscription.card_exp_month,
+        card_exp_year: subscription.card_exp_year,
         reference: subscription.reference,
         provider_created_at: subscription.created_at,
         synced_at: DateTime.utc_now()

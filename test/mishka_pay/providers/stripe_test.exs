@@ -6018,7 +6018,7 @@ defmodule MishkaPay.Providers.StripeTest do
       "id" => "pm_4242",
       "object" => "payment_method",
       "type" => "card",
-      "card" => %{"brand" => "visa", "last4" => "4242"}
+      "card" => %{"brand" => "visa", "last4" => "4242", "exp_month" => 8, "exp_year" => 2028}
     }
 
     base = %{"id" => "sub_card", "status" => "active", "customer" => "cus_1", "items" => %{}}
@@ -6028,6 +6028,8 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert {paid.default_payment_method, paid.card_brand, paid.card_last4} ==
              {"pm_4242", "visa", "4242"}
+
+    assert {paid.card_exp_month, paid.card_exp_year} == {8, 2028}
 
     assert {:ok, %Subscription{default_payment_method: "pm_4242", card_last4: nil}} =
              Stripe.Mapper.subscription(Map.put(base, "default_payment_method", "pm_4242"))

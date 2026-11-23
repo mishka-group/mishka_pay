@@ -25,7 +25,7 @@ defmodule MishkaPay.Subscription do
     * `:latest_invoice_id`: its newest invoice (`MishkaPay.list_invoices/3` lists them all).
     * `:default_payment_method`: the payment method its invoices are charged to (`pm_...`), the
       one the buyer paid its checkout with or changed it to; `:card_brand` (`"visa"`) and
-      `:card_last4` when that is a card. Empty when it has none of its own and the customer's
+      `:card_last4`, and when it expires (`:card_exp_month`, `:card_exp_year`), when that is a card. Empty when it has none of its own and the customer's
       default pays it.
     * `:schedule_id`: the `MishkaPay.Subscription.Schedule` that runs it, when one does.
     * `:reference`, `:metadata`: the caller's own id from the checkout, and extra pairs;
@@ -59,6 +59,8 @@ defmodule MishkaPay.Subscription do
     field :default_payment_method, String.t(), derives: "validate(string)"
     field :card_brand, String.t(), derives: "validate(string)"
     field :card_last4, String.t(), derives: "validate(string)"
+    field :card_exp_month, pos_integer(), derives: "validate(integer)"
+    field :card_exp_year, pos_integer(), derives: "validate(integer)"
     field :schedule_id, String.t(), derives: "validate(string)"
 
     field :pause_behavior, :void | :keep_as_draft | :mark_uncollectible,
