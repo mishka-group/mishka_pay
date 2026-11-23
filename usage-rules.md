@@ -38,7 +38,7 @@ By hand:
 
 ```elixir
 # mix.exs
-{:mishka_pay, "~> 0.0.1"}
+{:mishka_pay, "~> 0.0.2"}
 # for the Ash layer, also:
 {:ash, "~> 3.37"}, {:ash_postgres, "~> 2.15"}, {:ash_oban, "~> 0.10.3"}
 ```

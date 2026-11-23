@@ -80,7 +80,7 @@ broadcasts. To set it up by hand, add the package to `mix.exs`. A pre-release is
 when you name it:
 
 ```elixir
-{:mishka_pay, "~> 0.0.1"}
+{:mishka_pay, "~> 0.0.2"}
 ```
 
 Give it a sandbox key and sell:
