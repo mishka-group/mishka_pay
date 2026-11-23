@@ -74,9 +74,7 @@ defmodule Shop.MixProject do
       {:ash, "~> 3.37"},
       {:ash_postgres, "~> 2.15"},
       {:ash_oban, "~> 0.10.3"},
-      {:sourceror, "~> 1.13", only: [:dev, :test]},
-      # One guarded_struct for Mishka Pay (which may take its sibling checkout) and mishka_installer.
-      {:guarded_struct, "~> 0.1.10", override: true}
+      {:sourceror, "~> 1.13", only: [:dev, :test]}
     ]
   end
 
