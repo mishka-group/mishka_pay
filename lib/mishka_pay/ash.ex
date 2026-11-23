@@ -47,7 +47,7 @@ if Code.ensure_loaded?(Ash) do
     @spec listeners(Ash.Domain.t()) :: [module()]
     def listeners(domain) do
       for resource <- Ash.Domain.Info.resources(domain),
-          listener = MishkaPay.Ash.Resource.Info.listener(resource),
+          listener <- MishkaPay.Ash.Resource.Info.listeners(resource),
           do: listener
     end
 

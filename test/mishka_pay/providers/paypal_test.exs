@@ -9,6 +9,7 @@ defmodule MishkaPay.Providers.PayPalTest do
   alias MishkaPay.{Checkout, Errors, Event, Invoice, Page, Payment, Price, Refund, Subscription}
   alias MishkaPay.Helpers.TokenCache
   alias MishkaPay.Providers.PayPal
+  alias MishkaPay.Providers.PayPal.WebhookEndpoint
   alias MishkaPay.Test.PayPal, as: PayPalStub
 
   @keys %{
@@ -486,15 +487,19 @@ defmodule MishkaPay.Providers.PayPalTest do
           %{
             "id" => "C1",
             "status" => "COMPLETED",
-            "amount" => %{"currency_code" => "USD", "value" => "19.99"}
+            "amount" => %{"currency_code" => "USD", "value" => "19.99"},
+            "seller_receivable_breakdown" => %{
+              "paypal_fee" => %{"currency_code" => "USD", "value" => "0.99"}
+            }
           }
         ]
       )
 
-      assert {:ok, %Payment{amount_captured: captured}} =
+      assert {:ok, %Payment{amount_captured: captured, charge_id: "C1", fee: fee}} =
                MishkaPay.fetch_payment("paypal", "ORDERC", "site-a")
 
       assert captured == Money.new(:USD, "19.99")
+      assert fee == Money.new(:USD, "0.99")
 
       PayPalStub.order("ORDERP", "COMPLETED",
         captures: [
@@ -506,7 +511,7 @@ defmodule MishkaPay.Providers.PayPalTest do
         ]
       )
 
-      assert {:ok, %Payment{amount_captured: nil}} =
+      assert {:ok, %Payment{amount_captured: nil, charge_id: "C2", fee: nil}} =
                MishkaPay.fetch_payment("paypal", "ORDERP", "site-a")
     end
 
@@ -858,6 +863,141 @@ defmodule MishkaPay.Providers.PayPalTest do
 
         assert {:ok, %Event{subscription_id: "I-SUB42AAAA", payment_id: nil}} =
                  PayPal.verify_webhook(JSON.encode!(event), headers("good"), keys)
+      end
+    end
+
+    test "a refund's event names its Order, read through the capture it refunds" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+      PayPalStub.order("ORDERR1", "COMPLETED", captures: [%{"id" => "CAPTUREORDERR1"}])
+
+      event = %{
+        @event
+        | "event_type" => "PAYMENT.CAPTURE.REFUNDED",
+          "resource_type" => "refund",
+          "resource" => %{
+            "id" => "REFUND1",
+            "links" => [
+              %{
+                "rel" => "up",
+                "href" => "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTUREORDERR1"
+              }
+            ]
+          }
+      }
+
+      assert {:ok, %Event{payment_id: "ORDERR1", object_id: "REFUND1", object_type: "refund"}} =
+               PayPal.verify_webhook(JSON.encode!(event), headers("good"), keys)
+
+      assert_received {:paypal, "GET", "/v2/payments/captures/CAPTUREORDERR1", _headers, _body}
+
+      missing =
+        put_in(event, ["resource", "links"], [
+          %{
+            "rel" => "up",
+            "href" => "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURENOPE1"
+          }
+        ])
+
+      assert {:error, %Errors.Rejected{status: 404}} =
+               PayPal.verify_webhook(JSON.encode!(missing), headers("good"), keys)
+
+      no_link =
+        put_in(event, ["resource", "links"], [%{"rel" => "self", "href" => "https://x.test"}])
+
+      assert {:ok, %Event{payment_id: nil}} =
+               PayPal.verify_webhook(JSON.encode!(no_link), headers("good"), keys)
+    end
+  end
+
+  describe "the same way as Stripe" do
+    test "the buyer's return names the checkout: PayPal's token, or a subscription's id" do
+      assert {:ok, "ORDER7AB12"} =
+               MishkaPay.return_checkout_id("paypal", %{
+                 "token" => "ORDER7AB12",
+                 "PayerID" => "P1"
+               })
+
+      assert {:ok, "I-SUB42AAAA"} =
+               MishkaPay.return_checkout_id("paypal", %{
+                 "subscription_id" => "I-SUB42AAAA",
+                 "token" => "BA-1"
+               })
+
+      for params <- [%{}, %{"token" => "../v1/x"}, %{session_id: "cs_test_1"}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :checkout_id}]}} =
+                 MishkaPay.return_checkout_id("paypal", params)
+      end
+    end
+
+    test "a success page with Stripe's session placeholder goes to PayPal without it" do
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(%{
+                 @checkout
+                 | success_url:
+                     "https://shop.test/thanks?session_id={CHECKOUT_SESSION_ID}&lang=de"
+               })
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+
+      assert get_in(body, ["payment_source", "paypal", "experience_context", "return_url"]) ==
+               "https://shop.test/thanks?lang=de"
+    end
+
+    test "a site's webhook is made with every handled event, its missing events added, checked and deleted" do
+      url = "https://shop.test/pay/webhooks/paypal/site-a"
+
+      assert {:ok, %{endpoint: nil, missing: missing}} = WebhookEndpoint.check("site-a", url)
+      assert missing == PayPal.handled_events()
+
+      assert {:ok, %WebhookEndpoint{id: "WH-" <> _ = id, url: ^url, enabled_events: events}} =
+               WebhookEndpoint.ensure("site-a", url)
+
+      assert events == PayPal.handled_events()
+      {headers, _body} = paypal_request("POST", "/v1/notifications/webhooks")
+      assert headers["paypal-request-id"] =~ "mishka_pay-webhook-"
+
+      assert {:ok, %WebhookEndpoint{id: ^id}} = WebhookEndpoint.ensure("site-a", url)
+      refute_received {:paypal, "POST", "/v1/notifications/webhooks", _headers, _body}
+      refute_received {:paypal, "PATCH", _path, _headers, _body}
+
+      MishkaPay.request(%{
+        provider: "paypal",
+        tenant: "site-a",
+        method: :post,
+        path: "/v1/notifications/webhooks",
+        params: %{
+          "url" => url <> "/old",
+          "event_types" => [%{"name" => "CHECKOUT.ORDER.APPROVED"}]
+        },
+        reference: "old"
+      })
+
+      old = url <> "/old"
+      assert {:ok, %{missing: [_ | _]}} = WebhookEndpoint.check("site-a", old)
+
+      assert {:ok, %WebhookEndpoint{id: old_id, enabled_events: all}} =
+               WebhookEndpoint.ensure("site-a", old)
+
+      assert Enum.sort(all) == Enum.sort(PayPal.handled_events())
+
+      assert_received {:paypal, "PATCH", "/v1/notifications/webhooks/" <> ^old_id, _headers,
+                       [patch]}
+
+      assert patch["op"] == "replace" and patch["path"] == "/event_types"
+
+      assert :ok = WebhookEndpoint.delete("site-a", id)
+      assert {:ok, %{endpoint: nil}} = WebhookEndpoint.check("site-a", url)
+
+      assert [webhook_endpoint: :ok] =
+               "site-a"
+               |> then(&MishkaPay.Check.run(provider: "paypal", tenant: &1, webhook_url: old))
+               |> Keyword.take([:webhook_endpoint])
+
+      for {call, field} <- [
+            {fn -> WebhookEndpoint.ensure("site-a", "http://shop.test/x") end, :url},
+            {fn -> WebhookEndpoint.delete("site-a", "WH-1/../x") end, :id}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field}]}} = call.()
       end
     end
   end

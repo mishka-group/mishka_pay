@@ -13,5 +13,6 @@ Every event carries `:provider`; none carries a key or a buyer's details.
 | `[:mishka_pay, :inbox, :process, :start \| :stop]` | each try of the Ash inbox at one event | `:provider`, `:tenant`, `:type`, `:event_id`; on `:stop` the `:outcome` (`:processed` or `:retry`) and the measurement `:lag` (milliseconds since it was stored) |
 | `[:mishka_pay, :inbox, :failed]` | an inbox event out of tries | `:provider`, `:tenant`, `:type`, `:event_id` |
 | `[:mishka_pay, :webhook, :start \| :stop]` | each webhook | `:provider`; on `:stop` the `:status`, the `:outcome`, and for a checked event its `:tenant`, `:type` and `:id` (a tenant only once the signature proves it) |
+| `[:mishka_pay, :webhook, :answered]` | each webhook, once its answer went out | measurements `:answer_ms` and `:duration` (from taking the request in to answering it); the `:stop` metadata |
 
 Attach with `:telemetry.attach_many/4`; the demo shows them live.

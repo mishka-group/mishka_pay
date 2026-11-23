@@ -23,6 +23,10 @@ defmodule MishkaPay.Subscription do
       `MishkaPay.cancel_subscription/4`); `:cancel_at`, `:canceled_at`: when it ends, or ended.
     * `:trial_end`: when the trial ends, for one in trial.
     * `:latest_invoice_id`: its newest invoice (`MishkaPay.list_invoices/3` lists them all).
+    * `:default_payment_method`: the payment method its invoices are charged to (`pm_...`), the
+      one the buyer paid its checkout with or changed it to; `:card_brand` (`"visa"`) and
+      `:card_last4` when that is a card. Empty when it has none of its own and the customer's
+      default pays it.
     * `:schedule_id`: the `MishkaPay.Subscription.Schedule` that runs it, when one does.
     * `:reference`, `:metadata`: the caller's own id from the checkout, and extra pairs;
       `:owner`: who it is for, as the checkout named them (`MishkaPay.Checkout`).
@@ -52,6 +56,9 @@ defmodule MishkaPay.Subscription do
     field :canceled_at, DateTime.t(), derives: "validate(struct)"
     field :trial_end, DateTime.t(), derives: "validate(struct)"
     field :latest_invoice_id, String.t(), derives: "validate(string)"
+    field :default_payment_method, String.t(), derives: "validate(string)"
+    field :card_brand, String.t(), derives: "validate(string)"
+    field :card_last4, String.t(), derives: "validate(string)"
     field :schedule_id, String.t(), derives: "validate(string)"
 
     field :pause_behavior, :void | :keep_as_draft | :mark_uncollectible,

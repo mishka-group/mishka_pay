@@ -16,7 +16,7 @@ In Stripe's Dashboard, point each site's endpoint at
 | `checkout.session.completed` | the payment, or the subscription it started |
 | `checkout.session.expired`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` | the payment |
 | `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.processing`, `payment_intent.requires_action`, `payment_intent.amount_capturable_updated` | the payment |
-| `charge.succeeded`, `charge.failed`, `charge.refunded`, `charge.captured`, `charge.expired` | the payment |
+| `charge.succeeded`, `charge.updated`, `charge.failed`, `charge.refunded`, `charge.captured`, `charge.expired` | the payment |
 | `refund.created`, `refund.updated`, `refund.failed` | the payment |
 | `invoice_payment.paid` | the payment an invoice was paid with |
 | `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`, `charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated` | the dispute and its payment |

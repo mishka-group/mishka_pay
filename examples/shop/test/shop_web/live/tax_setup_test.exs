@@ -159,6 +159,23 @@ defmodule ShopWeb.TaxSetupTest do
     assert has_element?(view, "[data-testid=tax-rate-percentage][value='150']")
   end
 
+  test "a registration starting today goes to Stripe as now, a later day as that day", %{
+    conn: conn
+  } do
+    view = shown(conn)
+    form = "[data-testid=tax-registration-form]"
+    today = Date.utc_today()
+
+    view |> form(form, %{country: "DE", starts_on: Date.to_iso8601(today)}) |> render_submit()
+    assert_received {:registered, %{"active_from" => "now"}}
+
+    later = Date.add(today, 10)
+    view |> form(form, %{country: "DE", starts_on: Date.to_iso8601(later)}) |> render_submit()
+    midnight = later |> DateTime.new!(~T[00:00:00], "Etc/UTC") |> DateTime.to_unix()
+    assert_received {:registered, %{"active_from" => sent}}
+    assert sent == Integer.to_string(midnight)
+  end
+
   test "a US registration needs its state; with it, it is added; one is ended", %{conn: conn} do
     view = shown(conn)
     view |> form("[data-testid=tax-registration-form]", %{country: "US"}) |> render_change()

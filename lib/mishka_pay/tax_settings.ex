@@ -65,7 +65,9 @@ defmodule MishkaPay.TaxSettings do
           EU and in the other countries whose standard registration has one
           (`MishkaPay.Providers.Stripe.place_of_supply_schemes/2` says which); a registration of
           any other kind or country refuses it.
-        * `:active_from`: when it starts; left out, at once.
+        * `:active_from`: when it starts; left out, at once. A start earlier today, such as
+          today's midnight from a date picked in a form, starts it at once too (Stripe's `now`:
+          it refuses a start in the past); an earlier day is refused before any request.
         * `:expires_at`: when it ends; left out, never.
 
       What the provider fills in: `:id`, `:status` (`:active`, `:scheduled` or `:expired`) and

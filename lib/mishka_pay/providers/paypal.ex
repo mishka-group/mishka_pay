@@ -47,7 +47,12 @@ defmodule MishkaPay.Providers.PayPal do
       expand option: either one is refused before any request.
     * `verify_webhook/3` asks PayPal to check the message (`verify-webhook-signature`) and answers
       it as a `MishkaPay.Event` naming its Order, or its subscription (a renewal's sale names it as
-      its billing agreement).
+      its billing agreement); a refund's names the Order its capture belongs to, read once.
+      `handled_events/0` are the events Mishka Pay acts on, and
+      `MishkaPay.Providers.PayPal.WebhookEndpoint` makes a site's webhook with them.
+    * `return_checkout_id/1` reads the Order's id (`token`) or the subscription's
+      (`subscription_id`) from the return page's query; a return URL made for Stripe goes to
+      PayPal without its `{CHECKOUT_SESSION_ID}` placeholder.
 
   ## What it refuses before any request
 
@@ -123,9 +128,10 @@ defmodule MishkaPay.Providers.PayPal do
          :ok <- no_options(checkout),
          :ok <- named_prices(checkout.items),
          :ok <- currencies(checkout.items, :checkout),
+         params = Mapper.order_params(checkout),
          {:ok, order} <-
-           request(:post, "/v2/checkout/orders", Mapper.order_params(checkout), keys,
-             key: ProviderKit.idempotency_key("checkout", checkout.tenant, checkout.reference)
+           request(:post, "/v2/checkout/orders", params, keys,
+             key: ProviderKit.request_key("checkout", checkout.tenant, checkout.reference, params)
            ) do
       {:ok, Mapper.checkout(order, checkout)}
     end
@@ -205,6 +211,18 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
+  # A subscription comes back with its id in `subscription_id` (its `token` is not the
+  # subscription); a payment with the Order's id in `token`.
+  @impl MishkaPay.Provider
+  def return_checkout_id(%{"subscription_id" => "I-" <> _ = id}),
+    do: with(:ok <- subscription_id(id, :checkout_id), do: {:ok, id})
+
+  def return_checkout_id(%{"token" => id}) when is_binary(id),
+    do: with(:ok <- order_id(id, :checkout_id), do: {:ok, id})
+
+  def return_checkout_id(_params),
+    do: ProviderKit.invalid(:checkout_id, Messages.text(:return_no_checkout))
+
   @impl MishkaPay.Provider
   def fetch_payment(order_id, keys) do
     with :ok <- order_id(order_id, :payment_id),
@@ -258,13 +276,68 @@ defmodule MishkaPay.Providers.PayPal do
              {:json_text, verification(signature, webhook_id, payload)},
              keys
            ) do
-      Mapper.event(event, keys.mode == :live)
+      with {:ok, checked} <- Mapper.event(event, keys.mode == :live),
+           do: refunded_order(checked, event["resource"], keys)
     else
       {:ok, _not_verified} -> bad_signature(:mismatch)
       {:error, %Errors.BadSignature{}} = error -> error
       {:error, _other} -> bad_signature(:mismatch)
     end
   end
+
+  # A refund's event names only its capture (its `up` link): the capture names the Order, the
+  # payment Mishka Pay keeps, in one read. A read PayPal refuses answers 400, so it sends again.
+  defp refunded_order(
+         %MishkaPay.Event{payment_id: nil, object_type: "refund"} = event,
+         resource,
+         keys
+       ) do
+    with {:ok, capture_id} <- refunded_capture(resource),
+         {:ok, capture} <- request(:get, "/v2/payments/captures/#{capture_id}", %{}, keys) do
+      {:ok,
+       %{event | payment_id: get_in(capture, ["supplementary_data", "related_ids", "order_id"])}}
+    else
+      :none -> {:ok, event}
+      {:error, _refused} = error -> error
+    end
+  end
+
+  defp refunded_order(event, _resource, _keys), do: {:ok, event}
+
+  defp refunded_capture(%{"links" => links}) when is_list(links) do
+    Enum.find_value(links, :none, fn
+      %{"rel" => "up", "href" => href} when is_binary(href) ->
+        case Regex.run(~r"/v2/payments/captures/([A-Z0-9]{6,40})\z", href) do
+          [_href, id] -> {:ok, id}
+          nil -> nil
+        end
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp refunded_capture(_resource), do: :none
+
+  @handled ~w(
+    CHECKOUT.ORDER.APPROVED CHECKOUT.ORDER.COMPLETED
+    PAYMENT.CAPTURE.COMPLETED PAYMENT.CAPTURE.PENDING PAYMENT.CAPTURE.DECLINED
+    PAYMENT.CAPTURE.REFUNDED PAYMENT.CAPTURE.REVERSED
+    PAYMENT.REFUND.PENDING PAYMENT.REFUND.FAILED
+    BILLING.SUBSCRIPTION.ACTIVATED BILLING.SUBSCRIPTION.UPDATED BILLING.SUBSCRIPTION.EXPIRED
+    BILLING.SUBSCRIPTION.CANCELLED BILLING.SUBSCRIPTION.SUSPENDED
+    BILLING.SUBSCRIPTION.PAYMENT.FAILED
+    PAYMENT.SALE.COMPLETED PAYMENT.SALE.REFUNDED PAYMENT.SALE.REVERSED
+  )
+
+  @doc """
+  The PayPal webhook events Mishka Pay acts on, which
+  `MishkaPay.Providers.PayPal.WebhookEndpoint.ensure/2` subscribes a site's webhook to: an Order
+  approved or completed and its capture's changes and refunds (each named by its Order, the
+  payment's id), and a subscription's changes and its renewals' sales.
+  """
+  @spec handled_events() :: [String.t()]
+  def handled_events, do: @handled
 
   # The Order as it is now; an approved one is captured first, once, whoever asks.
   defp current_order(order_id, keys) do
@@ -388,6 +461,7 @@ defmodule MishkaPay.Providers.PayPal do
     automatic_tax: "automatic tax",
     customer_creation: "customer creation",
     locale: "a page language",
+    payment_methods: "chosen payment methods",
     expires_at: "an expiry",
     billing_address: "billing address collection",
     tax_id_collection: "tax id collection",
@@ -488,7 +562,9 @@ defmodule MishkaPay.Providers.PayPal do
   defp bad_signature(reason),
     do: {:error, Errors.BadSignature.exception(provider: "paypal", reason: reason)}
 
-  defp request(method, path, body, keys, opts \\ []) do
+  # Public for the PayPal-only helpers beside this adapter (`MishkaPay.Providers.PayPal.WebhookEndpoint`).
+  @doc false
+  def request(method, path, body, keys, opts \\ []) do
     with {:ok, token} <- token(keys) do
       method
       |> spec(path, body, keys, token, opts)

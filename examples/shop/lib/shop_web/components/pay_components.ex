@@ -905,6 +905,14 @@ defmodule ShopWeb.PayComponents do
                 <dd data-testid="live-card">
                   {paid_with(live.payment_method, live.card_brand, live.card_last4)}
                 </dd>
+                <dt class="opacity-70">Charge</dt>
+                <dd class="font-mono text-xs" data-testid="live-charge">{live.charge_id || "–"}</dd>
+                <dt class="opacity-70">Balance movement</dt>
+                <dd class="font-mono text-xs" data-testid="live-balance-transaction">
+                  {live.balance_transaction_id || "–"}
+                </dd>
+                <dt class="opacity-70">Provider fee</dt>
+                <dd data-testid="live-fee">{(live.fee && Money.to_string!(live.fee)) || "–"}</dd>
                 <dt :if={live.failure_message} class="opacity-70">Failed because</dt>
                 <dd :if={live.failure_message} class="text-error" data-testid="live-failure">
                   <.failure message={live.failure_message} code={live.failure_code} />
@@ -1265,12 +1273,13 @@ defmodule ShopWeb.PayComponents do
             <th>Type</th>
             <th>About</th>
             <th>Status</th>
+            <th>Answered in</th>
             <th>Error</th>
           </tr>
         </thead>
         <tbody id="inbox" phx-update="stream" data-testid="inbox-rows">
           <tr id="inbox-empty" class="only:table-row hidden">
-            <td colspan="4" class="text-center opacity-70">No webhook events yet.</td>
+            <td colspan="5" class="text-center opacity-70">No webhook events yet.</td>
           </tr>
           <tr
             :for={{dom_id, event} <- @events}
@@ -1282,10 +1291,40 @@ defmodule ShopWeb.PayComponents do
             <td><code class="text-xs">{event.type}</code></td>
             <td class="font-mono text-xs break-all">{event.payment_id || event.subscription_id}</td>
             <td><span class="badge badge-sm">{event.status}</span></td>
+            <td class="text-xs" data-testid="inbox-answer">
+              {if event.answer_ms, do: "#{event.answer_ms} ms (#{event.answer_status})", else: "–"}
+            </td>
             <td class="text-xs text-error">{event.last_error}</td>
           </tr>
         </tbody>
       </table>
+    </div>
+    """
+  end
+
+  attr :rejections, :list, required: true
+
+  def rejections_table(assigns) do
+    ~H"""
+    <div class="mt-3" data-testid="rejections">
+      <h3 class="text-sm font-medium">
+        Refused messages:
+        <span data-testid="rejections-total">{Enum.sum_by(@rejections, & &1.count)}</span>
+      </h3>
+      <p class="text-xs opacity-70">
+        Counted per reason, site and day; their bodies are never kept. A bad signature or a site
+        without keys is counted here, never stored in the inbox.
+      </p>
+      <ul class="text-xs mt-1 space-y-1">
+        <li
+          :for={row <- @rejections}
+          data-testid="rejection-row"
+          data-reason={row.reason}
+        >
+          <code>{row.reason}</code>, {row.tenant || "no such site"}, {row.day}:
+          <span data-testid="rejection-count">{row.count}</span>
+        </li>
+      </ul>
     </div>
     """
   end

@@ -15,6 +15,11 @@ defmodule MishkaPay.Checkout do
 
     * `:provider` and `:tenant`: which provider, with whose keys (`MishkaPay.Credentials`).
     * `:items`: one or more `MishkaPay.Price`, all in one currency; none in `mode: :setup`.
+    * `:currency`: in a sale, the currency the buyer is charged in (`"eur"`). Catalog prices
+      (`:id`) are charged at the amount they keep for it (`MishkaPay.Price` `:currency_options`),
+      never a conversion, and a provider refuses a price that has none in it. An item or a
+      shipping rate with its own amount must already be in it. Left out, the provider picks: at
+      Stripe, the buyer's local currency when a price has it, else the price's own.
     * `:ui_mode`: `:hosted` (the default) sends the buyer to the provider's page; `:embedded`
       shows the provider's form inside the site's own page, and needs `:embedded_checkout`.
     * `:success_url`, `:cancel_url`: with `:hosted`, where the buyer is sent after paying or
@@ -25,8 +30,9 @@ defmodule MishkaPay.Checkout do
     * `:customer`: an optional buyer: `%{id: "cus_..."}` for a customer the provider keeps, or
       `%{email: "..."}` to fill in a new buyer's email; one or the other (`MishkaPay.Customer`).
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
-      it comes back on the payment, and it makes the request's idempotency key, so the same
-      reference never opens two checkouts.
+      it comes back on the payment, and with the request's details it makes the idempotency key,
+      so the same request sent twice never opens two checkouts, and the same reference asked again
+      with other details is a new request.
     * `:owner`: who the sale is for in the caller's app, such as the signed-in user's id. The
       provider keeps it on the payment or the subscription, and it comes back on either
       (`MishkaPay.Payment`, `MishkaPay.Subscription`), so access can be given to that user. The
@@ -49,6 +55,11 @@ defmodule MishkaPay.Checkout do
       Tax); each price then needs its `:tax_code`.
     * `:customer_creation`: in a one-time or setup checkout, `:always` makes a provider customer
       for the buyer, `:if_required` only when the provider needs one.
+    * `:payment_methods`: the provider's own names of the only ways to pay the page may offer
+      (Stripe's payment method types: `["card", "link", "sepa_debit"]`). At Stripe it is
+      `allowed_payment_method_types`, a filter on the methods it works out for the buyer from the
+      Dashboard, so a type the account has not switched on is simply not offered. Left out, the
+      provider chooses, its recommended way.
     * `:locale`: the language of the provider's page (`"de"`, `"auto"`).
     * `:terms`: `true` makes the buyer accept the site's terms of service before paying (the
       terms page is set in the provider's account). It helps when a buyer later disputes a sale.
@@ -116,7 +127,8 @@ defmodule MishkaPay.Checkout do
   refused in setup mode.
 
   A provider refuses an option it cannot honour (`MishkaPay.Errors.Unsupported`) rather than
-  leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard.
+  leaving it out. Which payment methods a Stripe checkout offers is set in the Stripe Dashboard,
+  unless `:payment_methods` names them.
 
   What the provider fills in:
 
@@ -244,6 +256,11 @@ defmodule MishkaPay.Checkout do
       validator: {__MODULE__, :customer_creation}
 
     field :locale, String.t(), derives: "sanitize(trim) validate(string, not_empty, max_len=10)"
+
+    field :payment_methods, list(),
+      derives:
+        ~S"sanitize(each=[trim, downcase]) validate(list, not_empty, each=[string, regex=\A[a-z_]{2,40}\z])"
+
     field :expires_at, DateTime.t(), derives: "validate(struct)", validator: {__MODULE__, :later}
 
     field :billing_address, :auto | :required,
@@ -520,8 +537,25 @@ defmodule MishkaPay.Checkout do
       {false, nil} ->
         one_currency(attrs)
 
-      {false, _currency} ->
-        {:error, %{field: :currency, action: :mode, message: Messages.text(:currency_setup_only)}}
+      {false, currency} ->
+        with {:ok, attrs} <- one_currency(attrs), do: sale_currency(attrs, currency)
+    end
+  end
+
+  # The currency a sale is charged in: the one of every item and rate that carries its own amount,
+  # so it picks among the other currencies of the provider's prices only. A currency that is not
+  # one is reported by the field itself.
+  defp sale_currency(attrs, currency) do
+    rates = Enum.filter(List.wrap(key(attrs, :shipping_rates)), &is_map/1)
+
+    own =
+      (List.wrap(key(attrs, :items)) ++ rates) |> MapSet.new(&currency/1) |> MapSet.delete(nil)
+
+    with {:ok, :currency, code} <- MishkaPay.Money.currency_field(:currency, currency),
+         false <- MapSet.subset?(own, MapSet.new([code])) do
+      {:error, %{field: :currency, action: :items, message: Messages.text(:currency_items)}}
+    else
+      _fits_or_reported_by_the_field -> {:ok, attrs}
     end
   end
 

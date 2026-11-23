@@ -23,6 +23,9 @@ defmodule MishkaPay.Test.PayPal do
         {:ok, %{payment_id: _paid}} = MishkaPay.fetch_checkout("paypal", checkout.id)
       end
 
+  It also keeps the site's webhooks (`/v1/notifications/webhooks`: list, make, change the event
+  types, delete) and reads a capture with the Order it belongs to.
+
   `order/3` puts an Order in a state (an `"APPROVED"` one is captured when read; `declined: true`
   declines the capture), `subscription/3` a subscription (`"ACTIVE"` with `:billing_info` and
   `:transactions`). A webhook message is verified when its `paypal-transmission-sig` header is
@@ -205,7 +208,14 @@ defmodule MishkaPay.Test.PayPal do
       "id" => "REFUND#{System.unique_integer([:positive])}",
       "status" => "COMPLETED",
       "amount" => body["amount"] || %{"currency_code" => "USD", "value" => "39.98"},
-      "create_time" => "2026-11-16T10:00:00Z"
+      "create_time" => "2026-11-16T10:00:00Z",
+      "links" => [
+        %{
+          "rel" => "up",
+          "method" => "GET",
+          "href" => "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE" <> id
+        }
+      ]
     }
 
     order = held(:orders)[id]
@@ -220,6 +230,60 @@ defmodule MishkaPay.Test.PayPal do
 
     put_held(:orders, id, %{order | "purchase_units" => [unit]})
     reply(conn, 201, refund)
+  end
+
+  defp answer(conn, "GET", ["v2", "payments", "captures", "CAPTURE" <> id], _body) do
+    case held(:orders)[id] do
+      nil ->
+        not_found(conn)
+
+      _order ->
+        captured =
+          id
+          |> capture()
+          |> Map.put("supplementary_data", %{"related_ids" => %{"order_id" => id}})
+
+        reply(conn, 200, captured)
+    end
+  end
+
+  defp answer(conn, "GET", ["v1", "notifications", "webhooks"], _body),
+    do: reply(conn, 200, %{"webhooks" => Map.values(held(:webhooks))})
+
+  defp answer(conn, "POST", ["v1", "notifications", "webhooks"], body) do
+    webhook = %{
+      "id" => "WH-" <> paypal_id(),
+      "url" => body["url"],
+      "event_types" => body["event_types"]
+    }
+
+    put_held(:webhooks, webhook["id"], webhook)
+    reply(conn, 201, webhook)
+  end
+
+  defp answer(conn, "PATCH", ["v1", "notifications", "webhooks", id], [
+         %{"op" => "replace", "path" => "/event_types", "value" => types}
+       ]) do
+    case held(:webhooks)[id] do
+      nil ->
+        not_found(conn)
+
+      webhook ->
+        changed = Map.put(webhook, "event_types", types)
+        put_held(:webhooks, id, changed)
+        reply(conn, 200, changed)
+    end
+  end
+
+  defp answer(conn, "DELETE", ["v1", "notifications", "webhooks", id], _body) do
+    case held(:webhooks)[id] do
+      nil ->
+        not_found(conn)
+
+      _webhook ->
+        hold(:webhooks, Map.delete(held(:webhooks), id))
+        send_resp(conn, 204, "")
+    end
   end
 
   defp answer(conn, "POST", ["v1", "catalogs", "products"], body) do
@@ -385,7 +449,12 @@ defmodule MishkaPay.Test.PayPal do
     %{
       "id" => "CAPTURE" <> id,
       "status" => "COMPLETED",
-      "amount" => %{"currency_code" => "USD", "value" => "39.98"}
+      "amount" => %{"currency_code" => "USD", "value" => "39.98"},
+      "seller_receivable_breakdown" => %{
+        "gross_amount" => %{"currency_code" => "USD", "value" => "39.98"},
+        "paypal_fee" => %{"currency_code" => "USD", "value" => "1.88"},
+        "net_amount" => %{"currency_code" => "USD", "value" => "38.10"}
+      }
     }
   end
 

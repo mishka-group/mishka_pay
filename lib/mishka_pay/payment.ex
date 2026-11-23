@@ -24,6 +24,16 @@ defmodule MishkaPay.Payment do
     * `:payment_method`: how it was paid, such as `"card"`; for a card, `:card_brand` (`"visa"`)
       and `:card_last4`.
     * `:receipt_url`: the provider's receipt page for the buyer, once paid.
+    * `:charge_id`: the provider's id of the charge that took the money (Stripe's latest charge,
+      `ch_...`; PayPal's capture), once there is one: what disputes, fraud warnings, application
+      fees and balance movements name.
+    * `:balance_transaction_id`: the movement of the seller's balance the charge made
+      (`txn_...` at Stripe), and `:fee`: what the provider kept of it, in the balance's own
+      currency (which may differ from the payment's). PayPal has no balance movements: its fee
+      is the capture's PayPal fee. `MishkaPay.list_balance_transactions/3` with `payment_id:`
+      lists the charge's movement and its refunds'. Stripe captures asynchronously by default
+      (`automatic_async`): both may be `nil` just after the payment, until Stripe sends
+      `charge.updated`, which syncs the payment again.
     * `:failure_code`, `:failure_message`: why the last try failed, such as `"insufficient_funds"`.
     * `:disputed`: the buyer's bank has asked for it back (`MishkaPay.Dispute`).
     * `:refunds`: every `MishkaPay.Refund` made on it, newest first.
@@ -57,6 +67,9 @@ defmodule MishkaPay.Payment do
     field :card_brand, String.t(), derives: "validate(string)"
     field :card_last4, String.t(), derives: "validate(string)"
     field :receipt_url, String.t(), derives: "validate(string)"
+    field :charge_id, String.t(), derives: "validate(string)"
+    field :balance_transaction_id, String.t(), derives: "validate(string)"
+    field :fee, Money.t(), validator: {MishkaPay.Money, :field}
     field :failure_code, String.t(), derives: "validate(string)"
     field :failure_message, String.t(), derives: "validate(string)"
     field :disputed, boolean(), default: false, derives: "validate(boolean)"

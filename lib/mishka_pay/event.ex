@@ -29,6 +29,8 @@ defmodule MishkaPay.Event do
     * `:livemode`: whether it came from live or test mode.
     * `:account`: the connected account it is for, when the provider has those.
     * `:created_at`: when the provider made it.
+    * `:received_at`: when `MishkaPay.Webhook` took the request in, for an event that came by
+      webhook; `nil` for one read back with `MishkaPay.list_events/3`.
 
   Only the ids matter: a listener reads the object again from the provider
   (`MishkaPay.fetch_payment/3`), which stays the source of truth, and never trusts the order
@@ -51,5 +53,6 @@ defmodule MishkaPay.Event do
     field :livemode, boolean(), default: false, derives: "validate(boolean)"
     field :account, String.t(), derives: "validate(string)"
     field :created_at, DateTime.t(), derives: "validate(struct)"
+    field :received_at, DateTime.t(), derives: "validate(struct)"
   end
 end

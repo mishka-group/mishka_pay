@@ -38,7 +38,7 @@ By hand:
 
 ```elixir
 # mix.exs
-{:mishka_pay, "~> 0.0.1"}
+{:mishka_pay, "~> 0.0.2"}
 # for the Ash layer, also:
 {:ash, "~> 3.37"}, {:ash_postgres, "~> 2.15"}, {:ash_oban, "~> 0.10.3"}
 ```
@@ -105,6 +105,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 |---|---|
 | `MishkaPay.checkout(attrs)` | `{:ok, %MishkaPay.Checkout{url: url}}`: redirect the buyer to `url` |
 | `MishkaPay.fetch_checkout(provider, checkout_id, tenant)` | the checkout read back, with `:payment_id` or `:subscription_id` once paid |
+| `MishkaPay.return_checkout_id(provider, params)` | `{:ok, checkout_id}` from the query of the page the buyer came back to (Stripe's `session_id`, PayPal's `token` or `subscription_id`), so one success page serves every provider; none is `Errors.Invalid` on `:checkout_id` |
 | `MishkaPay.fetch_payment(provider, payment_id, tenant)` | `%MishkaPay.Payment{}` with status, buyer, card, refunds |
 | `MishkaPay.checkout(%{ui_mode: :embedded, return_url: url, ...})` | `%MishkaPay.Checkout{client_secret: secret}`: the provider's form inside the site's page |
 | `MishkaPay.capture_payment(provider, payment_id, tenant, amount: money)`, `cancel_payment/3` | the `%MishkaPay.Payment{}` after: a held (`:authorized`) payment taken, all or part, or let go |
@@ -144,7 +145,7 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.calculate_tax(attrs)` (`MishkaPay.TaxCalculation`: `:items` of `MishkaPay.TaxCalculation.Items`, `:address` or `:customer_id`, `:shipping`) | `%MishkaPay.TaxCalculation{}`: the tax on a sale outside the checkout, with `:amount_total` to charge |
 | `MishkaPay.record_tax(provider, calculation_id, reference, tenant)` | `%MishkaPay.TaxCalculation.Transaction{}`: the paid sale in the provider's tax reports |
 | `MishkaPay.create_tax_rate(attrs)` (`MishkaPay.TaxRate`: `:display_name`, `:percentage`, `:inclusive`, `:country`, `:state`, `:jurisdiction`, `:tax_type`, `:description`, `:reference`), `fetch_tax_rate/3`, `update_tax_rate(%{provider:, id:, active: false})`, `list_tax_rates(p, tenant, active: true)` | `%MishkaPay.TaxRate{}`: a rate set by hand; its id goes in `tax_rate_ids:` of a checkout item, an invoice item or a draft bill; the provider needs `:tax_rate` |
-| `MishkaPay.create_tax_registration(attrs)` (`MishkaPay.TaxSettings.Registration`: `:country`, `:type`, `:state`, `:place_of_supply_scheme`, `:active_from`, `:expires_at`), `list_tax_registrations(p, tenant, status: :all)`, `expire_tax_registration(p, id, tenant, at: dt)` | `%MishkaPay.TaxSettings.Registration{}`: where the seller collects tax; the provider needs `:tax_setup` |
+| `MishkaPay.create_tax_registration(attrs)` (`MishkaPay.TaxSettings.Registration`: `:country`, `:type`, `:state`, `:place_of_supply_scheme`, `:active_from`, `:expires_at`), `list_tax_registrations(p, tenant, status: :all)`, `expire_tax_registration(p, id, tenant, at: dt)` | `%MishkaPay.TaxSettings.Registration{}`: where the seller collects tax; an `:active_from` earlier today (a form's date) starts it now, an earlier day is refused; the provider needs `:tax_setup` |
 | `MishkaPay.fetch_tax_settings(provider, tenant)`, `update_tax_settings(%{provider:, tenant:, head_office: address, tax_code:, tax_behavior:})` | `%MishkaPay.TaxSettings{}`: the head office and tax defaults, with `:status` and `:missing_fields` |
 | `MishkaPay.create_shipping_rate(attrs)`, `list_shipping_rates(provider, tenant, active: true)` | `%MishkaPay.ShippingRate{}`: a way to ship and its price, offered by id on checkouts |
 | `MishkaPay.list_events(provider, tenant, since: dt, types: [...], events: :thin)` | a `MishkaPay.Page` of `%MishkaPay.Event{}`; Stripe: thin events from `/v2/core/events` (the default) or `events: :snapshot` from `/v1/events` |
@@ -167,13 +168,16 @@ Each tenant's webhook URL is `/pay/webhooks/<provider>/<tenant>`, for example
 | `MishkaPay.create_feature(attrs)` (`MishkaPay.Feature`), `attach_feature(provider, product_id, feature_id, tenant)` | `%MishkaPay.Feature{}`; a buyer of the product is entitled to it |
 | `MishkaPay.list_entitlements(provider, customer_id, tenant)` | a `MishkaPay.Page` of `%MishkaPay.Feature.Entitlement{lookup_key: key}`: what the customer may use now |
 | `MishkaPay.fetch_balance(provider, tenant)` | `%MishkaPay.Balance{available: [money], pending: [money]}`, one money per currency |
-| `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` | a `MishkaPay.Page` of `%MishkaPay.Balance.Transaction{}` (amount, fee, net, type, source) |
+| `MishkaPay.list_balance_transactions(provider, tenant, payout_id: id, type: "charge")` (or `source_id:`; `payment_id:` for one payment's movements) | a `MishkaPay.Page` of `%MishkaPay.Balance.Transaction{}` (amount, fee, net, type, source, and the `:payment_id` it belongs to); a payment's own `:charge_id`, `:balance_transaction_id` and `:fee` join it to them exactly |
 | `MishkaPay.adjust_customer_balance(provider, customer_id, money, tenant, description: d, reference: r)`, `list_customer_balance/4` | `%MishkaPay.Customer.BalanceTransaction{}`: below zero is store credit |
 | `MishkaPay.create_connected_account(attrs)` (`MishkaPay.ConnectedAccount`: `:configurations` `[:merchant, :recipient]`, `:dashboard` `:express`/`:full`/`:none`, `:fees_collector`, `:losses_collector`, `:country`, `:email`, `:business_name`, `:capabilities`, `:api` `:v2`/`:v1`, `:reference`), `fetch_connected_account(p, id, tenant, api: :v1)`, `update_connected_account/1`, `list_connected_accounts(p, tenant, configurations: [:merchant])`, `close_connected_account(p, id, tenant)` | `%MishkaPay.ConnectedAccount{}`: a seller's account under the platform, with `:charges_enabled`, `:payouts_enabled`, `:transfers_enabled`, `:requirements_due`, `:closed`; the provider needs `:connect`. Stripe's Accounts v2 by default (the keys' `connect_api: :v1` or a call's `api: :v1` for v1). The site's keys then name it as `account_id` |
 | `MishkaPay.account_link(%{provider:, account_id:, refresh_url:, return_url:, type: :onboarding})`, `login_link(provider, account_id, tenant)` | `%MishkaPay.ConnectedAccount.Link{url: url}`: redirect the seller to it at once; it runs out in minutes |
 | `MishkaPay.list_application_fees(provider, tenant, charge_id: id)`, `fetch_application_fee/3`, `refund_application_fee(p, fee_id, tenant, amount: money, reference: r)` | `%MishkaPay.ApplicationFee{}`: the platform's cut of a seller's sale, and what of it went back |
 | `MishkaPay.create_transfer(%{provider:, amount:, destination: "acct_...", reference:})` (`MishkaPay.Transfer`: also `:source_charge_id`, `:transfer_group`), `fetch_transfer/3`, `list_transfers(p, tenant, destination: id)`, `reverse_transfer(p, id, tenant, amount: money, reference: r)` | `%MishkaPay.Transfer{}`: money from the platform's balance to a seller, sent once per reference; the provider needs `:transfer` |
 | `MishkaPay.list_payouts(provider, tenant, status: :paid)`, `fetch_payout/3`, `cancel_payout/3` | `%MishkaPay.Balance.Payout{}`: money paid out to the bank of the account the keys act for; the provider needs `:payout` |
+| `MishkaPay.create_payout(%{provider:, tenant:, amount: money, reference: r, method: "instant", destination_id: id})` (`MishkaPay.Balance.Payout`: also `:statement_descriptor`, `:description`, `:metadata`) | `%MishkaPay.Balance.Payout{status: :pending}`: the available balance paid out now, once per reference; money the balance lacks is `Errors.Rejected` (Stripe: code `"balance_insufficient"`); the provider needs `:payout` |
+| `MishkaPay.fetch_payout_schedule(provider, tenant)`, `update_payout_schedule(%{provider:, tenant:, interval: :weekly, weekly_days: [:monday], delay_days: 7})` (`MishkaPay.Balance.PayoutSchedule`: `:interval` `:manual`/`:daily`/`:weekly`/`:monthly`, `:weekly_days`, `:monthly_days`, `:delay_days` or `:default`, `:minimum_balances`, `:statement_descriptor`) | `%MishkaPay.Balance.PayoutSchedule{}`: when the balance is paid out by itself, with `:status` and `:minimum_payouts` (`[]` when the provider's API does not say); a change sends only what it gives; the provider needs `:payout_schedule` |
+| `MishkaPay.list_payout_destinations(provider, tenant, type: :bank_account)`, `fetch_payout_destination(provider, destination_id, tenant)` | `%MishkaPay.Balance.PayoutDestination{}`: a bank account or card payouts go to, with `:bank_name` (or `:card_brand`), `:last4`, `:currency`, `:default`; a payout's `:destination_id` names one; the provider needs `:payout_destination` |
 
 Every `list_*` answers one `MishkaPay.Page` (`:items`, `:has_more`, `:next`) and takes `limit:`
 (1 to 100, 10 by default) and `after:` (a page's `:next`). `MishkaPay.Page.stream/1` reads every
@@ -214,7 +218,11 @@ redirect(conn, external: checkout.url)
 - A **saved card** is a checkout with `mode: :setup` and a `currency:`, without items. It needs a
   provider with `:payment_method`. Name the customer with `customer: %{id: id}`, or the provider
   makes one. Options of a sale (discounts, tax, trial, invoice) are refused in setup mode.
-- A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`.
+- A `success_url`/`cancel_url` must be `https`, or `http` on `localhost`. One success page serves
+  every provider: Stripe gets `session_id={CHECKOUT_SESSION_ID}` added when the URL has no
+  `{CHECKOUT_SESSION_ID}`, PayPal gets the URL without that placeholder (it adds its own
+  `token`), and the page reads the id with `MishkaPay.return_checkout_id/2`, then
+  `fetch_checkout/3`.
 - **Embedded:** `ui_mode: :embedded` shows the provider's form inside the site's own page. It takes
   one `return_url` instead of `success_url` and `cancel_url`, and answers `:client_secret` (no
   `:url`). Give the secret to that buyer's page only; Stripe.js mounts the form with it. The
@@ -291,6 +299,14 @@ MishkaPay.checkout(%{
 
 MishkaPay.checkout(%{..., items: [%{id: price.id, quantity: 1}]})
 ```
+
+A price may keep its amount in other currencies: `currency_options: [%{amount: "17", currency:
+"EUR"}]`, each with the price's own `tax_behavior`. A checkout of catalog prices names the one to
+charge with `currency: "eur"`, which charges that amount, never a conversion; left out, the
+provider picks (Stripe: the buyer's local currency when the price has it). The provider never
+takes an option away, so to change them make a new price with the same `lookup_key` and
+`transfer_lookup_key: true`, then archive the old one. PayPal has no catalog: its checkout line
+carries the chosen currency's amount itself.
 
 - A price's amount never changes: make a new price and `archive_price/3` the old one.
 - `archive_product/3` takes a product off sale; a provider never deletes what sold.
@@ -459,7 +475,7 @@ end
 ```
 
 The event names live in `MishkaPay.Events` (`checkout_before/0`, `credentials/0`,
-`webhook_received/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
+`webhook_received/0`, `webhook_answered/0`, `event_process/0`, `payment_changed/0`, `subscription_changed/0`,
 `customer_changed/0`, `dispute_changed/0`, `providers/0`). A listener answers its state, so return `{:reply, state}` even when it does
 nothing. Supervise every listener like any child.
 

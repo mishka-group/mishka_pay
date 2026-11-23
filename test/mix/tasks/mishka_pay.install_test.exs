@@ -66,12 +66,13 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
     assert_unchanged(again)
   end
 
-  test "--ash adds the domain, the five resources and their listeners; --pubsub the broadcast" do
+  test "--ash adds the domain, the six resources and their listeners; --pubsub the broadcast" do
     igniter =
       phx_test_project()
       |> Igniter.compose_task("mishka_pay.install", ["--ash", "--pubsub"])
       |> assert_creates("lib/test/pay.ex")
       |> assert_creates("lib/test/pay/webhook_event.ex")
+      |> assert_creates("lib/test/pay/webhook_rejection.ex")
       |> assert_creates("lib/test/pay/broadcast.ex")
       |> assert_has_patch("config/config.exs", """
       + |config :ash, default_string_length_count: :codepoints
@@ -81,6 +82,12 @@ defmodule Mix.Tasks.MishkaPay.InstallTest do
       """)
       |> assert_has_patch("lib/test/application.ex", """
       + |      Test.Pay.Dispute.MishkaPayListener,
+      """)
+      |> assert_has_patch("lib/test/application.ex", """
+      + |      Test.Pay.WebhookEvent.MishkaPayAnswerListener,
+      """)
+      |> assert_has_patch("lib/test/application.ex", """
+      + |      Test.Pay.WebhookRejection.MishkaPayListener,
       """)
 
     payment =

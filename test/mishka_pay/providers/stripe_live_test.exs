@@ -213,6 +213,122 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.list_refunds("stripe", nil, payment_id: id)
   end
 
+  # A refund as fraudulent makes Stripe put the card's fingerprint on the account's Radar block list
+  # (`card_fingerprint_blocklist`) at once, and every later charge with that card is blocked. So the
+  # test pays with a card no other test uses, never the Visa 4242 or the Mastercard 4444 the rest
+  # pay with, and takes the item off the list again, in the test and in `on_exit` when it fails
+  # before that.
+  @fraud_card "pm_card_mastercard_debit"
+
+  test "a refund as fraudulent is sent and read back as fraudulent, and the card Stripe blocks for it is let go again",
+       %{key: key} do
+    {200, %{"id" => id}} = pay(key, @fraud_card)
+
+    assert {:ok, %{"latest_charge" => %{"payment_method_details" => %{"card" => card}}}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               path: "/v1/payment_intents/#{id}",
+               options: %{expand: ["latest_charge"]}
+             })
+
+    %{"fingerprint" => fingerprint, "last4" => "8210"} = card
+    on_exit(fn -> unblock(key, fingerprint) end)
+
+    assert {:ok, %Refund{status: :succeeded, reason: :fraudulent}} =
+             MishkaPay.refund(%{provider: "stripe", payment_id: id, reason: :fraudulent})
+
+    assert {:ok, %Payment{status: :refunded, refunds: [%Refund{reason: :fraudulent}]}} =
+             MishkaPay.fetch_payment("stripe", id)
+
+    assert [%{"value" => ^fingerprint}] = blocked(key, fingerprint)
+
+    unblock(key, fingerprint)
+    assert blocked(key, fingerprint) == []
+  end
+
+  # The items of the Radar card block list that hold `fingerprint`.
+  defp blocked(key, fingerprint) do
+    {200, %{"data" => [%{"id" => list}]}} =
+      radar(key, :get, "/v1/radar/value_lists", %{"alias" => "card_fingerprint_blocklist"})
+
+    {200, %{"data" => items}} =
+      radar(key, :get, "/v1/radar/value_list_items", %{
+        "value_list" => list,
+        "value" => fingerprint
+      })
+
+    items
+  end
+
+  # Takes `fingerprint` off the block list. It runs from `on_exit` too, a process of its own, so it
+  # stubs the client there and sends the key itself.
+  defp unblock(key, fingerprint) do
+    MishkaPay.Test.stub_http(&StripeMock.forward_live/1)
+
+    for %{"id" => item} <- blocked(key, fingerprint) do
+      {200, %{"deleted" => true}} = radar(key, :delete, "/v1/radar/value_list_items/#{item}", %{})
+    end
+
+    :ok
+  end
+
+  defp radar(key, method, path, params) do
+    {:ok, %{status: status, body: body}} =
+      Client.request(%{
+        provider: "stripe",
+        method: method,
+        base_url: "https://api.stripe.com",
+        path: path,
+        auth: {:bearer, key},
+        headers: %{"stripe-version" => Stripe.version()},
+        params: params
+      })
+
+    {status, body}
+  end
+
+  test "a paid payment names its charge, balance movement and fee, and its movements name it back",
+       %{key: key} do
+    # Captured at once, so the charge's balance movement is there in the answer; Stripe's
+    # default (automatic_async) sets it a moment later and sends charge.updated.
+    {200, %{"id" => id}} = pay(key, "pm_card_mastercard", %{"capture_method" => "automatic"})
+
+    assert {:ok,
+            %Payment{
+              charge_id: "ch_" <> _ = charge,
+              balance_transaction_id: "txn_" <> _ = movement,
+              fee: %Money{} = fee
+            }} = MishkaPay.fetch_payment("stripe", id)
+
+    assert Money.positive?(fee)
+
+    assert {:ok, %Refund{}} =
+             MishkaPay.refund(%{
+               provider: "stripe",
+               payment_id: id,
+               amount: %{amount: "5", currency: "USD"}
+             })
+
+    assert {:ok, %MishkaPay.Page{items: items, has_more: false}} =
+             MishkaPay.list_balance_transactions("stripe", nil, payment_id: id)
+
+    assert Enum.all?(items, &(&1.payment_id == id))
+    assert Enum.sort(Enum.map(items, & &1.type)) == ["charge", "refund"]
+
+    assert %MishkaPay.Balance.Transaction{id: ^movement, source_id: ^charge, fee: ^fee} =
+             Enum.find(items, &(&1.type == "charge"))
+
+    assert {:ok,
+            %MishkaPay.Page{
+              items: [%MishkaPay.Balance.Transaction{id: ^movement, payment_id: ^id}]
+            }} = MishkaPay.list_balance_transactions("stripe", nil, source_id: charge)
+
+    assert {:ok, %MishkaPay.Page{items: [_ | _] = recent}} =
+             MishkaPay.list_balance_transactions("stripe", nil, type: "charge", limit: 5)
+
+    assert Enum.any?(recent, &(&1.id == movement and &1.payment_id == id))
+  end
+
   test "a declined card is Stripe's 402 with its decline code", %{key: key} do
     assert {402, %{"error" => %{"decline_code" => "generic_decline"}}} =
              pay(key, "pm_card_chargeDeclined")
@@ -1191,6 +1307,83 @@ defmodule MishkaPay.Providers.StripeLiveTest do
     end
 
     assert {:ok, %MishkaPay.Price{active: false}} = MishkaPay.archive_price("stripe", price_id)
+  end
+
+  test "a price in other currencies opens a Checkout Session in EUR at its EUR amount, and a new price takes over its lookup key" do
+    run = run_id()
+
+    {:ok, %MishkaPay.Product{id: product_id}} =
+      MishkaPay.create_product(%{
+        provider: "stripe",
+        name: "Live currencies #{run}",
+        tax_code: "txcd_10302000"
+      })
+
+    price = %{
+      provider: "stripe",
+      product_id: product_id,
+      amount: %{amount: "10.00", currency: "USD"},
+      tax_behavior: :exclusive,
+      lookup_key: "live-cur-#{run}",
+      currency_options: [%{amount: "9.00", currency: "EUR"}, %{amount: "8.00", currency: "GBP"}]
+    }
+
+    assert {:ok, %MishkaPay.Price{id: price_id, currency_options: options}} =
+             MishkaPay.create_price(price)
+
+    on_exit(fn ->
+      MishkaPay.archive_price("stripe", price_id)
+      MishkaPay.archive_product("stripe", product_id)
+    end)
+
+    assert [{:EUR, eur}, {:GBP, gbp}] = options |> Enum.map(&{&1.currency, &1}) |> Enum.sort()
+    assert Money.equal?(eur, Money.new(:EUR, "9.00"))
+    assert Money.equal?(gbp, Money.new(:GBP, "8.00"))
+
+    assert {:ok, %MishkaPay.Price{currency_options: [_, _]}} =
+             MishkaPay.fetch_price("stripe", price_id)
+
+    sale = %{
+      provider: "stripe",
+      items: [%{id: price_id, quantity: 1}],
+      success_url: "https://shop.test/thanks",
+      cancel_url: "https://shop.test/cart",
+      reference: "live-cur-#{run}"
+    }
+
+    assert {:ok, %Checkout{id: checkout_id, amount_total: total}} =
+             MishkaPay.checkout(Map.put(sale, :currency, "eur"))
+
+    assert total.currency == :EUR
+    assert Money.compare(total, Money.new(:EUR, "9.00")) in [:eq, :gt]
+
+    assert {:ok, %Checkout{items: [%MishkaPay.Price{amount: sold}]}} =
+             MishkaPay.fetch_checkout("stripe", checkout_id)
+
+    assert Money.equal?(sold, Money.new(:EUR, "9.00"))
+
+    assert {:error, %Errors.Rejected{}} =
+             MishkaPay.checkout(
+               %{sale | reference: "live-cur-jpy-#{run}"}
+               |> Map.put(:currency, "jpy")
+             )
+
+    assert {:ok, %MishkaPay.Price{id: new_id}} =
+             MishkaPay.create_price(
+               %{
+                 price
+                 | currency_options: [%{amount: "9.50", currency: "EUR"}]
+               }
+               |> Map.put(:transfer_lookup_key, true)
+             )
+
+    on_exit(fn -> MishkaPay.archive_price("stripe", new_id) end)
+
+    assert {:ok,
+            %MishkaPay.Page{items: [%MishkaPay.Price{id: ^new_id, currency_options: [only]}]}} =
+             MishkaPay.list_prices("stripe", nil, lookup_key: "live-cur-#{run}")
+
+    assert Money.equal?(only, Money.new(:EUR, "9.50"))
   end
 
   # Some twenty Stripe calls in a row, against a sandbox that answers in seconds each.
@@ -2237,8 +2430,8 @@ defmodule MishkaPay.Providers.StripeLiveTest do
              MishkaPay.request(%{provider: "stripe", path: "//evil.example/v1/balance"})
   end
 
-  # Mastercard: this sandbox's Radar block list holds the test Visa card (a refund as fraudulent
-  # puts a card there), so a Visa charge is blocked.
+  # Mastercard, as every payment of this file: the test Visa card is the one a person refunds as
+  # fraudulent by hand in a sandbox, which puts it on the Radar block list and blocks its charges.
   test "a payment intent is made once, changed, confirmed on the server with a test card and read as a payment; a held one is let go",
        %{key: key} do
     run = run_id()
@@ -2500,6 +2693,44 @@ defmodule MishkaPay.Providers.StripeLiveTest do
   end
 
   # When the last registration an earlier run left in `country` ends, if it still runs or waits.
+  # A form's date of today is its midnight, which Stripe refuses as a past start: the call sends it as
+  # `now`. Stripe takes one registration in a country at a time, so while an earlier run's still
+  # ends, only the refusal of an earlier day is checked.
+  test "a tax registration from today's midnight starts now, and one from yesterday is refused before Stripe",
+       %{key: key} do
+    midnight = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+
+    assert {:error, %Errors.Invalid{errors: [%{field: :active_from}]}} =
+             MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "NZ",
+               type: "standard",
+               active_from: DateTime.add(midnight, -1, :day)
+             })
+
+    if is_nil(earlier_end("NZ")) do
+      assert {:ok,
+              %MishkaPay.TaxSettings.Registration{
+                id: "taxreg_" <> _ = registration,
+                status: :active,
+                active_from: %DateTime{} = from
+              }} =
+               MishkaPay.create_tax_registration(%{
+                 provider: "stripe",
+                 country: "NZ",
+                 type: "standard",
+                 active_from: midnight
+               })
+
+      on_exit(fn -> cleanup(key, &end_registration(registration, &1)) end)
+      assert DateTime.compare(from, midnight) == :gt
+      ends = from |> DateTime.add(60) |> DateTime.truncate(:second)
+
+      assert {:ok, %MishkaPay.TaxSettings.Registration{expires_at: ^ends}} =
+               MishkaPay.expire_tax_registration("stripe", registration, nil, at: ends)
+    end
+  end
+
   defp earlier_end(country) do
     {:ok, %MishkaPay.Page{items: registrations}} =
       MishkaPay.list_tax_registrations("stripe", nil, status: :all, limit: 100)
@@ -2826,6 +3057,129 @@ defmodule MishkaPay.Providers.StripeLiveTest do
         }
       }
     }
+  end
+
+  test "the payout schedule and bank are read and set for a seller, and a payout the balance cannot pay is a plain refusal" do
+    run = run_id()
+
+    assert {:ok, %MishkaPay.Balance.PayoutSchedule{interval: interval, minimum_payouts: []}} =
+             MishkaPay.fetch_payout_schedule("stripe")
+
+    assert interval in [:manual, :daily, :weekly, :monthly]
+
+    # Stripe lets only live keys read the platform's own bank accounts.
+    assert {:error, %Errors.Rejected{status: 400}} = MishkaPay.list_payout_destinations("stripe")
+
+    assert {:ok, %MishkaPay.Balance{available: available}} = MishkaPay.fetch_balance("stripe")
+    refute Enum.any?(available, &(&1.currency == :USD and Money.positive?(&1)))
+
+    assert {:error, %Errors.Rejected{code: "balance_insufficient"}} =
+             MishkaPay.create_payout(%{
+               provider: "stripe",
+               amount: %{amount: "1.00", currency: "USD"},
+               reference: "payout-#{run}"
+             })
+
+    case MishkaPay.request(%{
+           provider: "stripe",
+           method: :post,
+           path: "/v2/core/accounts",
+           params: test_seller(run),
+           reference: "payout-seller-#{run}"
+         }) do
+      {:ok, %{"id" => "acct_" <> _ = id}} -> with_account(id, fn -> seller_payouts(id, run) end)
+      {:error, %Errors.Rejected{code: "connect_not_set_up"}} -> :ok
+    end
+  end
+
+  defp seller_payouts(id, run) do
+    assert {:ok, %{"id" => "ba_" <> _ = bank}} =
+             MishkaPay.request(%{
+               provider: "stripe",
+               method: :post,
+               path: "/v1/accounts/#{id}/external_accounts",
+               params: %{"external_account" => "btok_us_verified"},
+               reference: "bank-#{run}"
+             })
+
+    MishkaPay.Test.put_keys(
+      "stripe",
+      %{secret_key: System.fetch_env!("STRIPE_SECRET_KEY"), account_id: id},
+      "seller"
+    )
+
+    assert {:ok,
+            %MishkaPay.Page{
+              items: [
+                %MishkaPay.Balance.PayoutDestination{
+                  id: ^bank,
+                  type: :bank_account,
+                  bank_name: "STRIPE TEST BANK",
+                  last4: "6789",
+                  currency: "usd",
+                  default: true
+                }
+              ]
+            }} = MishkaPay.list_payout_destinations("stripe", "seller", type: :bank_account)
+
+    assert {:ok, %MishkaPay.Page{items: []}} =
+             MishkaPay.list_payout_destinations("stripe", "seller", type: :card)
+
+    assert {:ok, %MishkaPay.Balance.PayoutDestination{id: ^bank, last4: "6789"}} =
+             MishkaPay.fetch_payout_destination("stripe", bank, "seller")
+
+    assert {:ok, %MishkaPay.Balance.PayoutSchedule{}} =
+             MishkaPay.fetch_payout_schedule("stripe", "seller")
+
+    assert {:ok,
+            %MishkaPay.Balance.PayoutSchedule{
+              interval: :weekly,
+              weekly_days: [:monday, :thursday],
+              delay_days: delay
+            }} =
+             MishkaPay.update_payout_schedule(%{
+               provider: "stripe",
+               tenant: "seller",
+               interval: :weekly,
+               weekly_days: [:monday, :thursday]
+             })
+
+    assert is_integer(delay)
+
+    assert {:ok,
+            %MishkaPay.Balance.PayoutSchedule{
+              interval: :monthly,
+              monthly_days: [1, 15],
+              minimum_balances: [%Money{currency: :USD} = kept]
+            }} =
+             MishkaPay.update_payout_schedule(%{
+               provider: "stripe",
+               tenant: "seller",
+               interval: :monthly,
+               monthly_days: [15, 1],
+               minimum_balances: [%{amount: "5.00", currency: "USD"}]
+             })
+
+    assert Money.equal?(kept, Money.new(:USD, "5.00"))
+
+    assert {:ok, %MishkaPay.Balance.PayoutSchedule{interval: :manual, minimum_balances: []}} =
+             MishkaPay.update_payout_schedule(%{
+               provider: "stripe",
+               tenant: "seller",
+               interval: :manual,
+               minimum_balances: []
+             })
+
+    assert {:error, %Errors.Rejected{} = refused} =
+             MishkaPay.create_payout(%{
+               provider: "stripe",
+               tenant: "seller",
+               amount: %{amount: "1.00", currency: "USD"},
+               destination_id: bank,
+               reference: "seller-payout-#{run}"
+             })
+
+    assert refused.code in ["balance_insufficient", "payouts_not_allowed"]
   end
 
   # Stripe makes no new v1 accounts for a platform that turned Connect on lately, and says so.

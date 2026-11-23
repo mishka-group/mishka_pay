@@ -19,7 +19,7 @@ defmodule MishkaPay.Check do
       (`MishkaPay.Provider` `check_keys/1`, when the provider has it);
     * `:webhook_secret`: the keys carry the secret webhooks are checked with;
     * `:webhook_endpoint`: with `webhook_url:`, the provider sends every event Mishka Pay acts on
-      to it (Stripe: `MishkaPay.Providers.Stripe.WebhookEndpoint`);
+      to it (`MishkaPay.Providers.Stripe.WebhookEndpoint`, `MishkaPay.Providers.PayPal.WebhookEndpoint`);
     * `:listeners`: with `domain:` (an Ash domain), each of its Mishka Pay listeners is started;
     * `:inbox`: with `domain:`, it has an `:inbox` resource, and Oban runs its queue.
   """
@@ -78,8 +78,17 @@ defmodule MishkaPay.Check do
 
   defp endpoint(_provider, _tenant, nil), do: []
 
-  defp endpoint("stripe", tenant, url) do
-    case MishkaPay.Providers.Stripe.WebhookEndpoint.check(tenant, url) do
+  defp endpoint("stripe", tenant, url),
+    do: endpoint_check(MishkaPay.Providers.Stripe.WebhookEndpoint.check(tenant, url), url)
+
+  defp endpoint("paypal", tenant, url),
+    do: endpoint_check(MishkaPay.Providers.PayPal.WebhookEndpoint.check(tenant, url), url)
+
+  defp endpoint(provider, _tenant, _url),
+    do: [{:webhook_endpoint, {:error, "#{provider} has no endpoint check"}}]
+
+  defp endpoint_check(checked, url) do
+    case checked do
       {:ok, %{endpoint: nil}} ->
         [{:webhook_endpoint, {:error, "no webhook endpoint at #{url}"}}]
 
@@ -93,9 +102,6 @@ defmodule MishkaPay.Check do
         [{:webhook_endpoint, {:error, Exception.message(error)}}]
     end
   end
-
-  defp endpoint(provider, _tenant, _url),
-    do: [{:webhook_endpoint, {:error, "#{provider} has no endpoint check"}}]
 
   defp ash(nil), do: []
 

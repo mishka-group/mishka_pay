@@ -18,6 +18,7 @@ defmodule MishkaPay.Providers.PayPalLiveTest do
 
   alias MishkaPay.{Checkout, Errors, Page, Payment, Price, Subscription}
   alias MishkaPay.Providers.PayPal
+  alias MishkaPay.Providers.PayPal.WebhookEndpoint
 
   @moduletag :paypal_live
 
@@ -94,6 +95,33 @@ defmodule MishkaPay.Providers.PayPalLiveTest do
     assert amount == Money.new(:USD, "9.00")
     assert {:ok, %Page{items: []}} = MishkaPay.list_invoices("paypal", nil, subscription_id: id)
     assert {:error, %Errors.Invalid{}} = MishkaPay.upcoming_invoice("paypal", id)
+  end
+
+  test "a page with Stripe's session placeholder opens an Order, and the site's webhook is made, checked and deleted" do
+    run = run_id()
+
+    assert {:ok, %Checkout{id: id, status: :open}} =
+             MishkaPay.checkout(%{
+               provider: "paypal",
+               items: [%{name: "Ebook", amount: %{amount: "19.99", currency: "USD"}}],
+               success_url: "https://shop.test/thanks?session_id={CHECKOUT_SESSION_ID}",
+               cancel_url: "https://shop.test/cart",
+               reference: "live-return-#{run}"
+             })
+
+    assert {:ok, ^id} = MishkaPay.return_checkout_id("paypal", %{"token" => id})
+
+    url = "https://shop.test/pay/webhooks/paypal/live-#{run}"
+
+    assert {:ok, %WebhookEndpoint{id: "WH-" <> _ = webhook, enabled_events: events}} =
+             WebhookEndpoint.ensure(nil, url)
+
+    try do
+      assert Enum.sort(events) == Enum.sort(PayPal.handled_events())
+      assert {:ok, %{endpoint: %{id: ^webhook}, missing: []}} = WebhookEndpoint.check(nil, url)
+    after
+      assert :ok = WebhookEndpoint.delete(nil, webhook)
+    end
   end
 
   test "an Order that does not exist is PayPal's own rejection" do

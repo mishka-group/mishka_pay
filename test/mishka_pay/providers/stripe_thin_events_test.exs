@@ -184,11 +184,11 @@ defmodule MishkaPay.Providers.StripeThinEventsTest do
                        object_type: "billing.meter"
                      }}
 
-    assert deliver("v1.charge.updated", related("ch_1", "charge", "/v1/charges/ch_1")).status ==
+    assert deliver("v1.charge.pending", related("ch_1", "charge", "/v1/charges/ch_1")).status ==
              200
 
     assert_received {:webhook_event,
-                     %Event{type: "charge.updated", object_id: "ch_1", payment_id: nil}}
+                     %Event{type: "charge.pending", object_id: "ch_1", payment_id: nil}}
   end
 
   test "a thin event carries its snapshot event's type, so one listener takes either mode; API v2's keep Stripe's" do

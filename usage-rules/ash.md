@@ -25,7 +25,7 @@ defmodule MyApp.Pay.Subscription do
     extensions: [MishkaPay.Ash.Resource]
 
   mishka_pay do
-    kind :subscription                     # :inbox | :payment | :subscription | :customer | :dispute
+    kind :subscription                     # :inbox | :webhook_rejection | :payment | :subscription | :customer | :dispute
     actions [:sync, :cancel]               # optional; default: every action of the kind
     listen? true                           # default: <Resource>.MishkaPayListener is made
     announce? true                         # default: mishka_pay:subscription:changed after writes
@@ -44,12 +44,16 @@ end
 
 - One resource per kind you keep: `:payment`, `:subscription`, `:customer`, `:dispute` the same
   way, each with its own table.
+- `kind :webhook_rejection` counts the webhook messages refused (bad signature, a site without
+  keys, an unreadable or too large body), one row per `provider`, `tenant`, `reason` and `day`
+  with its `count` and `last_at`; never a body. Keep it global like the inbox (no `tenant_from`,
+  no multitenancy). Its `:count` action is run by its listener.
 - What the host defines itself is kept: an attribute, identity, calculation, action, relationship
   or code interface of the same name is never added again (change a type that way).
 - An action the kind does not have, an `:inbox` without all of its actions, or an `:inbox`
   without AshOban is a compile error.
 - `MishkaPay.Ash.Resource.Info` reads the setup back: `mishka_pay_kind/1`, `actions/1`,
-  `listener/1`.
+  `listener/1`, `listeners/1`.
 
 Supervise the listeners of the domain (no hand-written listener modules):
 
@@ -116,7 +120,9 @@ The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.
 
 ## What the rows hold
 
-- Payment rows: `checkout_id`, `price_ids`, `product_ids` (what was sold). Subscription rows:
+- Payment rows: `checkout_id`, `price_ids`, `product_ids` (what was sold), `charge_id` and
+  `balance_transaction_id` (join a `MishkaPay.Balance.Transaction` to its row by these, or by its
+  `:payment_id`, never by amount and time). Subscription rows:
   `price_ids`, `product_ids`, calculations `active?`, `on_trial?`, `canceling?`.
 - Kind attributes are `writable?: false`: never put them in an action's `accept`; write your own
   attributes beside them.
@@ -129,6 +135,10 @@ The same provider object in two sites is two rows, one per site (`MishkaPay.Ash.
   `:preview_change` (the `:change` arguments), each with the row's `id`.
 - `:register` with a `reference` reuses the site's customer for it.
 - `keep_events_for 30` (inbox, default): processed events are deleted daily; `:forever` keeps them.
+- Inbox rows keep `received_at` (the webhook took the request in), `answer_ms` and
+  `answer_status` (how long the answer took, written by `:answered` after it went out); an inbox
+  gets two listeners, `<Inbox>.MishkaPayListener` and `<Inbox>.MishkaPayAnswerListener`
+  (`MishkaPay.Ash.Resource.Info.listeners/1`).
 - Inbox telemetry: `[:mishka_pay, :inbox, :process, :stop]` (`:outcome`, `:lag`) and
   `[:mishka_pay, :inbox, :failed]`.
 
@@ -157,7 +167,9 @@ MishkaPay.Ash.subscribed?(MyApp.Pay.Subscription, user, tenant: site.id)
 | Resource | Action | Args |
 |---|---|---|
 | Inbox | `:receive` (by the listener) | the event; stored once per provider event id |
-| Inbox | `:process`, `:note_error`, `:fail` (by its AshOban trigger) | none; `fail` takes `error` |
+| Inbox | `:process`, `:note_error`, `:fail` (by its AshOban trigger); `:skip`, `:bring_back` (by a person) | none; `fail` takes `error`, `skip` takes `reason` and `by` |
+| Inbox | `:answered` (by its answer listener) | `answer_ms`, `answer_status` |
+| Webhook rejection | `:count` (by its listener) | `provider`, `tenant`, `reason`, `day`, `last_at`; adds one to the day's row |
 | Payment | `:sync` | `provider`, `payment_id`, `tenant` |
 | Payment | `:start_checkout` (generic) | `checkout` (the map `MishkaPay.checkout/1` takes) |
 | Payment | `:refund` (update) | `amount`, `reason`, `reference` |

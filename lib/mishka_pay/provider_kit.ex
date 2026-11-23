@@ -25,6 +25,21 @@ defmodule MishkaPay.ProviderKit do
   end
 
   @doc """
+  The idempotency key of a request named by `reference` whose body is `params`: the same reference
+  with the same params gives the same key, so a request sent twice (a double click, a retry after a
+  lost answer) is one request at the provider; the same reference with other params (another
+  customer after the provider refused the first) gives another key, so the provider takes it as a
+  new request instead of refusing it as a reused key. `nil` reference gives `nil`: no key.
+  """
+  @spec request_key(String.t(), term(), term(), term()) :: String.t() | nil
+  def request_key(_operation, _tenant, nil, _params), do: nil
+
+  def request_key(operation, tenant, reference, params) do
+    body = :crypto.hash(:sha256, :erlang.term_to_binary(params, [:deterministic]))
+    idempotency_key(operation, tenant, {reference, body})
+  end
+
+  @doc """
   The idempotency key of a refund under the site's rule: a site that refunds once has one refund
   per payment, so the payment names it; one that refunds many times names each refund by its
   `:reference`, which it then needs.

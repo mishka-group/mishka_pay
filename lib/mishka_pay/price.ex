@@ -15,6 +15,10 @@ defmodule MishkaPay.Price do
       for a downloaded e-book. A provider that is the merchant of record (Stripe Managed
       Payments) needs it to work out the tax. A price the provider already knows (`:id`) carries
       its own tax code there, so this one is not sent with it.
+    * `:product_id`: on a checkout's line with its own `:amount`, the provider's id of a product
+      it already has: the line is charged at that amount for that product, whose own name and tax
+      code apply (`:name` and `:tax_code` are not sent). Left out, the line is a new product named
+      `:name`.
     * `:id`: the provider's own id of a price it already knows (`price_...` at Stripe). With it,
       the provider's price is used and `:name` and `:amount` may be left out.
     * `:tax_behavior`: `:exclusive` (tax is added on top, as in the US) or `:inclusive` (the
@@ -35,6 +39,16 @@ defmodule MishkaPay.Price do
 
     * `:product_id`: the product it sells; with `:amount` it is all a new price needs.
     * `:lookup_key`: the host's own name for it (`"pro-monthly"`), to find it without its id.
+    * `:transfer_lookup_key`: `true` moves the lookup key from the price that has it to this new
+      one in the same call, so a price that replaces another is found by the same key.
+    * `:currency_options`: the price in other currencies, a list of money (`[%{amount: "85",
+      currency: "EUR"}]`), each in a currency other than `:amount`'s and each currency once. A
+      checkout in one of them (`MishkaPay.Checkout` `:currency`) charges that amount, not a
+      conversion. Each takes the price's own `:tax_behavior`. A provider keeps them on the price
+      (Stripe's `currency_options`) and never takes one away, so a price whose other currencies
+      change is replaced by a new price. A provider with no catalog of prices (PayPal) has none:
+      its checkout line carries the amount in the chosen currency itself. Read back, the list
+      holds the other currencies the provider keeps, the price's own one left out.
     * `:active`: on sale; `MishkaPay.archive_price/3` turns it off (a provider never deletes a
       price that was used).
     * `:metadata`: extra pairs, string keys to string values.
@@ -79,6 +93,9 @@ defmodule MishkaPay.Price do
     field :lookup_key, String.t(),
       derives: "sanitize(trim) validate(string, not_empty, max_len=200)"
 
+    field :transfer_lookup_key, boolean(), derives: "validate(boolean)"
+    field :currency_options, list(), validator: {MishkaPay.Money, :list_field}
+
     field :active, boolean(), derives: "validate(boolean)"
     dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
     field :created_at, DateTime.t(), derives: "validate(struct)"
@@ -106,11 +123,36 @@ defmodule MishkaPay.Price do
          %{field: :interval, action: :price, message: MishkaPay.Messages.text(:meter_interval)}}
 
       _interval ->
-        named_or_known(attrs)
+        priced(attrs)
     end
   end
 
-  def checked(attrs), do: named_or_known(attrs)
+  def checked(attrs), do: priced(attrs)
+
+  defp priced(attrs) do
+    with {:ok, attrs} <- other_currencies(attrs), do: named_or_known(attrs)
+  end
+
+  # Each other currency once, and none the price's own.
+  defp other_currencies(%{currency_options: [_ | _] = options} = attrs) do
+    own = match?(%{amount: %Money{}}, attrs) && attrs.amount.currency
+    codes = Enum.map(options, & &1.currency)
+
+    case own not in codes and length(Enum.uniq(codes)) == length(codes) do
+      true ->
+        {:ok, attrs}
+
+      false ->
+        {:error,
+         %{
+           field: :currency_options,
+           action: :price,
+           message: MishkaPay.Messages.text(:currency_options_once)
+         }}
+    end
+  end
+
+  defp other_currencies(attrs), do: {:ok, attrs}
 
   defp named_or_known(%{id: id} = attrs) when is_binary(id), do: {:ok, attrs}
 

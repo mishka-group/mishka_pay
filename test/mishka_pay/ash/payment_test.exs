@@ -46,6 +46,8 @@ defmodule MishkaPay.Ash.PaymentTest do
     assert payment.tenant == "site-a"
     assert payment.currency == "USD"
     assert Decimal.equal?(payment.amount, "10.99")
+    assert "ch_" <> _ = payment.charge_id
+    assert "txn_" <> _ = payment.balance_transaction_id
 
     assert %{money: money, money_refunded: refunded} =
              Ash.load!(payment, [:money, :money_refunded])

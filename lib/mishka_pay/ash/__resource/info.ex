@@ -28,6 +28,14 @@ if Code.ensure_loaded?(Ash) do
     def listener(resource),
       do: Spark.Dsl.Extension.get_persisted(resource, :mishka_pay_listener)
 
+    @doc """
+    Every webhook listener module made for the resource (`listen? true`): its `listener/1`, and for
+    an inbox also the one that writes each event's answer time. `[]` when it listens to nothing.
+    """
+    @spec listeners(Spark.Dsl.t() | Ash.Resource.t()) :: [module()]
+    def listeners(resource),
+      do: Spark.Dsl.Extension.get_persisted(resource, :mishka_pay_listeners, [])
+
     @doc "The attribute `belongs_to_user` keeps the user in (`:user_id` unless named), or `nil`."
     @spec user_attribute(Spark.Dsl.t() | Ash.Resource.t()) :: atom() | nil
     def user_attribute(resource) do

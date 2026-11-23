@@ -75,6 +75,7 @@ defmodule ShopWeb.ShopLive do
       Phoenix.PubSub.subscribe(Shop.PubSub, TelemetryFeed.topic())
       Phoenix.PubSub.subscribe(Shop.PubSub, @settings_topic)
       ShopWeb.Endpoint.subscribe("pay:inbox")
+      ShopWeb.Endpoint.subscribe("pay:rejections")
     end
 
     payments = payments("all")
@@ -98,12 +99,35 @@ defmodule ShopWeb.ShopLive do
      |> assign_last()
      |> stream(:payments, payments)
      |> stream(:inbox, newest_rows(WebhookEvent))
+     |> assign(rejections: rejections())
      |> stream(:telemetry, [], limit: 40)}
   end
 
   @impl true
-  # A buyer picked with "Buy as this customer" comes back in the URL: the shop keeps buying as them,
-  # and reads their customer again, since Stripe's page may have changed it (the name on the card).
+  # The buy buttons send the buyer back to one page for every provider, naming it in `provider`:
+  # Mishka Pay adds Stripe's session id to it and PayPal adds its `token` (or `subscription_id`),
+  # and `MishkaPay.return_checkout_id/2` reads either. A buyer picked with "Buy as this customer"
+  # comes back in the URL: the shop keeps buying as them, and reads their customer again, since
+  # the provider's page may have changed it (the name on the card).
+  def handle_params(%{"provider" => provider} = params, _uri, socket)
+      when provider in ["stripe", "paypal"] do
+    case {connected?(socket), MishkaPay.return_checkout_id(provider, params)} do
+      {true, {:ok, checkout_id}} ->
+        {:noreply,
+         socket
+         |> back_from_checkout(provider, checkout_id)
+         |> refresh_buyer(params["buyer"])
+         |> push_patch(to: home(params["buyer"]))}
+
+      {true, {:error, error}} ->
+        {:noreply, socket |> flash(:error, MishkaPay.Ash.message(error)) |> push_patch(to: ~p"/")}
+
+      {false, _not_yet} ->
+        {:noreply, socket}
+    end
+  end
+
+  # The other parts of the page that open a Stripe checkout come back with its session id.
   def handle_params(%{"session_id" => session_id} = params, _uri, socket) do
     case connected?(socket) do
       true ->
@@ -112,29 +136,6 @@ defmodule ShopWeb.ShopLive do
          |> back_from_checkout("stripe", session_id)
          |> refresh_buyer(params["buyer"])
          |> push_patch(to: home(params["buyer"]))}
-
-      false ->
-        {:noreply, socket}
-    end
-  end
-
-  # PayPal sends the buyer back with the subscription id in `subscription_id` (its `token` is not
-  # the subscription), or for a payment with the Order id in `token`.
-  def handle_params(%{"provider" => "paypal", "subscription_id" => subscription_id}, _uri, socket) do
-    case connected?(socket) do
-      true ->
-        {:noreply,
-         socket |> back_from_checkout("paypal", subscription_id) |> push_patch(to: ~p"/")}
-
-      false ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_params(%{"provider" => "paypal", "token" => order_id}, _uri, socket) do
-    case connected?(socket) do
-      true ->
-        {:noreply, socket |> back_from_checkout("paypal", order_id) |> push_patch(to: ~p"/")}
 
       false ->
         {:noreply, socket}
@@ -419,6 +420,9 @@ defmodule ShopWeb.ShopLive do
   def handle_info(%Phoenix.Socket.Broadcast{topic: "pay:inbox", payload: notification}, socket),
     do: {:noreply, stream_insert(socket, :inbox, notification.data, at: 0)}
 
+  def handle_info(%Phoenix.Socket.Broadcast{topic: "pay:rejections"}, socket),
+    do: {:noreply, assign(socket, rejections: rejections())}
+
   @impl true
   def handle_async(:checkout_back, {:ok, {:ok, checkout, kept}}, socket),
     do: {:noreply, socket |> assign(checkout_read: checkout) |> kept(kept)}
@@ -572,6 +576,8 @@ defmodule ShopWeb.ShopLive do
 
       <.live_component module={ShopWeb.ConnectComponent} id="connect" tenant={@tenant} />
 
+      <.live_component module={ShopWeb.PayoutsComponent} id="payouts" tenant={@tenant} />
+
       <.live_component module={ShopWeb.OperationsComponent} id="operations" tenant={@tenant} />
 
       <.live_component module={ShopWeb.CurrenciesComponent} id="currencies" tenant={@tenant} />
@@ -628,6 +634,7 @@ defmodule ShopWeb.ShopLive do
         <section class="min-w-0" data-testid="inbox">
           <.section_title icon="hero-inbox-arrow-down" title="Webhook inbox" />
           <.inbox_table events={@streams.inbox} />
+          <.rejections_table rejections={@rejections} />
         </section>
         <section class="min-w-0" data-testid="telemetry">
           <.section_title icon="hero-signal" title="Telemetry, live" />
@@ -968,6 +975,16 @@ defmodule ShopWeb.ShopLive do
     Ash.Query.filter(query, status == ^status)
   end
 
+  # The refused webhook messages of the last week, newest day first.
+  defp rejections do
+    since = Date.add(Date.utc_today(), -7)
+
+    Shop.Pay.WebhookRejection
+    |> Ash.Query.filter(day >= ^since)
+    |> Ash.Query.sort(day: :desc, count: :desc)
+    |> Ash.read!(authorize?: false)
+  end
+
   defp newest_rows(resource) do
     resource
     |> Ash.Query.sort(inserted_at: :desc)
@@ -1037,11 +1054,8 @@ defmodule ShopWeb.ShopLive do
   defp provider_choice("paypal"), do: "paypal"
   defp provider_choice(_stripe), do: "stripe"
 
-  # Stripe sends the buyer back with the session id in the URL; PayPal adds its own `token`.
-  defp success_url("stripe", buyer),
-    do: url(~p"/") <> "?session_id={CHECKOUT_SESSION_ID}" <> buyer_param(buyer)
-
-  defp success_url("paypal", _buyer), do: url(~p"/?provider=paypal")
+  # One page for every provider: Mishka Pay adds Stripe's session id, PayPal adds its `token`.
+  defp success_url(provider, buyer), do: url(~p"/?#{[provider: provider]}") <> buyer_param(buyer)
 
   defp buyer_param(buyer) when buyer in [nil, ""], do: ""
   defp buyer_param(buyer), do: "&" <> URI.encode_query(buyer: buyer)

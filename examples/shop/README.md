@@ -24,7 +24,7 @@ without leaning on text or layout.
 | **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
 | **Webhook simulator** | a Stripe event about a payment or subscription, as a snapshot event or (a `v1.` type) a thin event notification, in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
 | **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |
-| **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job; every Mishka Pay call and HTTP request with its outcome and time |
+| **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job, with how long its webhook took to answer (`answer_ms`, `answer_status`); the refused messages counted per reason, site and day (`Shop.Pay.WebhookRejection`, kind `:webhook_rejection`), never stored; every Mishka Pay call and HTTP request with its outcome and time |
 | **Site settings** | refund rule, merchant of record, Stripe Tax and shop open or closed, in the database, read on every call |
 | **Sell a product with one link** (`/sell`, the top card) | one button runs `MishkaPay.create_product/1`, `create_price/1` and `create_payment_link/1` with every Stripe field, shows each call, and ends on the buyer's link; **Undo all of it** turns the link off and archives the price and product |
 | **Payment links** | `MishkaPay.create_payment_link/1` with a purchase limit (one-time, limited or none), quantity range, trial, invoice and tax choices; `PaymentLink.url/2` for one buyer; turn off or change it (`update_payment_link/1`); the list from `list_payment_links/3` |
@@ -38,6 +38,7 @@ without leaning on text or layout.
 | **Saved cards and portal links** | a setup checkout (`mode: :setup`) saves a card without charging; the customer's cards (`list_payment_methods/3`), made default or taken off; Stripe's portal opened on one task (`portal_session/1` with `flow:`): update the card, cancel or change a subscription |
 | **One-off bills** | `MishkaPay.create_invoice/1` for a customer, then finalize, email, mark paid by other means, void, mark uncollectible or delete, with the status, number, page and PDF after each step |
 | **Find customers, preview bills** | `search_customers/3` by email, name or reference; a subscription's next bill (`:upcoming_invoice`) and a plan or quantity change's bill (`:preview_change`) |
+| **Payouts** | the payout schedule read and set (`fetch_payout_schedule/2`, `update_payout_schedule/1`: interval, days, delay days, money kept back), the banks payouts go to with their last four digits (`list_payout_destinations/3`), and **Pay out** now (`create_payout/1`, standard or instant), with Stripe's refusal shown when the balance lacks the money |
 | Every list, live in every tab | `Shop.Pay.Broadcast` (`use MishkaPay.PubSub`) sends each change to the site's topic, and every open page updates |
 
 ## Run it
@@ -78,8 +79,13 @@ PAYPAL_CLIENT_SECRET=...
 PAYPAL_WEBHOOK_ID=WH-...
 ```
 
+The webhook can be made from code instead of the dashboard:
+`MishkaPay.Providers.PayPal.WebhookEndpoint.ensure("demo", "https://<public host>/pay/webhooks/paypal/demo")`
+answers its `WH-...` id with every event Mishka Pay acts on.
+
 Then "Pay with: PayPal" is on, and `mix shop.sandbox paypal` makes PayPal Orders and a
-subscription for a sandbox buyer to approve. PayPal has a smaller set than Stripe:
+subscription for a sandbox buyer to approve. Both providers send the buyer back to the same page
+(`/?provider=...`), which reads the checkout with `MishkaPay.return_checkout_id/2`. PayPal has a smaller set than Stripe:
 [Capabilities by provider](https://mishka.tools/pay/docs/capabilities).
 
 ### Test payments in every status

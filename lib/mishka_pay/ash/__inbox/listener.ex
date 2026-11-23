@@ -53,7 +53,8 @@ if Code.ensure_loaded?(Ash) do
         customer_id: event.customer_id,
         livemode: event.livemode,
         account: event.account,
-        provider_created_at: event.created_at
+        provider_created_at: event.created_at,
+        received_at: event.received_at
       }
 
       case Ash.create(resource, attrs, action: :receive, authorize?: false) do

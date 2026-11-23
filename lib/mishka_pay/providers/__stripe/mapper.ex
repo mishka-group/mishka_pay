@@ -110,16 +110,25 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   # offered. Managed Payments takes no setup mode, so it is off even on an account where it is on
   # by default. Without a known customer Stripe makes one, so the card is kept.
   defp sale_params(%Checkout{mode: :setup} = checkout, _settings) do
-    %{"currency" => checkout.currency |> Atom.to_string() |> String.downcase()}
+    checkout.currency
+    |> currency_param()
     |> Map.merge(managed_payments(false))
     |> Map.merge(setup_customer(checkout))
   end
 
   defp sale_params(checkout, settings) do
     %{"line_items" => Enum.map(checkout.items, &line_item/1)}
+    |> Map.merge(currency_param(checkout.currency))
     |> Map.merge(managed_payments(merchant_of_record(checkout, settings)))
     |> Map.merge(automatic_tax(checkout, settings))
   end
+
+  # A setup's currency picks the payment methods; a sale's picks the amount each catalog price
+  # keeps for it, and left out Stripe picks.
+  defp currency_param(nil), do: %{}
+
+  defp currency_param(currency),
+    do: %{"currency" => currency |> Atom.to_string() |> String.downcase()}
 
   defp setup_customer(%Checkout{customer: %{id: id}}) when is_binary(id), do: %{}
 
@@ -128,11 +137,32 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp setup_customer(_chosen), do: %{}
   # A hosted page sends the buyer back to one of two pages; an embedded form to its return page.
+  # The page the buyer comes back to names the session as `session_id`, unless the caller put
+  # Stripe's `{CHECKOUT_SESSION_ID}` in it already: `MishkaPay.return_checkout_id/2` reads it.
   defp ui_params(%Checkout{ui_mode: :embedded} = checkout),
-    do: %{"ui_mode" => "embedded_page", "return_url" => checkout.return_url}
+    do: %{"ui_mode" => "embedded_page", "return_url" => with_session(checkout.return_url)}
 
   defp ui_params(checkout),
-    do: %{"success_url" => checkout.success_url, "cancel_url" => checkout.cancel_url}
+    do: %{
+      "success_url" => with_session(checkout.success_url),
+      "cancel_url" => checkout.cancel_url
+    }
+
+  @session "{CHECKOUT_SESSION_ID}"
+
+  @doc false
+  @spec with_session(String.t() | nil) :: String.t() | nil
+  def with_session(nil), do: nil
+
+  def with_session(url) do
+    case String.contains?(url, @session) do
+      true ->
+        url
+
+      false ->
+        url <> if(String.contains?(url, "?"), do: "&", else: "?") <> "session_id=" <> @session
+    end
+  end
 
   # The checkout's own choice, else the tenant's default, else the Stripe account's (not sent).
   defp automatic_tax(%{automatic_tax: choice}, _settings) when is_boolean(choice),
@@ -150,6 +180,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "allow_promotion_codes" => checkout.allow_promotion_codes,
       "customer_creation" => checkout.customer_creation && to_string(checkout.customer_creation),
       "locale" => checkout.locale,
+      "allowed_payment_method_types" => checkout.payment_methods,
       "expires_at" => checkout.expires_at && DateTime.to_unix(checkout.expires_at),
       "billing_address_collection" =>
         checkout.billing_address && to_string(checkout.billing_address),
@@ -384,24 +415,31 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp line_item(%Price{id: id, quantity: quantity} = price) when is_binary(id),
     do: reject_nil(%{"price" => id, "quantity" => quantity, "tax_rates" => price.tax_rate_ids})
 
-  defp line_item(
-         %Price{name: name, amount: amount, quantity: quantity, tax_code: tax_code} = price
-       ) do
+  defp line_item(%Price{amount: amount, quantity: quantity} = price) do
     %{
       "tax_rates" => price.tax_rate_ids,
       "price_data" =>
         %{
           "currency" => amount.currency |> to_string() |> String.downcase(),
           "unit_amount" => minor(amount),
-          "product_data" => %{"name" => name, "tax_code" => tax_code},
           "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
         }
         |> Map.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.merge(line_product(price))
         |> Map.merge(recurring(price)),
       "quantity" => quantity
     }
     |> reject_nil()
   end
+
+  # An inline price of a product Stripe already has names it, so the product's own name and tax
+  # code apply (Managed Payments refuses a line with no tax code); otherwise the product is made
+  # inline from the line's name and tax code.
+  defp line_product(%Price{product_id: product}) when is_binary(product),
+    do: %{"product" => product}
+
+  defp line_product(%Price{name: name, tax_code: tax_code}),
+    do: %{"product_data" => reject_nil(%{"name" => name, "tax_code" => tax_code})}
 
   defp recurring(%Price{interval: nil}), do: %{}
 
@@ -652,7 +690,12 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     card = get_in(charge, ["payment_method_details", "card"]) || %{}
     failure = intent["last_payment_error"] || %{}
 
+    balance = expanded(charge["balance_transaction"])
+
     %{
+      charge_id: id_of(intent["latest_charge"]),
+      balance_transaction_id: id_of(charge["balance_transaction"]),
+      fee: money(balance["fee"], balance["currency"]),
       payment_method: get_in(charge, ["payment_method_details", "type"]),
       card_brand: card["brand"],
       card_last4: card["last4"],
@@ -675,12 +718,13 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     items = get_in(sub, ["items", "data"]) || []
     first = List.first(items) || %{}
     customer = expanded(sub["customer"])
+    card = expanded(sub["default_payment_method"])["card"] || %{}
 
     %{
       provider: "stripe",
       id: sub["id"],
       status: known(sub["status"], @subscription_statuses),
-      items: Enum.flat_map(items, &subscription_item/1),
+      items: Enum.flat_map(items, &subscription_item(&1, sub["currency"])),
       customer_id: customer_ref(sub),
       customer_email: customer["email"],
       customer_name: customer["name"],
@@ -691,6 +735,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       canceled_at: time(sub["canceled_at"]),
       trial_end: time(sub["trial_end"]),
       latest_invoice_id: id_of(sub["latest_invoice"]),
+      default_payment_method: id_of(sub["default_payment_method"]),
+      card_brand: card["brand"],
+      card_last4: card["last4"],
       schedule_id: id_of(sub["schedule"]),
       pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
       resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),
@@ -703,8 +750,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> MishkaPay.Errors.from_builder()
   end
 
-  defp subscription_item(%{"price" => %{} = price} = item) do
-    case money(price["unit_amount"], price["currency"]) do
+  defp subscription_item(%{"price" => %{} = price} = item, currency) do
+    case charged(price, currency) do
       nil ->
         []
 
@@ -724,7 +771,18 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     end
   end
 
-  defp subscription_item(_no_price), do: []
+  defp subscription_item(_no_price, _currency), do: []
+
+  # A subscription in one of its price's other currencies is charged that option's amount, when the
+  # price came with them (`expand[]=items.data.price.currency_options`).
+  defp charged(%{"currency" => own} = price, currency) when currency != own do
+    case get_in(price, ["currency_options", currency, "unit_amount"]) do
+      minor when is_integer(minor) -> money(minor, currency)
+      _not_included -> money(price["unit_amount"], own)
+    end
+  end
+
+  defp charged(price, _currency), do: money(price["unit_amount"], price["currency"])
 
   defp interval(interval) when is_binary(interval), do: known(interval, ~w(day week month year)a)
   defp interval(_none), do: nil
@@ -2324,12 +2382,41 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "unit_amount" => minor(price.amount),
       "nickname" => price.name,
       "lookup_key" => price.lookup_key,
+      "transfer_lookup_key" => price.transfer_lookup_key,
       "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior),
-      "metadata" => price.metadata
+      "metadata" => price.metadata,
+      "currency_options" => currency_options(price),
+      "expand" => ["currency_options"]
     }
     |> Map.merge(recurring(price))
     |> metered(price.meter_id)
   end
+
+  # The price in other currencies, each with the price's own tax behavior: Stripe gives an option
+  # none of its own ("unspecified") when it is not sent.
+  defp currency_options(%Price{currency_options: [_ | _] = options} = price) do
+    Map.new(options, fn money ->
+      {lower_currency(money),
+       reject_nil(%{
+         "unit_amount" => minor(money),
+         "tax_behavior" => price.tax_behavior && Atom.to_string(price.tax_behavior)
+       })}
+    end)
+  end
+
+  defp currency_options(_none), do: nil
+
+  # The other currencies Stripe keeps, when the answer includes them (`expand[]=currency_options`):
+  # the price's own currency, which Stripe lists too, is left out.
+  defp other_currencies(%{"currency_options" => %{} = options, "currency" => own}) do
+    for {currency, %{"unit_amount" => minor}} <- options,
+        currency != own,
+        money = money(minor, currency),
+        money != nil,
+        do: money
+  end
+
+  defp other_currencies(_not_included), do: nil
 
   # A price on a meter bills each period's usage the meter counted, not a quantity.
   defp metered(params, nil), do: params
@@ -2359,6 +2446,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       meter_id: get_in(price, ["recurring", "meter"]),
       tax_behavior: tax_behavior(price["tax_behavior"]),
       tax_code: id_of(expanded(price["product"])["tax_code"]),
+      currency_options: other_currencies(price),
       metadata: price["metadata"],
       created_at: time(price["created"])
     }
@@ -2478,7 +2566,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       id: price["id"],
       product_id: id_of(price["product"]),
       name: item["description"],
-      amount: money(price["unit_amount"], price["currency"]),
+      amount: unit_amount(item, price),
       quantity: item["quantity"] || 1,
       interval: interval(get_in(price, ["recurring", "interval"])),
       interval_count: get_in(price, ["recurring", "interval_count"])
@@ -2486,6 +2574,16 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Price.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # A line sold in another currency than its price's own (one of the price's currency options) is
+  # charged that option's amount: the line's subtotal for each one.
+  defp unit_amount(%{"currency" => currency, "amount_subtotal" => subtotal} = item, %{
+         "currency" => own
+       })
+       when currency != own and is_integer(subtotal),
+       do: money(div(subtotal, max(item["quantity"] || 1, 1)), currency)
+
+  defp unit_amount(_item, price), do: money(price["unit_amount"], price["currency"])
 
   @doc "The payment with the checkout that took it and what it sold, from Stripe's list of sessions."
   @spec with_checkout(Payment.t(), map() | nil) :: Payment.t()
@@ -2736,6 +2834,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       net: signed_money(txn["net"], currency),
       type: txn["type"],
       source_id: id_of(txn["source"]),
+      payment_id: payment_of(txn["source"]),
       status: known(txn["status"], ~w(available pending)a),
       description: txn["description"],
       available_at: time(txn["available_on"]),
@@ -2743,6 +2842,30 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     }
     |> MishkaPay.Balance.Transaction.builder()
     |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  The balance transactions of a PaymentIntent read with its latest charge's and refunds' balance
+  transactions expanded, newest first, each with its source as the object it came from, so it
+  names the payment.
+  """
+  @spec payment_movements(map()) :: [map()]
+  def payment_movements(intent) do
+    charge = expanded(intent["latest_charge"])
+    refunds = get_in(charge, ["refunds", "data"]) || []
+    payment = %{"payment_intent" => intent["id"]}
+
+    [charge | refunds]
+    |> Enum.flat_map(fn object ->
+      case expanded(object["balance_transaction"]) do
+        %{"id" => _id} = txn ->
+          [Map.put(txn, "source", Map.merge(payment, %{"id" => object["id"]}))]
+
+        _not_read ->
+          []
+      end
+    end)
+    |> Enum.sort_by(& &1["created"], :desc)
   end
 
   @doc """
@@ -3175,9 +3298,14 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc "A Stripe Payout as a `MishkaPay.Balance.Payout`."
   @spec payout(map()) :: {:ok, MishkaPay.Balance.Payout.t()} | {:error, Splode.Error.t()}
   def payout(payout) do
+    metadata = payout["metadata"] || %{}
+
     %{
       provider: "stripe",
       id: payout["id"],
+      reference: metadata[@reference],
+      metadata: Map.delete(metadata, @reference),
+      statement_descriptor: payout["statement_descriptor"],
       amount: money(payout["amount"], payout["currency"]),
       status: known(payout["status"], ~w(pending in_transit paid failed canceled)a),
       arrival_at: time(payout["arrival_date"]),
@@ -3190,6 +3318,122 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       created_at: time(payout["created"])
     }
     |> MishkaPay.Balance.Payout.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  @doc """
+  Params of `POST /v1/payouts`: the amount in Stripe's places, and what the payout gives; its
+  reference goes in its metadata.
+  """
+  @spec payout_params(MishkaPay.Balance.Payout.t()) :: map()
+  def payout_params(payout) do
+    reject_nil(%{
+      "amount" => minor(payout.amount),
+      "currency" => lower_currency(payout.amount),
+      "method" => payout.method,
+      "destination" => payout.destination_id,
+      "statement_descriptor" => payout.statement_descriptor,
+      "description" => payout.description,
+      "metadata" => with_reference(payout.metadata, payout.reference)
+    })
+  end
+
+  @weekdays ~w(monday tuesday wednesday thursday friday)a
+
+  @doc """
+  Stripe's Balance Settings as a `MishkaPay.Balance.PayoutSchedule`: the payouts' schedule, the
+  delay of a payment's money (`settlement_timing.delay_days`, the override when set), the money
+  kept per currency and the statement descriptor.
+  """
+  @spec payout_schedule(map()) ::
+          {:ok, MishkaPay.Balance.PayoutSchedule.t()} | {:error, Splode.Error.t()}
+  def payout_schedule(settings) do
+    payouts = get_in(settings, ["payments", "payouts"]) || %{}
+    schedule = payouts["schedule"] || %{}
+    timing = get_in(settings, ["payments", "settlement_timing"]) || %{}
+
+    %{
+      provider: "stripe",
+      interval: known(schedule["interval"], ~w(manual daily weekly monthly)a),
+      weekly_days:
+        schedule["weekly_payout_days"] &&
+          Enum.flat_map(schedule["weekly_payout_days"], &List.wrap(known(&1, @weekdays))),
+      monthly_days: schedule["monthly_payout_days"],
+      delay_days: timing["delay_days_override"] || timing["delay_days"],
+      minimum_balances: by_currency(payouts["minimum_balance_by_currency"]),
+      statement_descriptor: payouts["statement_descriptor"],
+      status: known(payouts["status"], ~w(enabled disabled)a),
+      minimum_payouts: []
+    }
+    |> MishkaPay.Balance.PayoutSchedule.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  defp by_currency(%{} = amounts) do
+    for {currency, minor} <- amounts, money = money(minor, currency), do: money
+  end
+
+  defp by_currency(_none), do: []
+
+  @doc """
+  Params of `POST /v1/balance_settings`: only what the schedule gives. `delay_days: :default`
+  clears the override (Stripe's empty value), and `minimum_balances: []` keeps nothing back.
+  """
+  @spec payout_schedule_params(MishkaPay.Balance.PayoutSchedule.t()) :: map()
+  def payout_schedule_params(schedule) do
+    plan =
+      reject_nil(%{
+        "interval" => schedule.interval && Atom.to_string(schedule.interval),
+        "weekly_payout_days" =>
+          schedule.weekly_days && Enum.map(schedule.weekly_days, &to_string/1),
+        "monthly_payout_days" => schedule.monthly_days
+      })
+
+    payouts =
+      reject_nil(%{
+        "schedule" => if(plan != %{}, do: plan),
+        "minimum_balance_by_currency" => minimum_balances(schedule.minimum_balances),
+        "statement_descriptor" => schedule.statement_descriptor
+      })
+
+    timing = reject_nil(%{"delay_days_override" => delay_override(schedule.delay_days)})
+
+    payments =
+      reject_nil(%{
+        "payouts" => if(payouts != %{}, do: payouts),
+        "settlement_timing" => if(timing != %{}, do: timing)
+      })
+
+    %{"payments" => payments}
+  end
+
+  defp minimum_balances(nil), do: nil
+  defp minimum_balances([]), do: ""
+
+  defp minimum_balances(list),
+    do: Map.new(list, fn money -> {lower_currency(money), minor(money)} end)
+
+  defp delay_override(:default), do: ""
+  defp delay_override(days), do: days
+
+  @doc "A Stripe external account (a bank account or a card) as a `MishkaPay.Balance.PayoutDestination`."
+  @spec payout_destination(map()) ::
+          {:ok, MishkaPay.Balance.PayoutDestination.t()} | {:error, Splode.Error.t()}
+  def payout_destination(account) do
+    %{
+      provider: "stripe",
+      id: account["id"],
+      type: known(account["object"], ~w(bank_account card)a),
+      bank_name: account["bank_name"],
+      card_brand: account["brand"],
+      last4: account["last4"],
+      currency: account["currency"],
+      country: account["country"],
+      default: account["default_for_currency"] == true,
+      holder_name: account["account_holder_name"] || account["name"],
+      status: account["status"]
+    }
+    |> MishkaPay.Balance.PayoutDestination.builder()
     |> MishkaPay.Errors.from_builder()
   end
 

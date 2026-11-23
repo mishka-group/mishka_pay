@@ -705,6 +705,170 @@ defmodule MishkaPay.Providers.StripeTest do
       assert_received {:sent, "POST", "/v1/application_fees/fee_123/refunds", _}
     end
 
+    test "a payout is made once per reference, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.Balance.Payout{id: "po_" <> _, method: "instant"}} =
+               MishkaPay.create_payout(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 amount: %{amount: "12.50", currency: "EUR"},
+                 method: :instant,
+                 destination_id: "ba_123",
+                 statement_descriptor: "SHOP PAYOUT",
+                 reference: "payout-7"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/payouts", sent, key}
+
+      assert sent == %{
+               "amount" => "1250",
+               "currency" => "eur",
+               "method" => "instant",
+               "destination" => "ba_123",
+               "statement_descriptor" => "SHOP PAYOUT",
+               "metadata[mishka_pay_reference]" => "payout-7"
+             }
+
+      assert {:ok, _payout} =
+               MishkaPay.create_payout(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 amount: %{amount: "12.50", currency: "EUR"},
+                 method: :instant,
+                 destination_id: "ba_123",
+                 statement_descriptor: "SHOP PAYOUT",
+                 reference: "payout-7"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/payouts", _sent, ^key}
+    end
+
+    test "the payout schedule is read and set, and only what is given is sent, as Stripe's spec accepts" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.Balance.PayoutSchedule{provider: "stripe", minimum_payouts: []}} =
+               MishkaPay.fetch_payout_schedule("stripe", "site-a")
+
+      assert_received {:stripe_sent, "GET", "/v1/balance_settings", _query, nil}
+
+      assert {:ok, %MishkaPay.Balance.PayoutSchedule{}} =
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 interval: "weekly",
+                 weekly_days: [:friday, "monday"],
+                 delay_days: 7,
+                 minimum_balances: [%{amount: "15.00", currency: "USD"}],
+                 statement_descriptor: "SHOP"
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/balance_settings", schedule, _key}
+
+      assert schedule == %{
+               "payments[payouts][schedule][interval]" => "weekly",
+               "payments[payouts][schedule][weekly_payout_days][0]" => "friday",
+               "payments[payouts][schedule][weekly_payout_days][1]" => "monday",
+               "payments[payouts][minimum_balance_by_currency][usd]" => "1500",
+               "payments[payouts][statement_descriptor]" => "SHOP",
+               "payments[settlement_timing][delay_days_override]" => "7"
+             }
+
+      assert {:ok, %MishkaPay.Balance.PayoutSchedule{}} =
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 delay_days: :default,
+                 minimum_balances: []
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/balance_settings", back, _key}
+
+      assert back == %{
+               "payments[payouts][minimum_balance_by_currency]" => "",
+               "payments[settlement_timing][delay_days_override]" => ""
+             }
+    end
+
+    test "a seller's banks are read as the platform, with their last four digits, as Stripe's spec answers" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        send(
+          test,
+          {:account_header, conn.request_path, Plug.Conn.get_req_header(conn, "stripe-account")}
+        )
+
+        StripeMock.forward_telling(conn, test)
+      end)
+
+      MishkaPay.Test.put_keys(
+        "stripe",
+        %{secret_key: "sk_test_123", account_id: "acct_seller"},
+        "seller"
+      )
+
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [%MishkaPay.Balance.PayoutDestination{type: :bank_account} = bank | _]
+              }} = MishkaPay.list_payout_destinations("stripe", "seller", type: :bank_account)
+
+      assert is_binary(bank.bank_name) and is_binary(bank.last4)
+
+      assert_received {:stripe_sent, "GET", "/v1/accounts/acct_seller/external_accounts", query,
+                       nil}
+
+      assert query["object"] == "bank_account"
+
+      # The platform reads a seller's bank, so no Stripe-Account goes with it.
+      assert_received {:account_header, "/v1/accounts/acct_seller/external_accounts", []}
+
+      assert {:ok, %MishkaPay.Balance.PayoutDestination{id: "ba_" <> _}} =
+               MishkaPay.fetch_payout_destination("stripe", "ba_123", "seller")
+
+      assert_received {:stripe_sent, "GET", "/v1/accounts/acct_seller/external_accounts/ba_123",
+                       _query, nil}
+
+      assert {:ok, %MishkaPay.Page{}} = MishkaPay.list_payout_destinations("stripe", "site-a")
+      assert_received {:stripe_sent, "GET", "/v1/account", _query, nil}
+      assert_received {:stripe_sent, "GET", "/v1/accounts/" <> _own, _query, nil}
+    end
+
+    test "the buyer's return names the session: Mishka Pay adds session_id to a page without Stripe's placeholder" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test, {:stripe, Plug.Conn.Query.decode(body)})
+        Req.Test.json(conn, %{"object" => "checkout.session", "id" => "cs_1", "status" => "open"})
+      end)
+
+      for {given, sent} <- [
+            {"https://shop.test/thanks",
+             "https://shop.test/thanks?session_id={CHECKOUT_SESSION_ID}"},
+            {"https://shop.test/thanks?lang=de",
+             "https://shop.test/thanks?lang=de&session_id={CHECKOUT_SESSION_ID}"},
+            {"https://shop.test/thanks?sid={CHECKOUT_SESSION_ID}",
+             "https://shop.test/thanks?sid={CHECKOUT_SESSION_ID}"}
+          ] do
+        assert {:ok, _checkout} = MishkaPay.checkout(%{@checkout | success_url: given})
+        assert_received {:stripe, %{"success_url" => ^sent}}
+      end
+
+      assert {:ok, "cs_test_a1"} =
+               MishkaPay.return_checkout_id("stripe", %{"session_id" => "cs_test_a1"})
+
+      assert {:ok, "cs_test_a2"} =
+               MishkaPay.return_checkout_id("stripe", %{sid: "cs_test_a2", lang: "de"})
+
+      for params <- [%{}, %{"token" => "ORDER7AB12"}, %{"session_id" => "cs_1/../x"}] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :checkout_id}]}} =
+                 MishkaPay.return_checkout_id("stripe", params)
+      end
+    end
+
     test "a checkout for a seller sends its fee and destination where Stripe takes them" do
       test = self()
 
@@ -983,6 +1147,149 @@ defmodule MishkaPay.Providers.StripeTest do
                  amount: %{amount: "9", currency: "USD"},
                  tax_behavior: :exclusive
                })
+    end
+
+    test "a price in other currencies is made with Stripe's currency options and a checkout in one of them names it" do
+      assert {:ok, %MishkaPay.Price{id: "price_" <> _ = price_id}} =
+               MishkaPay.create_price(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 product_id: "prod_123",
+                 amount: %{amount: "10", currency: "USD"},
+                 tax_behavior: :exclusive,
+                 lookup_key: "mfs-1",
+                 transfer_lookup_key: true,
+                 currency_options: [
+                   %{amount: "9", currency: "EUR"},
+                   %{amount: "8", currency: "GBP"}
+                 ]
+               })
+
+      assert {:ok, %MishkaPay.Price{}} = MishkaPay.fetch_price("stripe", price_id, "site-a")
+
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_prices("stripe", "site-a", lookup_key: "mfs-1")
+
+      assert {:ok, %Checkout{}} =
+               MishkaPay.checkout(
+                 Map.merge(@checkout, %{items: [%{id: price_id}], currency: "eur"})
+               )
+
+      params =
+        Stripe.Mapper.price_params(%MishkaPay.Price{
+          product_id: "prod_1",
+          amount: Money.new(:USD, "10"),
+          tax_behavior: :exclusive,
+          transfer_lookup_key: true,
+          currency_options: [Money.new(:EUR, "9"), Money.new(:JPY, "1500")]
+        })
+
+      assert params["currency_options"] == %{
+               "eur" => %{"unit_amount" => 900, "tax_behavior" => "exclusive"},
+               "jpy" => %{"unit_amount" => 1500, "tax_behavior" => "exclusive"}
+             }
+
+      assert params["transfer_lookup_key"] == true
+      assert params["expand"] == ["currency_options"]
+
+      assert Stripe.Mapper.price_params(%MishkaPay.Price{
+               product_id: "prod_1",
+               amount: Money.new(:USD, "10")
+             })["currency_options"] == nil
+
+      assert Stripe.Mapper.checkout_params(%{
+               params_checkout()
+               | items: [%MishkaPay.Price{id: "price_1", quantity: 1}],
+                 currency: :EUR
+             })["currency"] == "eur"
+
+      refute Map.has_key?(Stripe.Mapper.checkout_params(params_checkout()), "currency")
+    end
+
+    test "a price read back brings the other currencies Stripe keeps, its own one left out" do
+      # The shape Stripe answered in the sandbox for a price made with `expand[]=currency_options`.
+      recorded = %{
+        "id" => "price_1UeDYzEFIHHOoMs6oRsbEUtO",
+        "currency" => "usd",
+        "unit_amount" => 1000,
+        "tax_behavior" => "exclusive",
+        "currency_options" => %{
+          "eur" => %{
+            "custom_unit_amount" => nil,
+            "tax_behavior" => "unspecified",
+            "unit_amount" => 900,
+            "unit_amount_decimal" => "900"
+          },
+          "gbp" => %{
+            "custom_unit_amount" => nil,
+            "tax_behavior" => "exclusive",
+            "unit_amount" => 800,
+            "unit_amount_decimal" => "800"
+          },
+          "usd" => %{
+            "custom_unit_amount" => nil,
+            "tax_behavior" => "exclusive",
+            "unit_amount" => 1000,
+            "unit_amount_decimal" => "1000"
+          }
+        }
+      }
+
+      assert {:ok, %MishkaPay.Price{amount: own, currency_options: options}} =
+               Stripe.Mapper.price(recorded)
+
+      assert Money.equal?(own, Money.new(:USD, "10"))
+
+      assert [{:EUR, eur}, {:GBP, gbp}] =
+               options |> Enum.map(&{&1.currency, &1}) |> Enum.sort()
+
+      assert Money.equal?(eur, Money.new(:EUR, "9"))
+      assert Money.equal?(gbp, Money.new(:GBP, "8"))
+
+      assert {:ok, %MishkaPay.Price{currency_options: nil}} =
+               Stripe.Mapper.price(Map.delete(recorded, "currency_options"))
+
+      # A Checkout Session in EUR lists its line in EUR, its price still in USD.
+      assert [%MishkaPay.Price{amount: sold, quantity: 2}] =
+               Stripe.Mapper.sold(%{
+                 "data" => [
+                   %{
+                     "currency" => "eur",
+                     "amount_subtotal" => 1800,
+                     "quantity" => 2,
+                     "description" => "Ebook",
+                     "price" => Map.delete(recorded, "currency_options")
+                   }
+                 ]
+               })
+
+      assert Money.equal?(sold, Money.new(:EUR, "9"))
+
+      assert {:ok, %Subscription{items: [%MishkaPay.Price{amount: charged}]}} =
+               Stripe.Mapper.subscription(%{
+                 "id" => "sub_1",
+                 "status" => "active",
+                 "currency" => "gbp",
+                 "items" => %{"data" => [%{"id" => "si_1", "price" => recorded}]}
+               })
+
+      assert Money.equal?(charged, Money.new(:GBP, "8"))
+    end
+
+    test "the chosen payment methods filter Stripe's own set, and none chosen leaves it to Stripe" do
+      params =
+        Stripe.Mapper.checkout_params(%{params_checkout() | payment_methods: ["card", "link"]})
+
+      assert params["allowed_payment_method_types"] == ["card", "link"]
+      refute Map.has_key?(params, "payment_method_types")
+
+      refute Map.has_key?(
+               Stripe.Mapper.checkout_params(params_checkout()),
+               "allowed_payment_method_types"
+             )
+
+      assert {:error, _bad} =
+               MishkaPay.Checkout.builder(Map.put(@checkout, :payment_methods, ["no way!"]))
     end
 
     test "the site's automatic tax applies when a checkout or link does not say, and theirs wins" do
@@ -2112,6 +2419,25 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert get_in(params, ["line_items", Access.at(0), "price_data", "product_data", "tax_code"]) ==
                "txcd_10302000"
+
+      chosen =
+        Stripe.Mapper.checkout_params(%{
+          defaults
+          | items: [
+              %MishkaPay.Price{
+                name: "Ebook",
+                amount: Money.new(:USD, "7"),
+                quantity: 1,
+                product_id: "prod_ebook",
+                tax_code: "txcd_10302000"
+              }
+            ]
+        })
+
+      assert [%{"price_data" => price_data}] = chosen["line_items"]
+      assert price_data["product"] == "prod_ebook"
+      assert price_data["unit_amount"] == 700
+      refute Map.has_key?(price_data, "product_data")
     end
 
     test "checkout options and discounts are sent as Stripe's spec accepts, and a checkout is ended" do
@@ -2960,7 +3286,7 @@ defmodule MishkaPay.Providers.StripeTest do
             {Map.put(setup, :allow_promotion_codes, true), :allow_promotion_codes},
             {Map.put(setup, :automatic_tax, false), :automatic_tax},
             {Map.put(setup, :submit_type, :pay), :submit_type},
-            {Map.put(@checkout, :currency, "usd"), :currency}
+            {Map.put(@checkout, :currency, "eur"), :currency}
           ] do
         assert {:error, %Errors.Invalid{errors: errors}} = MishkaPay.checkout(attrs)
         assert Enum.any?(errors, &(&1.field == field)), inspect({attrs, errors})
@@ -3584,6 +3910,27 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert map_size(eu) == 3
 
+      midnight = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+      tomorrow = DateTime.add(midnight, 1, :day)
+
+      for {start, sent} <- [
+            {midnight, "now"},
+            {DateTime.utc_now(), "now"},
+            {tomorrow, tomorrow |> DateTime.to_unix() |> Integer.to_string()}
+          ] do
+        assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
+                 MishkaPay.create_tax_registration(%{
+                   provider: "stripe",
+                   tenant: "site-a",
+                   country: "DE",
+                   type: "oss_union",
+                   active_from: start
+                 })
+
+        assert_received {:stripe_sent, "POST", "/v1/tax/registrations", %{"active_from" => ^sent},
+                         _key}
+      end
+
       ends = ~U[2030-01-01 00:00:00Z]
 
       assert {:ok, %MishkaPay.TaxSettings.Registration{}} =
@@ -3710,6 +4057,12 @@ defmodule MishkaPay.Providers.StripeTest do
                country: "US",
                type: "state_sales_tax"
              }), :state},
+            {MishkaPay.create_tax_registration(%{
+               provider: "stripe",
+               country: "DE",
+               type: "oss_union",
+               active_from: DateTime.add(DateTime.utc_now(), -1, :day)
+             }), :active_from},
             {MishkaPay.create_tax_registration(%{
                provider: "stripe",
                country: "CA",
@@ -4184,6 +4537,46 @@ defmodule MishkaPay.Providers.StripeTest do
                )
     end
 
+    test "a payment names its charge, balance movement and fee, and each movement names its payment, as Stripe's spec answers" do
+      test = self()
+
+      MishkaPay.Test.stub_http(fn conn ->
+        query = conn.query_string |> URI.query_decoder() |> Enum.to_list()
+        send(test, {:read, conn.request_path, query})
+        StripeMock.forward(conn)
+      end)
+
+      assert {:ok,
+              %Payment{
+                charge_id: "ch_" <> _,
+                balance_transaction_id: "txn_" <> _,
+                fee: %Money{}
+              }} = MishkaPay.fetch_payment("stripe", "pi_123", "site-a")
+
+      assert_received {:read, "/v1/payment_intents/pi_123", read}
+      assert {"expand[]", "latest_charge.balance_transaction"} in read
+
+      assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Balance.Transaction{} = movement]}} =
+               MishkaPay.list_balance_transactions("stripe", "site-a", source_id: "ch_123")
+
+      assert_received {:read, "/v1/balance_transactions", listed}
+      assert {"source", "ch_123"} in listed
+      assert {"expand[]", "data.source"} in listed
+      assert byte_size(movement.source_id) > 0
+
+      assert {:ok, %MishkaPay.Page{items: items, has_more: false}} =
+               MishkaPay.list_balance_transactions("stripe", "site-a", payment_id: "pi_123")
+
+      assert [_ | _] = items
+      assert Enum.all?(items, &(&1.payment_id == "pi_123"))
+      assert_received {:read, "/v1/payment_intents/pi_123", one}
+
+      assert Enum.sort(one) == [
+               {"expand[]", "latest_charge.balance_transaction"},
+               {"expand[]", "latest_charge.refunds.data.balance_transaction"}
+             ]
+    end
+
     test "a customer's balance is credited and listed as Stripe's spec accepts" do
       assert {:ok,
               %MishkaPay.Customer.BalanceTransaction{
@@ -4281,6 +4674,109 @@ defmodule MishkaPay.Providers.StripeTest do
       assert Money.equal?(net, Money.new(:USD, "-100.25"))
     end
 
+    test "a registration's start earlier today is Stripe's now; a later moment stays, an earlier day is refused" do
+      now = ~U[2026-11-20 15:30:00Z]
+      registration = %MishkaPay.TaxSettings.Registration{provider: "stripe", country: "DE"}
+
+      assert {:ok, %{active_from: nil}} =
+               Stripe.registration_start(
+                 %{registration | active_from: ~U[2026-11-20 00:00:00Z]},
+                 now
+               )
+
+      assert {:ok, %{active_from: nil}} =
+               Stripe.registration_start(%{registration | active_from: now}, now)
+
+      assert {:ok, %{active_from: ~U[2026-11-20 18:00:00Z]}} =
+               Stripe.registration_start(
+                 %{registration | active_from: ~U[2026-11-20 18:00:00Z]},
+                 now
+               )
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :active_from}]}} =
+               Stripe.registration_start(
+                 %{registration | active_from: ~U[2026-11-19 23:59:59Z]},
+                 now
+               )
+    end
+
+    test "a balance movement names the payment its charge, refund or dispute belongs to" do
+      for {source, payment} <- [
+            {%{"id" => "ch_1", "object" => "charge", "payment_intent" => "pi_1"}, "pi_1"},
+            {%{"id" => "re_1", "object" => "refund", "payment_intent" => %{"id" => "pi_2"}},
+             "pi_2"},
+            {%{"id" => "du_1", "object" => "dispute", "payment_intent" => "pi_3"}, "pi_3"},
+            {%{"id" => "po_1", "object" => "payout"}, nil},
+            {"ch_9", nil}
+          ] do
+        assert {:ok, %MishkaPay.Balance.Transaction{payment_id: ^payment, source_id: "" <> _}} =
+                 Stripe.Mapper.balance_transaction(%{
+                   "id" => "txn_1",
+                   "amount" => 1000,
+                   "fee" => 59,
+                   "net" => 941,
+                   "currency" => "eur",
+                   "source" => source,
+                   "type" => "charge",
+                   "status" => "available"
+                 })
+      end
+    end
+
+    test "one payment's movements are its charge's and its refunds', newest first, from one read" do
+      txn = fn id, amount, created ->
+        %{
+          "id" => id,
+          "amount" => amount,
+          "fee" => 0,
+          "net" => amount,
+          "currency" => "usd",
+          "type" => if(amount < 0, do: "refund", else: "charge"),
+          "status" => "available",
+          "created" => created
+        }
+      end
+
+      MishkaPay.Test.stub_http(fn conn ->
+        Req.Test.json(conn, %{
+          "id" => "pi_7",
+          "object" => "payment_intent",
+          "latest_charge" => %{
+            "id" => "ch_7",
+            "balance_transaction" => txn.("txn_charge", 2000, 100),
+            "refunds" => %{
+              "data" => [
+                %{"id" => "re_1", "balance_transaction" => txn.("txn_refund", -500, 200)},
+                %{"id" => "re_2", "balance_transaction" => "txn_not_read"}
+              ]
+            }
+          }
+        })
+      end)
+
+      assert {:ok,
+              %MishkaPay.Page{
+                items: [
+                  %MishkaPay.Balance.Transaction{
+                    id: "txn_refund",
+                    source_id: "re_1",
+                    payment_id: "pi_7"
+                  },
+                  %MishkaPay.Balance.Transaction{
+                    id: "txn_charge",
+                    source_id: "ch_7",
+                    payment_id: "pi_7"
+                  }
+                ]
+              }} = MishkaPay.list_balance_transactions("stripe", nil, payment_id: "pi_7")
+
+      assert {:ok, %MishkaPay.Page{items: [%{id: "txn_refund"}]}} =
+               MishkaPay.list_balance_transactions("stripe", nil,
+                 payment_id: "pi_7",
+                 type: "refund"
+               )
+    end
+
     test "usage, entitlements and balances that cannot be right are refused before any request" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
       usage = %{provider: "stripe", event_name: "api_call", customer_id: "cus_1"}
@@ -4333,6 +4829,17 @@ defmodule MishkaPay.Providers.StripeTest do
             {MishkaPay.list_entitlements("stripe", "sub_1"), :customer_id},
             {MishkaPay.list_balance_transactions("stripe", nil, payout_id: "tr_1"), :payout_id},
             {MishkaPay.list_balance_transactions("stripe", nil, type: "a&b"), :type},
+            {MishkaPay.list_balance_transactions("stripe", nil, source_id: "ch_1&x=y"),
+             :source_id},
+            {MishkaPay.list_balance_transactions("stripe", nil, payment_id: "ch_1"), :payment_id},
+            {MishkaPay.list_balance_transactions("stripe", nil,
+               payment_id: "pi_1",
+               payout_id: "po_1"
+             ), :payout_id},
+            {MishkaPay.list_balance_transactions("stripe", nil,
+               payment_id: "pi_1",
+               after: "txn_1"
+             ), :after},
             {MishkaPay.adjust_customer_balance("stripe", "cus_1", %{amount: "x", currency: "USD"}),
              :amount},
             {MishkaPay.adjust_customer_balance("stripe", "cus_1", Money.new(:ISK, "-0.5")),
@@ -4370,13 +4877,13 @@ defmodule MishkaPay.Providers.StripeTest do
         })
 
       assert {params["ui_mode"], params["return_url"]} ==
-               {"embedded_page", "https://shop.test/return"}
+               {"embedded_page", "https://shop.test/return?session_id={CHECKOUT_SESSION_ID}"}
 
       refute Map.has_key?(params, "success_url")
       assert params["payment_intent_data"]["capture_method"] == "manual"
 
       hosted = Stripe.Mapper.checkout_params(params_checkout())
-      assert hosted["success_url"] == "https://shop.test/thanks"
+      assert hosted["success_url"] == "https://shop.test/thanks?session_id={CHECKOUT_SESSION_ID}"
       refute Map.has_key?(hosted, "ui_mode")
       refute Map.has_key?(hosted["payment_intent_data"], "capture_method")
     end
@@ -4575,6 +5082,76 @@ defmodule MishkaPay.Providers.StripeTest do
       refute same == other
     end
 
+    test "a checkout asked again with the same reference and other details is a new request, the same one sent twice is one" do
+      test = self()
+      seen = :ets.new(:stripe_keys, [:public])
+
+      # Stripe keeps a key's first params: the same key with other params is an idempotency_error,
+      # as the store met when it asked again without a customer account Stripe had refused.
+      MishkaPay.Test.stub_http(fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = Plug.Conn.Query.decode(body)
+        [key] = Plug.Conn.get_req_header(conn, "idempotency-key")
+        send(test, {:sent, key, params})
+
+        case {:ets.lookup(seen, key), params} do
+          {[{^key, first}], params} when first != params ->
+            conn
+            |> Plug.Conn.put_status(400)
+            |> Req.Test.json(%{
+              "error" => %{
+                "type" => "idempotency_error",
+                "message" =>
+                  "Keys for idempotent requests can only be used with the same parameters."
+              }
+            })
+
+          {_first_or_same, %{"customer_account" => account}} ->
+            :ets.insert(seen, {key, params})
+
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{
+              "error" => %{
+                "type" => "invalid_request_error",
+                "code" => "resource_missing",
+                "param" => "customer_account",
+                "message" => "No such customer_account: '#{account}'"
+              }
+            })
+
+          _new_or_same ->
+            :ets.insert(seen, {key, params})
+
+            Req.Test.json(conn, %{
+              "object" => "checkout.session",
+              "id" => "cs_test_again",
+              "url" => "https://checkout.stripe.com/c/pay/cs_test_again",
+              "mode" => "payment",
+              "status" => "open"
+            })
+        end
+      end)
+
+      with_account = %{@checkout | customer: %{id: "acct_refused"}, reference: "order-9"}
+
+      assert {:error, %Errors.Rejected{code: "resource_missing", param: "customer_account"}} =
+               MishkaPay.checkout(with_account)
+
+      assert_received {:sent, first_key, _params}
+
+      assert {:ok, %Checkout{id: "cs_test_again"}} =
+               MishkaPay.checkout(%{@checkout | reference: "order-9"})
+
+      assert_received {:sent, second_key, _params}
+      refute second_key == first_key
+
+      assert {:ok, %Checkout{id: "cs_test_again"}} =
+               MishkaPay.checkout(%{@checkout | reference: "order-9"})
+
+      assert_received {:sent, ^second_key, _params}
+    end
+
     test "refunding once: two refunds of one payment sent at once carry one key, so Stripe makes one" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :request, :start]])
 
@@ -4653,6 +5230,40 @@ defmodule MishkaPay.Providers.StripeTest do
   end
 
   describe "before any request" do
+    test "other currencies that cannot be right never reach Stripe" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      price = %{
+        provider: "stripe",
+        product_id: "prod_1",
+        amount: %{amount: "10", currency: "USD"}
+      }
+
+      for options <- [
+            [%{amount: "10", currency: "USD"}],
+            [%{amount: "9", currency: "EUR"}, %{amount: "8", currency: "eur"}],
+            [nil],
+            "EUR"
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: :currency_options} | _]}} =
+                 MishkaPay.create_price(Map.put(price, :currency_options, options))
+      end
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :currency} | _]}} =
+               MishkaPay.checkout(Map.put(@checkout, :currency, "eur"))
+
+      line = %{
+        name: "Ebook",
+        amount: %{amount: "10", currency: "USD"},
+        currency_options: [%{amount: "9", currency: "EUR"}]
+      }
+
+      assert {:error, %Errors.Invalid{errors: [%{field: :items}]}} =
+               MishkaPay.checkout(Map.put(@checkout, :items, [line]))
+
+      assert {:error, _bad} = MishkaPay.checkout(Map.put(@checkout, :currency, "not money"))
+    end
+
     test "a connected account that is not an account id, or would end the header, is never sent" do
       MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
 
@@ -4738,6 +5349,69 @@ defmodule MishkaPay.Providers.StripeTest do
             {fn ->
                MishkaPay.create_connected_account(%{provider: "stripe", dashboard: :platform})
              end, :dashboard}
+          ] do
+        assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} = call.()
+      end
+    end
+
+    test "a payout, a schedule or a destination that cannot be right never reaches Stripe" do
+      MishkaPay.Test.stub_http(fn _conn -> flunk("no request") end)
+
+      payout = %{
+        provider: "stripe",
+        amount: %{amount: "5.00", currency: "USD"},
+        reference: "p-1"
+      }
+
+      for {call, field} <- [
+            {fn -> MishkaPay.create_payout(Map.delete(payout, :reference)) end, :reference},
+            {fn -> MishkaPay.create_payout(Map.delete(payout, :amount)) end, :amount},
+            {fn ->
+               MishkaPay.create_payout(%{payout | amount: %{amount: "0", currency: "USD"}})
+             end, :amount},
+            {fn -> MishkaPay.create_payout(Map.put(payout, :method, "overnight")) end, :method},
+            {fn -> MishkaPay.create_payout(Map.put(payout, :destination_id, "acct_1")) end,
+             :destination_id},
+            {fn -> MishkaPay.create_payout(Map.put(payout, :destination_id, "ba_1/../x")) end,
+             :destination_id},
+            {fn ->
+               MishkaPay.create_payout(
+                 Map.put(payout, :statement_descriptor, String.duplicate("a", 23))
+               )
+             end, :statement_descriptor},
+            {fn -> MishkaPay.update_payout_schedule(%{provider: "stripe", interval: :hourly}) end,
+             :interval},
+            {fn -> MishkaPay.update_payout_schedule(%{provider: "stripe", interval: :weekly}) end,
+             :interval},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 interval: :daily,
+                 monthly_days: [1]
+               })
+             end, :interval},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 interval: :weekly,
+                 weekly_days: [:sunday]
+               })
+             end, :weekly_days},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{
+                 provider: "stripe",
+                 interval: :monthly,
+                 monthly_days: [0, 32]
+               })
+             end, :monthly_days},
+            {fn -> MishkaPay.update_payout_schedule(%{provider: "stripe", delay_days: 40}) end,
+             :delay_days},
+            {fn ->
+               MishkaPay.update_payout_schedule(%{provider: "stripe", minimum_balances: [nil]})
+             end, :minimum_balances},
+            {fn -> MishkaPay.list_payout_destinations("stripe", nil, type: :wallet) end, :type},
+            {fn -> MishkaPay.fetch_payout_destination("stripe", "po_1") end, :destination_id},
+            {fn -> MishkaPay.fetch_payout_destination("stripe", "card_1?x") end, :destination_id}
           ] do
         assert {:error, %Errors.Invalid{errors: [%{field: ^field} | _]}} = call.()
       end
@@ -5337,6 +6011,29 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert {:error, %Errors.Invalid{}} =
              Stripe.Mapper.subscription(%{sub | "status" => "something_new"})
+  end
+
+  test "a subscription brings its own default card, not the customer's" do
+    card = %{
+      "id" => "pm_4242",
+      "object" => "payment_method",
+      "type" => "card",
+      "card" => %{"brand" => "visa", "last4" => "4242"}
+    }
+
+    base = %{"id" => "sub_card", "status" => "active", "customer" => "cus_1", "items" => %{}}
+
+    assert {:ok, %Subscription{} = paid} =
+             Stripe.Mapper.subscription(Map.put(base, "default_payment_method", card))
+
+    assert {paid.default_payment_method, paid.card_brand, paid.card_last4} ==
+             {"pm_4242", "visa", "4242"}
+
+    assert {:ok, %Subscription{default_payment_method: "pm_4242", card_last4: nil}} =
+             Stripe.Mapper.subscription(Map.put(base, "default_payment_method", "pm_4242"))
+
+    assert {:ok, %Subscription{default_payment_method: nil, card_last4: nil}} =
+             Stripe.Mapper.subscription(base)
   end
 
   test "an invoice brings its subscription from either place Stripe puts it" do

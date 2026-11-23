@@ -18,7 +18,9 @@ end
 
 - Capabilities and their callbacks (`MishkaPay.Provider.operations/1`); the module does not
   compile with one missing:
-  - `:checkout`: `checkout/2`, `fetch_checkout/2`, `fetch_payment/2`;
+  - `:checkout`: `checkout/2`, `fetch_checkout/2`, `fetch_payment/2`; optional
+    `return_checkout_id/1` (the checkout id in the return page's query, or `Errors.Invalid` on
+    `:checkout_id`; without it `MishkaPay.return_checkout_id/2` answers `Errors.Unsupported`);
   - `:embedded_checkout`: no callback; `checkout/2` also takes `ui_mode: :embedded`;
   - `:capture`: `capture_payment/3`, `cancel_payment/2`; `checkout/2` also takes `capture: :manual`;
   - `:expire`: `expire_checkout/2`;
@@ -97,7 +99,12 @@ end
     account every request acts for, and its webhooks take only that account's events;
   - `:transfer`: `create_transfer/2`, `fetch_transfer/2`, `list_transfers/2` (`:destination`,
     `:transfer_group`), `reverse_transfer/3` (`:amount`, `:reference`, `:tenant`);
-  - `:payout`: `fetch_payout/2`, `list_payouts/2` (`:status`), `cancel_payout/2`;
+  - `:payout`: `create_payout/2` (a `MishkaPay.Balance.Payout`; its `:reference` makes the
+    idempotency key; a `:method` it cannot send is refused), `fetch_payout/2`, `list_payouts/2`
+    (`:status`), `cancel_payout/2`;
+  - `:payout_schedule`: `fetch_payout_schedule/1`, `update_payout_schedule/2` (sends only the
+    fields given; refuses a limit of its own, such as Stripe's 31 delay days, before any request);
+  - `:payout_destination`: `list_payout_destinations/2` (`:type`), `fetch_payout_destination/2`;
   - `:webhook`: `verify_webhook/3`.
 - Every `list_*` callback takes the options keyword (`:limit`, `:after` and its filters) and
   answers one `MishkaPay.Page`; `:next` is the provider's own cursor.

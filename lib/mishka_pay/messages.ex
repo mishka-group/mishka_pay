@@ -94,7 +94,9 @@ defmodule MishkaPay.Messages do
           | :invoice_mode
           | :setup_takes_no
           | :setup_currency
-          | :currency_setup_only
+          | :currency_items
+          | :currency_options_once
+          | :currency_options_catalog
           | :rejected_missing
           | :rejected_exists
           | :keys_answer
@@ -143,6 +145,13 @@ defmodule MishkaPay.Messages do
           | :billing_mode_when_made
           | :schedule_moves
           | :choices
+          | :payout_days
+          | :delay_days
+          | :payout_interval_days
+          | :delay_days_most
+          | :payment_id_alone
+          | :registration_past
+          | :return_no_checkout
           | :merchant_of_record_off
           | :portal_feature_off
           | :subscription_of_another
@@ -591,11 +600,25 @@ defmodule MishkaPay.Messages do
         "A setup checkout needs a currency: it decides which payment methods the page offers"
       )
 
-  defp msgid(:currency_setup_only),
+  defp msgid(:currency_items),
     do:
       dgettext_noop(
         "mishka_pay",
-        "The currency field goes only with a setup checkout: a sale takes its currency from its items"
+        "The currency of a sale must be the currency of every item that carries its own amount"
+      )
+
+  defp msgid(:currency_options_once),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Give each other currency of a price once, and not the price's own currency"
+      )
+
+  defp msgid(:currency_options_catalog),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Other currencies belong to a catalog price: a checkout line is charged in the checkout's currency"
       )
 
   defp msgid(:plain_id),
@@ -754,6 +777,39 @@ defmodule MishkaPay.Messages do
 
   defp msgid(:choices),
     do: dgettext_noop("mishka_pay", "The %{field} field takes only: %{choices}")
+
+  defp msgid(:payout_days),
+    do: dgettext_noop("mishka_pay", "The monthly_days field takes days of the month, 1 to 31")
+
+  defp msgid(:delay_days),
+    do: dgettext_noop("mishka_pay", "The delay_days field takes a number of days, or :default")
+
+  defp msgid(:return_no_checkout),
+    do: dgettext_noop("mishka_pay", "The return page's query names no checkout of this provider")
+
+  defp msgid(:registration_past),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A tax registration starts today or later: leave active_from out to start it now"
+      )
+
+  defp msgid(:payment_id_alone),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "The payment_id filter answers one payment's movements on one page: leave %{field} out"
+      )
+
+  defp msgid(:delay_days_most),
+    do: dgettext_noop("mishka_pay", "Stripe takes at most %{days} delay days")
+
+  defp msgid(:payout_interval_days),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "A weekly schedule takes weekly_days and a monthly one monthly_days; no other takes days"
+      )
 
   defp msgid(:tax_percentage),
     do: dgettext_noop("mishka_pay", "The percentage field must be an exact number from 0 to 100")

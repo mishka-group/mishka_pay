@@ -127,6 +127,23 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
 - `list_payouts/3` (`status:` `:pending`, `:in_transit`, `:paid`, `:failed`, `:canceled`),
   `fetch_payout/3` and `cancel_payout/3` act on the account the keys act for: the platform, or
   with a site's `account_id` the seller's. Only a `:pending` payout can be canceled.
+- `create_payout/1` is `POST /v1/payouts` from the available balance of the amount's currency:
+  `:reference` is required, makes the idempotency key and is kept in metadata; `:method` is
+  `"standard"` (Stripe's default) or `"instant"` (to a debit card or bank that takes it, for a
+  fee); `:destination_id` is a `ba_...` or `card_...` of the account. A balance without that
+  money is `Errors.Rejected` with code `"balance_insufficient"`. Stripe's API v2 payout intents
+  pay out of a Financial Account (Global Payouts), not the payments balance, so they are not
+  used here.
+- `fetch_payout_schedule/2` and `update_payout_schedule/1` are Balance Settings
+  (`/v1/balance_settings`, Stripe's newest place for them, for Accounts v2 and v1 accounts):
+  `interval`, `weekly_days` (`:monday`..`:friday`), `monthly_days` (1 to 31), `delay_days`
+  (Stripe's `delay_days_override`, up to 31; `:default` clears it), `minimum_balances` (money
+  kept back per currency; `[]` keeps none) and `statement_descriptor`. Only the fields given
+  are sent. Stripe's API has no minimum payout amount: `:minimum_payouts` is `[]`.
+- `list_payout_destinations/3` and `fetch_payout_destination/3` read the external accounts
+  (`ba_...`, `card_...`) of the connected account a site's `account_id` names, as the
+  platform. With the platform's own keys they read its own, which Stripe allows with live keys
+  only: a test key is `Errors.Rejected` (Stripe: "Only live keys can access this method").
 - Ids: transfers `tr_`, payouts `po_`, application fees `fee_`, accounts `acct_`; a wrong kind is
   `Errors.Invalid` before any request.
 - Stripe sends `transfer.created`, `.updated`, `.reversed`; `payout.created`, `.updated`,
@@ -421,6 +438,9 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
   AU, JP, IS and others) `:standard` or `:inbound_goods`.
   `MishkaPay.Providers.Stripe.place_of_supply_schemes/2` gives the list for a country and kind;
   any other scheme, kind or country is `Errors.Invalid` before any request.
+  `:active_from` left out, or earlier today (a date picked in a form is its midnight, which
+  Stripe refuses as a past start), is sent as Stripe's `now`; a later moment as itself; an
+  earlier day is `Errors.Invalid` on `:active_from` before any request.
   `expire_tax_registration/4` sets `expires_at` (`now` unless `at:`); Stripe never deletes one.
   A second registration of the same kind in a country is `Errors.Rejected`.
 - `fetch_tax_settings/2` and `update_tax_settings/1` are `GET` and `POST /v1/tax/settings`:
@@ -431,6 +451,14 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 - A product may take the host's own `id` (`"ebook"`): letters, digits, `_` and `-`.
 - A Stripe price reads its name from its product (expanded), so a listed price says what it sells.
+- A price's `:currency_options` go as Stripe's `currency_options[<cur>][unit_amount]` and
+  `[tax_behavior]` (the price's own; Stripe gives an option none of its own otherwise), and are
+  read back on every create, fetch and list (`expand[]=currency_options`), the price's own
+  currency left out. Stripe adds an option on update but never removes one
+  (`parameter_invalid_empty`), so a change is a new price with `transfer_lookup_key: true`. A
+  checkout's `:currency` is the session's `currency`; a price with no amount in it is refused
+  by Stripe. A sold line and a subscription item read back in the currency they were charged in
+  (the line's subtotal for each one, the price's option for the subscription's currency).
 - A page's `:next` is the last item's id (Stripe's `starting_after`).
 - `list_payments/3` reads each PaymentIntent with its charge, refunds and customer, as
   `fetch_payment/3` does.
@@ -588,9 +616,21 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 
 - `fetch_balance/2` reads the account's payments balance: `available` and `pending`, one money
   per currency, below zero when Stripe's is.
-- `list_balance_transactions/3` filters by `payout_id:` (`po_...`, automatic payouts only) and
-  `type:` (Stripe's type, such as `"charge"`, `"refund"` or `"payout"`). Each has `:amount`,
-  `:fee`, `:net`, `:type`, `:source_id`, `:status` and `:available_at`.
+- `list_balance_transactions/3` filters by `payout_id:` (`po_...`, automatic payouts only),
+  `type:` (Stripe's type, such as `"charge"`, `"refund"` or `"payout"`) and `source_id:` (the
+  object that made it, Stripe's `source`). Each has `:amount`, `:fee`, `:net`, `:type`,
+  `:source_id`, `:payment_id` (the PaymentIntent of a charge, refund or dispute; the list
+  expands `data.source` to find it, in the same request), `:status` and `:available_at`.
+- `payment_id:` (`pi_...`) lists one payment's movements: its charge's and each refund's, read
+  in one request (`latest_charge.balance_transaction` and
+  `latest_charge.refunds.data.balance_transaction` expanded), on one page; it takes `type:` and
+  refuses `payout_id:`, `source_id:` and `after:`. A dispute's movements name the payment
+  through `:payment_id` in the full list.
+- A payment read with `fetch_payment/3` or `list_payments/3` carries `:charge_id` (its
+  `latest_charge`), `:balance_transaction_id` and `:fee` (Stripe's fee, in the balance's
+  settlement currency), all from the same request. A payment captured asynchronously (Stripe's
+  default, `automatic_async`) has neither for a moment: Stripe sets them later and sends
+  `charge.updated`, which the webhook handles (the Ash payment row syncs again).
 - A customer's balance (`adjust_customer_balance/5`) is Stripe's customer credit balance:
   below zero is credit taken off the next invoices, above zero is a debit added to them. It is
   in the customer's one currency; the first change sets it. Its `:reference` makes the

@@ -6,6 +6,8 @@ defmodule MishkaPay.WebhookTest do
   # Starts the Stripe and listener plugins, which change events every test sees.
   use ExUnit.Case, async: false
 
+  @moduletag :capture_log
+
   import Plug.Conn
   import Plug.Test
 
@@ -232,6 +234,45 @@ defmodule MishkaPay.WebhookTest do
     assert elsewhere.status == nil
   end
 
+  test "a refused message leaves one plain line in the log, never its body or a secret" do
+    body = payload()
+    other = "whsec_other_secret"
+
+    mismatch =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-a", body, signed(body, secret: other)).status ==
+                 400
+      end)
+
+    assert mismatch =~ "answered 400 to a stripe webhook"
+    assert mismatch =~ "does not match the webhook secret"
+    refute mismatch =~ other
+    refute mismatch =~ @secret
+    refute mismatch =~ "evt_123"
+
+    no_keys =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-without-keys", body, signed(body)).status == 400
+      end)
+
+    assert no_keys =~ ~s(tenant "site-without-keys")
+    assert no_keys =~ "no keys, or no webhook secret"
+
+    unsigned =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-a", body, nil).status == 400
+      end)
+
+    assert unsigned =~ "no signature header"
+
+    taken =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+      end)
+
+    refute taken =~ "answered"
+  end
+
   test "a signed event with an odd shape or time is refused or read, never a crash" do
     for changes <- [%{"data" => "x"}, %{"data" => %{"object" => [1]}}, %{"data" => []}] do
       body = payload(changes)
@@ -249,6 +290,29 @@ defmodule MishkaPay.WebhookTest do
     assert post("/pay/webhooks/stripe/made-up-tenant", body, signed(body)).status == 400
     assert_received {[:mishka_pay, :webhook, :stop], ^ref, _, meta}
     refute Map.has_key?(meta, :tenant)
+  end
+
+  test "every answer is followed by its answer time, with a tenant only once proven" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mishka_pay, :webhook, :answered]])
+    body = payload()
+
+    assert post("/pay/webhooks/stripe/site-a", body, signed(body)).status == 200
+
+    assert_received {[:mishka_pay, :webhook, :answered], ^ref,
+                     %{answer_ms: ms, duration: duration},
+                     %{status: 200, tenant: "site-a", outcome: :ok}}
+
+    assert ms >= 0 and duration > 0
+
+    for {path, status} <- [
+          {"/pay/webhooks/stripe/made-up-tenant", 400},
+          {"/pay/webhooks/nope/site-a", 404}
+        ] do
+      assert post(path, body, signed(body)).status == status
+      assert_received {[:mishka_pay, :webhook, :answered], ^ref, %{answer_ms: _}, meta}
+      assert meta.status == status
+      refute Map.has_key?(meta, :tenant)
+    end
   end
 
   test "the plug must be given a path of its own" do

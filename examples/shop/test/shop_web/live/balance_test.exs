@@ -54,6 +54,65 @@ defmodule ShopWeb.BalanceTest do
     refute has_element?(view, "[data-testid=balance-movements-more]")
   end
 
+  test "a movement names its payment, and one payment's movements are read by its id", %{
+    conn: conn
+  } do
+    StripeStub.stub(fn
+      "GET", "/v1/balance_transactions", _params ->
+        StripeStub.list([
+          Map.put(movement("txn_1"), "source", %{
+            "id" => "ch_1",
+            "object" => "charge",
+            "payment_intent" => "pi_1"
+          })
+        ])
+
+      "GET", "/v1/payment_intents/pi_1", _params ->
+        %{
+          "id" => "pi_1",
+          "object" => "payment_intent",
+          "latest_charge" => %{
+            "id" => "ch_1",
+            "balance_transaction" => movement("txn_1"),
+            "refunds" => %{
+              "data" => [
+                %{
+                  "id" => "re_1",
+                  "balance_transaction" =>
+                    Map.merge(movement("txn_2"), %{"type" => "refund", "amount" => -500})
+                }
+              ]
+            }
+          }
+        }
+
+      _method, _path, _params ->
+        nil
+    end)
+
+    {:ok, view, _html} = live(conn, "/")
+
+    view |> element("[data-testid=balance-movements]") |> render_click()
+
+    assert has_element?(
+             view,
+             "[data-movement-id=txn_1] [data-testid=balance-movement-payment]",
+             "pi_1"
+           )
+
+    view
+    |> form("[data-testid=balance-payment-movements-form]", %{payment_id: "pi_1"})
+    |> render_submit()
+
+    assert has_element?(
+             view,
+             "[data-movement-id=txn_2] [data-testid=balance-movement-payment]",
+             "pi_1"
+           )
+
+    assert has_element?(view, "[data-movement-id=txn_1]")
+  end
+
   test "gives a customer credit and lists the change", %{conn: conn} do
     test = self()
 
