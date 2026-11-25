@@ -220,9 +220,9 @@ if Code.ensure_loaded?(Ash) do
     `:currency`, with the `:money` calculation) and how often (`:interval`, `:interval_count`),
     how many (`:quantity`), the end of the period paid for (`:current_period_end`), whether it ends
     then (`:cancel_at_period_end`), `:canceled_at`, `:trial_end`, a pause (`:pause_behavior`,
-    `:resumes_at`), the buyer, the card its invoices are charged to (`:card_brand`, `:card_last4`, `:card_exp_month`, `:card_exp_year`,
-    from its own default payment method), the caller's `:reference`, when the provider made it and
-    when it was last synced. A subscription starts with a checkout in `mode: :subscription`.
+    `:resumes_at`), the buyer, the card its invoices are charged to (`:card_brand`, `:card_last4`,
+    and when it expires, `:card_exp_month` and `:card_exp_year`, from its own default payment
+    method), the caller's `:reference`, when the provider made it and when it was last synced. A subscription starts with a checkout in `mode: :subscription`.
 
       * `:sync` takes `:provider`, `:subscription_id` and `:tenant` and writes what the provider
         says (`MishkaPay.fetch_subscription/3`).
