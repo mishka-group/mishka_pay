@@ -4,6 +4,7 @@
 
 - A subscription says when its card expires (`card_exp_month`, `card_exp_year`), read from the provider and kept on the synced row, so a host can warn a buyer before the card stops working.
 - Built and tested against the newest Ash (3.38) and the newest of every other dependency.
+- Needs mishka_installer 0.1.18, which checks an extension archive before it unpacks it
 
 ## 0.0.2
 
