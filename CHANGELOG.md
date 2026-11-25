@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.3
+
+- A subscription says when its card expires (`card_exp_month`, `card_exp_year`), read from the provider and kept on the synced row, so a host can warn a buyer before the card stops working.
+- Built and tested against the newest Ash (3.38) and the newest of every other dependency.
+
 ## 0.0.2
 
 - Payouts: pay the balance out now, read and set the payout schedule, and read the bank accounts payouts go to.

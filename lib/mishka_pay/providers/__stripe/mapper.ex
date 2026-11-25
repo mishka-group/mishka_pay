@@ -738,6 +738,8 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       default_payment_method: id_of(sub["default_payment_method"]),
       card_brand: card["brand"],
       card_last4: card["last4"],
+      card_exp_month: card["exp_month"],
+      card_exp_year: card["exp_year"],
       schedule_id: id_of(sub["schedule"]),
       pause_behavior: get_in(sub, ["pause_collection", "behavior"]),
       resumes_at: time(get_in(sub, ["pause_collection", "resumes_at"])),
