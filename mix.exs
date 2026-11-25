@@ -88,7 +88,7 @@ defmodule MishkaPay.MixProject do
   defp deps do
     [
       # Providers, credentials and every extension point are mishka_installer plugins and events.
-      mishka_dep(:mishka_installer, "~> 0.1.17"),
+      mishka_dep(:mishka_installer, "~> 0.1.18"),
       # Every input and every answer of a provider is a guarded_struct (`not_nil_value` refuses
       # nil; 0.1.9 refuses a `struct:`, `structs:` or `sub_field` value of the wrong shape).
       {:guarded_struct, "~> 0.1.11"},
