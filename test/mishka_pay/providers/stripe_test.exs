@@ -4559,6 +4559,7 @@ defmodule MishkaPay.Providers.StripeTest do
 
       assert_received {:read, "/v1/payment_intents/pi_123", read}
       assert {"expand[]", "latest_charge.balance_transaction"} in read
+      assert {"expand[]", "latest_charge.review"} in read
 
       assert {:ok, %MishkaPay.Page{items: [%MishkaPay.Balance.Transaction{} = movement]}} =
                MishkaPay.list_balance_transactions("stripe", "site-a", source_id: "ch_123")
@@ -5967,6 +5968,40 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert {failed.failure_code, failed.failure_message} ==
              {"insufficient_funds", "Your card has insufficient funds."}
+  end
+
+  test "a payment says how risky Radar found its charge and whether a review still holds it" do
+    intent = %{
+      "id" => "pi_risky",
+      "amount" => 4900,
+      "currency" => "usd",
+      "status" => "succeeded",
+      "latest_charge" => %{
+        "id" => "ch_risky",
+        "outcome" => %{"risk_level" => "highest", "risk_score" => 91, "type" => "authorized"},
+        "review" => %{
+          "id" => "prv_1",
+          "open" => true,
+          "opened_reason" => "rule",
+          "reason" => "rule",
+          "charge" => "ch_risky",
+          "payment_intent" => "pi_risky"
+        }
+      }
+    }
+
+    assert {:ok,
+            %Payment{
+              risk_level: "highest",
+              risk_score: 91,
+              fraud_review: %{id: "prv_1", open: true, opened_reason: :rule}
+            }} = Stripe.Mapper.payment(intent)
+
+    plain = put_in(intent, ["latest_charge", "review"], "prv_1")
+    plain = put_in(plain, ["latest_charge", "outcome"], %{"risk_level" => "normal"})
+
+    assert {:ok, %Payment{risk_level: "normal", risk_score: nil, fraud_review: nil}} =
+             Stripe.Mapper.payment(plain)
   end
 
   test "a subscription brings its status, items, period, cancel, trial, buyer and reference" do

@@ -5,6 +5,7 @@
 - PayPal: a checkout line takes the seller's own tax as a percentage (`tax_percentage`, held in the amount with `tax_behavior: :inclusive`): a one-time Order sends it on each item with its `tax_total` and reads it back as the checkout's `amount_tax`, and a subscription's plan carries it. Stripe refuses it and keeps taking rates (`tax_rate_ids`).
 - PayPal: a reversed capture and a buyer's dispute make the payment `disputed`, so a shop takes the access back as for a Stripe chargeback; the dispute webhooks (`CUSTOMER.DISPUTE.*`) name the Order of the capture they hold.
 - PayPal: a webhook signed more than 300 seconds from now (`webhook_tolerance`), or naming a certificate off PayPal's own API hosts, is refused with 400 before PayPal is asked.
+- Stripe: a payment says how risky Radar found it (`risk_level`, `risk_score`) and carries its charge's open or closed review (`fraud_review`).
 
 ## 0.0.3
 

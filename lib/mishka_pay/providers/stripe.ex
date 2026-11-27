@@ -772,6 +772,7 @@ defmodule MishkaPay.Providers.Stripe do
       {"expand[]", "latest_charge"},
       {"expand[]", "latest_charge.refunds"},
       {"expand[]", "latest_charge.balance_transaction"},
+      {"expand[]", "latest_charge.review"},
       {"expand[]", "customer"}
     ]
 

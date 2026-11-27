@@ -302,6 +302,10 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe sends `radar.early_fraud_warning.created`, `.updated`, `review.opened` and
   `review.closed`; each names its payment (the event's `:payment_id`), which the Ash payment
   listener reads again, and the warning or review as `:object_id`.
+- `fetch_payment/3` reads Radar's score of the payment's charge: `:risk_level` (`"normal"`,
+  `"elevated"`, `"highest"`...) and `:risk_score` (0 to 99) from `outcome`, and the charge's
+  review as `:fraud_review` (`open: true` while it waits for the seller), so a shop can hold what
+  it gives until the review is closed.
 
 ## Files
 

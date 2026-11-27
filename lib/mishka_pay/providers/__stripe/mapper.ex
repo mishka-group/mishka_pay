@@ -664,6 +664,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         metadata: Map.drop(intent["metadata"] || %{}, [@reference, @owner]),
         refunds: refunds(charge, intent["id"]),
         disputed: charge["disputed"] == true,
+        risk_level: get_in(charge, ["outcome", "risk_level"]),
+        risk_score: get_in(charge, ["outcome", "risk_score"]),
+        fraud_review: charge_review(charge["review"]),
         created_at: time(intent["created"])
       }
       |> Map.merge(buyer_of(intent, charge))
@@ -2143,6 +2146,17 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec fraud_review(map()) ::
           {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
   def fraud_review(review) do
+    review
+    |> review_attrs()
+    |> MishkaPay.Payment.FraudReview.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # The review of a payment's charge, read with it (`latest_charge.review`); an id alone is not read.
+  defp charge_review(%{"id" => _id} = review), do: review_attrs(review)
+  defp charge_review(_none_or_id), do: nil
+
+  defp review_attrs(review) do
     %{
       provider: "stripe",
       id: review["id"],
@@ -2155,8 +2169,6 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       ip_address: review["ip_address"],
       created_at: time(review["created"])
     }
-    |> MishkaPay.Payment.FraudReview.builder()
-    |> MishkaPay.Errors.from_builder()
   end
 
   # The dispute evidence fields that take the id of an uploaded file, not text.
