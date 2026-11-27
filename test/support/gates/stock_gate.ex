@@ -22,6 +22,9 @@ defmodule MishkaPay.Support.StockGate do
 
   def call(%{checkout: %{reference: "gate-exit"}}), do: exit(:gate_down)
 
+  def call(%{checkout: %{reference: "gate-exit-email"}}),
+    do: exit({:no_stock_for, "buyer@shop.test"})
+
   def call(%{checkout: %{reference: "gate-hang"}}) do
     receive do
       :never_sent -> nil

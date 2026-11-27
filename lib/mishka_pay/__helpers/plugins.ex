@@ -17,7 +17,9 @@ defmodule MishkaPay.Helpers.Plugins do
 
   @doc """
   The event's answer to `state`, or why there is none: `:cannot_run` (a plugin is registered but
-  not loaded), `:raised`, `:exited` (an `exit` or `throw`, logged with its exit) or `:timeout`.
+  not loaded), `:raised`, `:exited` (an `exit` or `throw`, logged with the class of its exit
+  only, never the exit itself, which may carry the state and with it an email or a key) or
+  `:timeout`.
   """
   @spec call(String.t(), term(), timeout()) :: {:ok, term()} | {:error, failure()}
   def call(event, state, timeout) do
@@ -35,7 +37,14 @@ defmodule MishkaPay.Helpers.Plugins do
   end
 
   defp exited(event, reason) do
-    Logger.warning("mishka_pay: a plugin of #{event} exited: " <> Exception.format_exit(reason))
+    Logger.warning("mishka_pay: a plugin of #{event} exited: " <> exit_class(reason))
     {:error, :exited}
   end
+
+  # What kind of exit it was, without its terms: the exception's module, the atom, or the tag of
+  # a tuple.
+  defp exit_class({%{__exception__: true} = exception, _stack}), do: inspect(exception.__struct__)
+  defp exit_class({tag, _detail}) when is_atom(tag), do: inspect(tag)
+  defp exit_class(reason) when is_atom(reason), do: inspect(reason)
+  defp exit_class(_other), do: "an exit"
 end

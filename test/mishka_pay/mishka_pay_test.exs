@@ -88,6 +88,22 @@ defmodule MishkaPayTest do
     end
   end
 
+  test "a gate's exit is logged by its kind only, never with what it carried" do
+    MishkaPay.Test.start_plugin!(StockGate)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, %Errors.Refused{reason: :exited}} =
+                 MishkaPay.checkout(%{@checkout | reference: "gate-exit-email"})
+      end)
+
+    [line] =
+      log |> String.split("\n") |> Enum.filter(&(&1 =~ "mishka_pay: a plugin of"))
+
+    assert line =~ ":no_stock_for"
+    refute line =~ "buyer@shop.test"
+  end
+
   # No time passes: a limit of 0 gives the hanging gate no time, and the refusal says why.
   test "a gate that never answers refuses at its time limit" do
     MishkaPay.Test.start_plugin!(StockGate)
