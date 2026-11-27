@@ -168,7 +168,9 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
   `:payment_id` (one-time) or `:subscription_id` (subscription) is set once Stripe took the money.
   Then read the payment or subscription itself before giving access.
 - `:amount_total` and `:amount_tax` on the read-back checkout are what Stripe charged, tax
-  included.
+  included, and `:discounts` what it took off with: the checkout's own, or the code a buyer typed
+  in `allow_promotion_codes`'s box (`:promotion_code_id`), so a shop can hold that code to its own
+  rules after the payment.
 - The checkout's `:metadata` goes on the session and on its PaymentIntent (or subscription), so
   `fetch_payment/3` answers it as the payment's `:metadata`: a shop of many sites on one Stripe
   account names the site there and skips a payment of another site.

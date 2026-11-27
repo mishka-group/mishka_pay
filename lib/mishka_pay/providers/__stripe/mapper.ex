@@ -279,6 +279,18 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp discount(%{coupon_id: id}) when is_binary(id), do: %{"coupon" => id}
   defp discount(%{promotion_code_id: id}), do: %{"promotion_code" => id}
 
+  # The discounts a session applied, its own or a code the buyer typed in the page's box.
+  defp read_discounts([_ | _] = discounts) do
+    for discount <- discounts do
+      struct(Checkout.Discounts,
+        coupon_id: id_of(discount["coupon"]),
+        promotion_code_id: id_of(discount["promotion_code"])
+      )
+    end
+  end
+
+  defp read_discounts(_none), do: nil
+
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
@@ -572,7 +584,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     checkout(session, read_back)
   end
 
-  @doc "The checkout with Stripe's answer: its session id, page, status and payment."
+  @doc """
+  The checkout with Stripe's answer: its session id, page, status and payment, and the discounts it
+  applied (the checkout's own, or the code a buyer typed in the page's box, as `:promotion_code_id`).
+  """
   @spec checkout(map(), Checkout.t()) :: Checkout.t()
   def checkout(session, %Checkout{} = checkout) do
     %{
@@ -591,6 +606,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"]),
         amount_discount:
           money(get_in(session, ["total_details", "amount_discount"]), session["currency"]),
+        discounts: read_discounts(session["discounts"]) || checkout.discounts,
         expires_at: time(session["expires_at"]),
         invoice_id: id_of(session["invoice"]),
         payment_link_id: id_of(session["payment_link"]),

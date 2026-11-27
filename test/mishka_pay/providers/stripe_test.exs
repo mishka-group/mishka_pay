@@ -2551,7 +2551,10 @@ defmodule MishkaPay.Providers.StripeTest do
                  "applies_to" => %{"products" => ["prod_a"]}
                })
 
-      assert Stripe.Mapper.coupon_params(%MishkaPay.Coupon{percent_off: Decimal.new(5), duration: :once})[
+      assert Stripe.Mapper.coupon_params(%MishkaPay.Coupon{
+               percent_off: Decimal.new(5),
+               duration: :once
+             })[
                "applies_to"
              ] == nil
     end
@@ -6696,6 +6699,12 @@ defmodule MishkaPay.Providers.StripeTest do
 
     assert %Checkout{shipping_address: nil, shipping_rate_id: nil} =
              Stripe.Mapper.checkout(%{"id" => "cs_2", "collected_information" => nil})
+
+    assert %Checkout{discounts: [%{promotion_code_id: "promo_box", coupon_id: "co_1"}]} =
+             Stripe.Mapper.checkout(%{
+               "id" => "cs_3",
+               "discounts" => [%{"coupon" => "co_1", "promotion_code" => %{"id" => "promo_box"}}]
+             })
 
     assert {:ok,
             %MishkaPay.ShippingRate{

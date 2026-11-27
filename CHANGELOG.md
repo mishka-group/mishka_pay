@@ -8,6 +8,7 @@
 - Stripe: a payment says how risky Radar found it (`risk_level`, `risk_score`) and carries its charge's open or closed review (`fraud_review`).
 - Stripe: a checkout's own `metadata` goes on its PaymentIntent and subscription too, so it comes back on the payment (`MishkaPay.Payment` `:metadata`).
 - Stripe: a coupon takes the products it is for (`product_ids`, Stripe's `applies_to.products`), so Stripe keeps a code to them on its own page too.
+- Stripe: a read-back checkout names the discounts it applied (`discounts`), a code the buyer typed in the page's box included.
 
 ## 0.0.3
 
