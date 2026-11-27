@@ -22,6 +22,9 @@ defmodule MishkaPay.Coupon do
       subscription, or `:forever`.
     * `:max_redemptions`: how many times it may be used in all.
     * `:redeem_by`: the last moment it may be used.
+    * `:product_ids`: the provider's products it takes money off (Stripe's `applies_to.products`,
+      `prod_...`); left out, every product. The provider then refuses it on any other line, so a
+      code typed on its own page keeps to the products too.
     * `:metadata`: extra pairs, string keys to string values.
 
   What the provider fills in: `:valid` (it can still be used), `:times_redeemed`, `:created_at`.
@@ -47,6 +50,10 @@ defmodule MishkaPay.Coupon do
     field :duration_in_months, pos_integer(), derives: "validate(integer, min_len=1)"
     field :max_redemptions, pos_integer(), derives: "validate(integer, min_len=1)"
     field :redeem_by, DateTime.t(), derives: "validate(struct)"
+
+    field :product_ids, list(),
+      derives: ~S"sanitize(each=[trim]) validate(list, not_empty, each=[string, not_empty])"
+
     dynamic_field :metadata, validator: {MishkaPay.Checkout, :metadata}
     field :valid, boolean(), derives: "validate(boolean)"
     field :times_redeemed, non_neg_integer(), derives: "validate(integer)"

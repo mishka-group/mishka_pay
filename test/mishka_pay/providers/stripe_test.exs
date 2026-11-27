@@ -2526,6 +2526,36 @@ defmodule MishkaPay.Providers.StripeTest do
       assert :ok = MishkaPay.delete_coupon("stripe", coupon_id, "site-a")
     end
 
+    test "a coupon for some products sends them as Stripe's applies_to, and reads them back" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.Coupon{}} =
+               MishkaPay.create_coupon(%{
+                 provider: "stripe",
+                 tenant: "site-a",
+                 percent_off: 20,
+                 product_ids: ["prod_a", "prod_b"]
+               })
+
+      assert_received {:stripe_sent, "POST", "/v1/coupons", params, _key}
+
+      assert %{"applies_to[products][0]" => "prod_a", "applies_to[products][1]" => "prod_b"} =
+               params
+
+      assert {:ok, %MishkaPay.Coupon{product_ids: ["prod_a"]}} =
+               Stripe.Mapper.coupon(%{
+                 "id" => "c1",
+                 "percent_off" => 20,
+                 "duration" => "once",
+                 "applies_to" => %{"products" => ["prod_a"]}
+               })
+
+      assert Stripe.Mapper.coupon_params(%MishkaPay.Coupon{percent_off: Decimal.new(5), duration: :once})[
+               "applies_to"
+             ] == nil
+    end
+
     test "a known price and an existing customer are accepted the same way" do
       assert {:ok, %Checkout{}} =
                MishkaPay.checkout(%{

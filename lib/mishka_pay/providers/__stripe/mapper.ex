@@ -2277,6 +2277,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "duration_in_months" => coupon.duration_in_months,
       "max_redemptions" => coupon.max_redemptions,
       "redeem_by" => coupon.redeem_by && DateTime.to_unix(coupon.redeem_by),
+      "applies_to" => coupon.product_ids && %{"products" => coupon.product_ids},
       "metadata" => coupon.metadata
     }
   end
@@ -2294,6 +2295,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       duration_in_months: coupon["duration_in_months"],
       max_redemptions: coupon["max_redemptions"],
       redeem_by: time(coupon["redeem_by"]),
+      product_ids: coupon |> get_in(["applies_to", "products"]) |> some_ids(),
       metadata: coupon["metadata"],
       valid: coupon["valid"] == true,
       times_redeemed: coupon["times_redeemed"],
@@ -2303,6 +2305,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Coupon.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # A coupon for every product answers no products, or an empty list of them.
+  defp some_ids([_ | _] = ids), do: ids
+  defp some_ids(_none), do: nil
 
   @doc """
   Params of `POST /v1/promotion_codes`: the coupon it applies (as Stripe's `promotion`), the code

@@ -277,6 +277,8 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - A promotion code points to its coupon through Stripe's `promotion` (type `coupon`); Mishka Pay
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
+- A coupon's `:product_ids` (`prod_...`) go to Stripe as `applies_to.products`: Stripe then takes
+  money off those products only, also for a code a buyer types in `allow_promotion_codes`'s box.
 
 ## Disputes
 

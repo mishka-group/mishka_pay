@@ -7,6 +7,7 @@
 - PayPal: a webhook signed more than 300 seconds from now (`webhook_tolerance`), or naming a certificate off PayPal's own API hosts, is refused with 400 before PayPal is asked.
 - Stripe: a payment says how risky Radar found it (`risk_level`, `risk_score`) and carries its charge's open or closed review (`fraud_review`).
 - Stripe: a checkout's own `metadata` goes on its PaymentIntent and subscription too, so it comes back on the payment (`MishkaPay.Payment` `:metadata`).
+- Stripe: a coupon takes the products it is for (`product_ids`, Stripe's `applies_to.products`), so Stripe keeps a code to them on its own page too.
 
 ## 0.0.3
 

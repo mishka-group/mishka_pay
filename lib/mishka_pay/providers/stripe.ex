@@ -2035,7 +2035,13 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- plain_id(coupon.id, :id),
          :ok <- metadata(coupon.metadata),
          :ok <- money_off(coupon.amount_off),
-         {:ok, answer} <- request(:post, "/v1/coupons", Mapper.coupon_params(coupon), keys) do
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/coupons",
+             Mapper.coupon_params(coupon) |> Map.put("expand", ["applies_to"]),
+             keys
+           ) do
       Mapper.coupon(answer)
     end
   end
