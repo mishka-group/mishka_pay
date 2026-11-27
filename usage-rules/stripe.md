@@ -169,6 +169,9 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
   Then read the payment or subscription itself before giving access.
 - `:amount_total` and `:amount_tax` on the read-back checkout are what Stripe charged, tax
   included.
+- The checkout's `:metadata` goes on the session and on its PaymentIntent (or subscription), so
+  `fetch_payment/3` answers it as the payment's `:metadata`: a shop of many sites on one Stripe
+  account names the site there and skips a payment of another site.
 
 ## Embedded checkout and paying later
 

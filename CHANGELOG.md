@@ -6,6 +6,7 @@
 - PayPal: a reversed capture and a buyer's dispute make the payment `disputed`, so a shop takes the access back as for a Stripe chargeback; the dispute webhooks (`CUSTOMER.DISPUTE.*`) name the Order of the capture they hold.
 - PayPal: a webhook signed more than 300 seconds from now (`webhook_tolerance`), or naming a certificate off PayPal's own API hosts, is refused with 400 before PayPal is asked.
 - Stripe: a payment says how risky Radar found it (`risk_level`, `risk_score`) and carries its charge's open or closed review (`fraud_review`).
+- Stripe: a checkout's own `metadata` goes on its PaymentIntent and subscription too, so it comes back on the payment (`MishkaPay.Payment` `:metadata`).
 
 ## 0.0.3
 

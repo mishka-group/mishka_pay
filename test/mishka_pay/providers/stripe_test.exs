@@ -890,6 +890,7 @@ defmodule MishkaPay.Providers.StripeTest do
                @checkout
                |> Map.merge(seller)
                |> Map.put(:application_fee, %{amount: "2.50", currency: "USD"})
+               |> Map.put(:metadata, %{"shop_site" => "s1"})
                |> MishkaPay.checkout()
 
       assert_received {:stripe, "/v1/checkout/sessions", %{"payment_intent_data" => intent}}
@@ -899,6 +900,8 @@ defmodule MishkaPay.Providers.StripeTest do
                "transfer_data" => %{"destination" => "acct_seller"},
                "on_behalf_of" => "acct_seller"
              } = intent
+
+      assert %{"mishka_pay_reference" => "order-1", "shop_site" => "s1"} = intent["metadata"]
 
       plan = %{
         @checkout

@@ -84,7 +84,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc """
   Params of `POST /v1/checkout/sessions`: a one-time payment, a subscription with its trial, or
   a setup that saves a payment method. The reference and the owner go on the payment, the
-  subscription or the setup too, so they come back on each.
+  subscription or the setup too, so they come back on each, and so does the checkout's own
+  `metadata` on the payment and the subscription: a shop reads it back from the payment
+  (`MishkaPay.Payment` `:metadata`), such as which of its sites the sale is for.
   """
   @spec checkout_params(Checkout.t(), map()) :: map()
   def checkout_params(%Checkout{} = checkout, settings \\ %{}) do
@@ -93,13 +95,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         is_nil(value)
       end)
 
+    carried = Map.merge(checkout.metadata || %{}, reference)
+
     %{
       "mode" => Atom.to_string(checkout.mode),
       "client_reference_id" => checkout.reference,
-      "metadata" => Map.merge(checkout.metadata || %{}, reference)
+      "metadata" => carried
     }
     |> Map.merge(ui_params(checkout))
-    |> Map.merge(mode_data(checkout, reference, settings))
+    |> Map.merge(mode_data(checkout, {carried, reference}, settings))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(options(checkout))
     |> Map.merge(shipping(checkout))
@@ -280,13 +284,13 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
 
   defp mode_data(
          %Checkout{mode: :subscription, trial_days: days} = checkout,
-         reference,
+         {carried, _reference},
          settings
        ),
        do: %{
          "subscription_data" =>
            %{
-             "metadata" => reference,
+             "metadata" => carried,
              "billing_mode" => billing_mode(checkout, settings),
              "trial_period_days" => days,
              "description" => checkout.description,
@@ -298,17 +302,17 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
            |> reject_nil()
        }
 
-  defp mode_data(%Checkout{mode: :setup} = checkout, reference, _settings),
+  defp mode_data(%Checkout{mode: :setup} = checkout, {_carried, reference}, _settings),
     do: %{
       "setup_intent_data" =>
         reject_nil(%{"metadata" => reference, "description" => checkout.description})
     }
 
-  defp mode_data(checkout, reference, _settings),
+  defp mode_data(checkout, {carried, _reference}, _settings),
     do: %{
       "payment_intent_data" =>
         %{
-          "metadata" => reference,
+          "metadata" => carried,
           "description" => checkout.description,
           "statement_descriptor_suffix" => checkout.statement_suffix,
           "capture_method" => capture_method(checkout.capture),
