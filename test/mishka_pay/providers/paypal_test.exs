@@ -70,6 +70,20 @@ defmodule MishkaPay.Providers.PayPalTest do
       assert body["payment_source"]["paypal"]["email_address"] == "buyer@shop.test"
     end
 
+    test "the buyer's country the shop knows is where PayPal's page starts, and none is sent without it" do
+      known = %{@checkout | customer: %{email: "buyer@shop.test", address: %{country: "NL"}}}
+
+      assert {:ok, %Checkout{}} = MishkaPay.checkout(known)
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      assert body["payment_source"]["paypal"]["address"] == %{"country_code" => "NL"}
+
+      assert {:ok, %Checkout{}} = MishkaPay.checkout(%{@checkout | reference: "order-2"})
+
+      {_headers, plain} = paypal_request("POST", "/v2/checkout/orders")
+      refute Map.has_key?(plain["payment_source"]["paypal"], "address")
+    end
+
     test "a line's own tax percentage goes on each item and the Order's tax_total, and reads back as its tax" do
       added = %{name: "Ebook", amount: %{amount: "29", currency: "EUR"}, tax_percentage: "19"}
 

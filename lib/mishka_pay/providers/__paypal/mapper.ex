@@ -49,7 +49,9 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
 
   @doc """
   The body of `POST /v2/checkout/orders`: one purchase unit with the items and their total, the
-  reference as `custom_id`, and the return and cancel URLs for the buyer. A line with its own
+  reference as `custom_id`, the return and cancel URLs for the buyer, and the buyer's email and
+  address when the checkout's customer has them (`payment_source.paypal.address`, where PayPal's
+  page starts, the country alone included). A line with its own
   `:tax_percentage` carries its tax on each item (an inclusive amount is split into the part
   before tax and the tax), and the unit's amount is the items' total with the `tax_total` added.
   """
@@ -86,9 +88,29 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
             }
           }
           |> Map.merge(email(checkout.customer))
+          |> Map.merge(payer_address(checkout.customer))
       }
     }
   end
+
+  # The buyer's address the shop already knows, such as only their country, which PayPal's page
+  # starts on for a buyer who pays without an account; the buyer changes it there.
+  defp payer_address(%{address: %MishkaPay.Address{country: <<_a, _b>>} = address}) do
+    %{
+      "address" =>
+        %{
+          "country_code" => address.country,
+          "postal_code" => address.postal_code,
+          "address_line_1" => address.line1,
+          "address_line_2" => address.line2,
+          "admin_area_2" => address.city,
+          "admin_area_1" => address.state
+        }
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
+    }
+  end
+
+  defp payer_address(_none), do: %{}
 
   defp breakdown(item_total, tax_total, taxed?, currency) do
     %{"item_total" => money_param(item_total, currency)}
