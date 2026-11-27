@@ -2,7 +2,8 @@ defmodule ShopWeb.DiscountsComponent do
   @moduledoc """
   The discounts part of the demo shop, read live from Stripe: make a coupon
   (`MishkaPay.create_coupon/1`: a percent or an amount off, once, for some months or forever, with
-  its limits), list them (`MishkaPay.list_coupons/3`) and remove one
+  its limits, for every product or only some, `product_ids`, Stripe's `applies_to.products`), list
+  them (`MishkaPay.list_coupons/3`) and remove one
   (`MishkaPay.delete_coupon/3`); give a coupon promotion codes buyers type
   (`MishkaPay.create_promotion_code/1`, with their own limits), list them
   (`MishkaPay.list_promotion_codes/3`) and turn one off or on again
@@ -50,7 +51,10 @@ defmodule ShopWeb.DiscountsComponent do
          socket
          |> assign(new?: false, open: coupon.id)
          |> load()
-         |> say(:info, "Coupon #{coupon.name || coupon.id} made on Stripe.")}
+         |> say(
+           :info,
+           "Coupon #{coupon.name || coupon.id} made on Stripe#{for_products(coupon)}."
+         )}
 
       {:error, error} ->
         {:noreply, say(socket, :error, MishkaPay.Ash.message(error))}
@@ -283,8 +287,22 @@ defmodule ShopWeb.DiscountsComponent do
             <span class="fieldset-legend">Last day it works</span>
             <input name="redeem_by" type="date" class="input input-sm" data-testid="coupon-redeem-by" />
           </label>
+          <label class="fieldset sm:col-span-2">
+            <span class="fieldset-legend">Only for these Stripe products</span>
+            <input
+              name="product_ids"
+              placeholder="prod_..., prod_... (empty: every product)"
+              class="input input-sm"
+              data-testid="coupon-products"
+            />
+          </label>
         </div>
-        <p class="text-xs opacity-70">Give a percent or an amount, one of them.</p>
+        <p class="text-xs opacity-70">
+          Give a percent or an amount, one of them. With products named, Stripe takes money off
+          those lines only, also for a code the buyer types on its page. A product's
+          <code>prod_...</code>
+          id is in the catalog once it is published.
+        </p>
         <div>
           <button
             class="btn btn-sm btn-primary"
@@ -493,7 +511,8 @@ defmodule ShopWeb.DiscountsComponent do
       duration: params["duration"],
       duration_in_months: integer(params["duration_in_months"]),
       max_redemptions: integer(params["max_redemptions"]),
-      redeem_by: end_of_day(params["redeem_by"])
+      redeem_by: end_of_day(params["redeem_by"]),
+      product_ids: product_ids(params["product_ids"])
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -520,6 +539,14 @@ defmodule ShopWeb.DiscountsComponent do
     end
   end
 
+  # Typed with commas or spaces; none typed is every product.
+  defp product_ids(value) do
+    case String.split(value || "", [",", " "], trim: true) do
+      [] -> nil
+      ids -> ids
+    end
+  end
+
   defp usd(value), do: present(value) && %{amount: present(value), currency: "USD"}
 
   defp integer(value) do
@@ -543,6 +570,10 @@ defmodule ShopWeb.DiscountsComponent do
     send(self(), {:flash, kind, message})
     socket
   end
+
+  # Stripe answers the products only when asked to expand them, as Mishka Pay does on making one.
+  defp for_products(%{product_ids: [_ | _] = ids}), do: ", only for #{Enum.join(ids, ", ")}"
+  defp for_products(_every_product), do: ", for every product"
 
   defp off(%{percent_off: %Decimal{} = percent}),
     do: "#{percent |> Decimal.normalize() |> Decimal.to_string(:normal)}% off"

@@ -11,6 +11,13 @@ defmodule Shop.Pay.WebhookSimulator do
   types here are about a PaymentIntent or a subscription, which name the id the event needs, so
   the webhook reads nothing from Stripe for them (a thin `v1.charge.refunded` or
   `v1.invoice.paid` would be read from Stripe, which knows no simulated object).
+
+  PayPal checks each of its webhooks on its own servers, so a good PayPal webhook cannot be made
+  here. What Mishka Pay refuses before it asks PayPal can be (`paypal_situations/0`,
+  `paypal_request/3`): a message whose `paypal-transmission-time` is more than 300 seconds from now,
+  and one whose `paypal-cert-url` is not on PayPal's own API hosts. Both are answered 400 with no
+  request to PayPal, and counted as refused (`Shop.Pay.WebhookRejection`, reason `too_old` or
+  `certificate`).
   """
 
   alias MishkaPay.Providers.Stripe
@@ -62,6 +69,76 @@ defmodule Shop.Pay.WebhookSimulator do
       _old -> @situations
     end
   end
+
+  @paypal_situations [
+    paypal_too_old: %{
+      label: "PayPal: signed 10 minutes ago (a replay)",
+      expect: [400],
+      reason: "too_old"
+    },
+    paypal_certificate: %{
+      label: "PayPal: a certificate off PayPal's hosts",
+      expect: [400],
+      reason: "certificate"
+    }
+  ]
+
+  @paypal_names Keyword.keys(@paypal_situations)
+
+  @doc """
+  The PayPal webhooks Mishka Pay refuses before it asks PayPal, with what the endpoint must answer
+  and the reason the refusal is counted under.
+  """
+  def paypal_situations, do: @paypal_situations
+
+  @doc """
+  The request of a PayPal `CHECKOUT.ORDER.APPROVED` webhook about `order_id` for `tenant` in
+  `situation` (one of `paypal_situations/0`): its URL, JSON body and PayPal's five signature
+  headers, all of them there, so only the time or the certificate's address is wrong.
+  """
+  def paypal_request(order_id, tenant, situation) when situation in @paypal_names do
+    {sent, cert_url} = paypal_signed(situation, DateTime.utc_now())
+
+    body =
+      JSON.encode!(%{
+        "id" => "WH-SIM-" <> String.replace(Ecto.UUID.generate(), "-", ""),
+        "event_type" => "CHECKOUT.ORDER.APPROVED",
+        "resource_type" => "checkout-order",
+        "resource" => %{"id" => order_id, "status" => "APPROVED"}
+      })
+
+    %{
+      method: :post,
+      url: ShopWeb.Endpoint.url() <> "/pay/webhooks/paypal/#{tenant}",
+      body: body,
+      headers: [
+        {"content-type", "application/json"},
+        {"paypal-auth-algo", "SHA256withRSA"},
+        {"paypal-cert-url", cert_url},
+        {"paypal-transmission-id", Ecto.UUID.generate()},
+        {"paypal-transmission-sig", "simulated"},
+        {"paypal-transmission-time", DateTime.to_iso8601(sent)}
+      ]
+    }
+  end
+
+  @doc "Sends `paypal_request/3` to the shop's own endpoint and answers the HTTP status it gave."
+  def send_paypal(order_id, tenant, situation) do
+    %{method: method, url: url, body: body, headers: headers} =
+      paypal_request(order_id, tenant, situation)
+
+    {:ok, %{status: status}} =
+      Req.request(method: method, url: url, body: body, headers: headers, retry: false)
+
+    status
+  end
+
+  @paypal_cert "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-SIM"
+
+  defp paypal_signed(:paypal_too_old, now), do: {DateTime.add(now, -600), @paypal_cert}
+
+  defp paypal_signed(:paypal_certificate, now),
+    do: {now, "https://certs.example.com/v1/notifications/certs/CERT-SIM"}
 
   @doc """
   Sends a `type` event about `id` for `tenant` in `situation`, and answers the HTTP statuses the

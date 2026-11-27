@@ -64,6 +64,16 @@ defmodule ShopWeb.SubscriptionsComponentTest do
                      %{"pause_collection" => %{"behavior" => "keep_as_draft"}}}
   end
 
+  test "a subscription shows the metadata its checkout gave it, live from Stripe", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/subscriptions/sub_ada"} =>
+        Map.put(subscription(), "metadata", %{"site" => "eu-shop"})
+    })
+
+    view = open_subscription(conn)
+    assert has_element?(view, "[data-testid=sub-live-metadata]", "eu-shop")
+  end
+
   defp open_subscription(conn) do
     {:ok, view, _html} = live(conn, ~p"/")
 

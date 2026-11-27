@@ -13,16 +13,16 @@ without leaning on text or layout.
 | On the page | What Mishka Pay does |
 |---|---|
 | **Providers**, **Site demo**, **Plugins** | `MishkaPay.Provider.all/0`; the site's keys and settings from `MishkaPay.Credentials.fetch/2` (never a key); every plugin on Mishka Pay's events |
-| **Pay with**: Stripe or PayPal (PayPal needs its sandbox keys) | the checkout through the chosen provider |
+| **Pay with**: Stripe or PayPal (PayPal needs its sandbox keys) | the checkout through the chosen provider; under PayPal, **Tax, percent of the line** sends the seller's own tax (`tax_percentage`, added on top or, with "The price already holds it", `tax_behavior: :inclusive`) on each Order item with the Order's `tax_total`, or as a plan's tax, and the checkout read back shows it as its tax (Stripe refuses it: it takes Stripe Tax or tax rates) |
 | **Buy with Stripe** + options | `:start_checkout` for a product from the seeds: quantity 1 to 10, buyer email, merchant of record and metadata for this checkout |
 | Shop closed | the checkout gate (`Shop.Pay.Gate` on `mishka_pay:checkout:before`) refuses every checkout |
 | Back from Stripe, or canceled | `MishkaPay.fetch_checkout/3` reads the session, `:sync` keeps the payment at once |
 | **Payments**: totals, status filter, live | the stored rows with buyer, card and failure reason; webhook → inbox → job → sync → `mishka_pay:payment:changed` → the page |
-| **Details** of a payment | the stored row beside `MishkaPay.fetch_payment/3` live from Stripe: buyer, card, receipt, failure, description, metadata and every refund; its webhook events; sync; refund with an amount and a reason |
+| **Details** of a payment | the stored row beside `MishkaPay.fetch_payment/3` live from Stripe or PayPal: buyer, card, receipt, failure, description, every refund; **Disputed** (a Stripe chargeback, or at PayPal a buyer's dispute that is open or went the buyer's way, or a reversed capture); Stripe Radar's **risk** (`risk_level`, `risk_score`) and the **fraud review** it holds on the charge (`fraud_review`, open or closed); the **metadata** the checkout gave, which goes on its PaymentIntent too; its webhook events; sync; refund with an amount and a reason |
 | **Plans**: Subscribe with Stripe | a checkout in `mode: :subscription` with the plan's interval and trial |
-| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`mishka_pay do kind :subscription end`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.list_invoices/3`); cancel at the period's end or now, keep it going, sync; a new plan or quantity with **Preview the bill** (`MishkaPay.preview_subscription_change/1`) then **Apply** (`:change`); pause and resume collection |
-| **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax and buyer email |
-| **Webhook simulator** | a Stripe event about a payment or subscription, as a snapshot event or (a `v1.` type) a thin event notification, in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once) |
+| **Subscriptions**, live | `Shop.Pay.Subscription` rows (`mishka_pay do kind :subscription end`); details beside `MishkaPay.fetch_subscription/3` and its invoices (`MishkaPay.list_invoices/3`); cancel at the period's end or now, keep it going, sync; a new plan or quantity with **Preview the bill** (`MishkaPay.preview_subscription_change/1`) then **Apply** (`:change`); pause and resume collection; the **metadata** its checkout gave it |
+| **Read payment** / **Read a checkout back** | any sandbox payment or checkout by its id; a checkout shows its total, tax, buyer email and **Discounts applied** (`discounts`): its own coupon or code, or the code a buyer typed in Stripe's box, with the coupon behind it |
+| **Webhook simulator** | a Stripe event about a payment or subscription, as a snapshot event or (a `v1.` type) a thin event notification, in nine situations, each with the answer the endpoint must give: good (200), bad signature, too old, a site with no keys (400), no such provider (404), GET (405), over 1 MB (413), a listener fails (500), the same event twice (200 and 200, stored once); and the PayPal webhooks Mishka Pay refuses before it asks PayPal (needs `PAYPAL_WEBHOOK_ID`): signed more than 300 seconds from now, or naming a certificate off PayPal's API hosts, each 400 with no request to PayPal and counted under `too_old` or `certificate` |
 | **Test clocks** | a subscription on its own Stripe test clock (card works, fails at renewal, trial then paid, trial then fails), moved forward a day to a year; the subscription is synced when Stripe is done |
 | **Webhook inbox**, **Telemetry**, live | each event stored once and worked as an Oban job, with how long its webhook took to answer (`answer_ms`, `answer_status`); the refused messages counted per reason, site and day (`Shop.Pay.WebhookRejection`, kind `:webhook_rejection`), never stored; every Mishka Pay call and HTTP request with its outcome and time |
 | **Site settings** | refund rule, merchant of record, Stripe Tax and shop open or closed, in the database, read on every call |
@@ -30,7 +30,7 @@ without leaning on text or layout.
 | **Payment links** | `MishkaPay.create_payment_link/1` with a purchase limit (one-time, limited or none), quantity range, trial, invoice and tax choices; `PaymentLink.url/2` for one buyer; turn off or change it (`update_payment_link/1`); the list from `list_payment_links/3` |
 | **Catalog** | the shop's products beside their Stripe product and prices (`create_product/1`, `create_price/1`, `archive_price/3`) |
 | **Customers** | `Shop.Pay.Customer` rows: register (on Stripe's Accounts v2 by default, an account with the customer configuration, or as a v1 Customer), edit, sync, open Stripe's customer portal (`:portal`); "Buy as this customer" sells to a v2 customer as `customer_account`, with merchant of record off (Managed Payments sells to no account) |
-| **Coupons** and promotion codes | `MishkaPay.create_coupon/1` (percent or amount, once, repeating or forever, a use limit) and `create_promotion_code/1` (for one customer only, first order, a minimum, an end date, a use limit) |
+| **Coupons** and promotion codes | `MishkaPay.create_coupon/1` (percent or amount, once, repeating or forever, a use limit, only for some Stripe products: `product_ids`, Stripe's `applies_to.products`, kept also for a code typed on Stripe's page) and `create_promotion_code/1` (for one customer only, first order, a minimum, an end date, a use limit) |
 | **Disputes**, live | `Shop.Pay.Dispute` rows from `charge.dispute.*` webhooks or **Read disputes**; evidence (`:submit_evidence`) and **Accept the loss** (`:accept`). Pay with 4000 0000 0000 0259 to make one |
 | **Members and access** | sign in by email (`Shop.Accounts.Member`, a demo with no password, kept in the session); a plan bought while signed in runs `:start_checkout` with the member as the actor, so the subscription belongs to them (`belongs_to_user`); the members-only post opens when `MishkaPay.Ash.subscribed?/3` says so; the member's rows with `active?`, `on_trial?` and `canceling?` |
 | **Refunds and held payments** | per payment row, **Refunds** runs the generic `:refunds` action; a pay-later payment (`:authorized`) is taken, all or part, with `MishkaPay.capture_payment/4` or let go with `cancel_payment/3`; one refund read by its id (`fetch_refund/3`) |
@@ -81,7 +81,9 @@ PAYPAL_WEBHOOK_ID=WH-...
 
 The webhook can be made from code instead of the dashboard:
 `MishkaPay.Providers.PayPal.WebhookEndpoint.ensure("demo", "https://<public host>/pay/webhooks/paypal/demo")`
-answers its `WH-...` id with every event Mishka Pay acts on.
+answers its `WH-...` id with every event Mishka Pay acts on, the buyer's disputes
+(`CUSTOMER.DISPUTE.*`) included: a webhook made before them needs `ensure` again to hear them. A
+dispute or a reversed capture marks the payment disputed, as a Stripe chargeback does.
 
 Then "Pay with: PayPal" is on, and `mix shop.sandbox paypal` makes PayPal Orders and a
 subscription for a sandbox buyer to approve. Both providers send the buyer back to the same page

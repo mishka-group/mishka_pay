@@ -351,7 +351,8 @@ defmodule ShopWeb.PayComponents do
       <summary class="collapse-title font-medium">
         Checkout options
         <span class="text-sm opacity-60">
-          (provider, quantity, buyer, discounts, tax, language, expiry, merchant of record, metadata)
+          (provider, quantity, buyer, discounts, tax, PayPal's line tax, language, expiry, merchant
+          of record, metadata)
         </span>
       </summary>
       <div class="collapse-content grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -392,9 +393,37 @@ defmodule ShopWeb.PayComponents do
           class={["hidden text-sm opacity-70 sm:col-span-2", paypal_only()]}
           data-testid="option-paypal-note"
         >
-          PayPal takes no discounts, tax, page language, expiry, billing address, customer or
-          invoice options here: Mishka Pay refuses them instead of leaving them out.
+          PayPal takes no discounts, Stripe Tax, page language, expiry, billing address, customer
+          or invoice options here: Mishka Pay refuses them instead of leaving them out. It takes
+          the seller's own tax on the line instead, as a percentage: sent on each Order item with
+          the Order's tax total (or as a plan's tax), and read back as the checkout's tax.
         </p>
+        <div class={["hidden fieldset gap-1", paypal_only()]} data-testid="option-paypal-tax">
+          <label class="fieldset">
+            <span class="fieldset-legend">Tax, percent of the line (PayPal)</span>
+            <input
+              name="tax_percentage"
+              value={@typed["tax_percentage"]}
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              placeholder="19"
+              class="input input-sm"
+              data-testid="option-tax-percentage"
+            />
+          </label>
+          <label class="label gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="tax_inclusive"
+              value="true"
+              checked={@typed["tax_inclusive"] == "true"}
+              class="checkbox checkbox-sm"
+              data-testid="option-tax-inclusive"
+            /> The price already holds it
+          </label>
+        </div>
         <label class={["fieldset", stripe_only()]}>
           <span class="fieldset-legend">Merchant of record, this checkout</span>
           <select name="merchant_of_record" class="select select-sm" data-testid="option-merchant">
@@ -919,12 +948,40 @@ defmodule ShopWeb.PayComponents do
                 </dd>
                 <dt class="opacity-70">Description</dt>
                 <dd>{live.description || "–"}</dd>
+                <dt class="opacity-70">Disputed</dt>
+                <dd data-testid="live-disputed" data-disputed={to_string(live.disputed)}>
+                  <span :if={live.disputed} class="badge badge-sm badge-error">
+                    the buyer asked for it back
+                  </span>
+                  <span :if={!live.disputed}>no</span>
+                  <span :if={@selected.payment.provider == "paypal"} class="block text-xs opacity-70">
+                    PayPal: a buyer's open dispute, one resolved for the buyer, or a reversed capture
+                  </span>
+                </dd>
+                <dt :if={@selected.payment.provider == "stripe"} class="opacity-70">Radar risk</dt>
+                <dd :if={@selected.payment.provider == "stripe"} data-testid="live-risk">
+                  {risk(live.risk_level, live.risk_score)}
+                </dd>
+                <dt :if={live.fraud_review} class="opacity-70">Fraud review</dt>
+                <dd :if={live.fraud_review} data-testid="live-fraud-review">
+                  <span class={[
+                    "badge badge-sm",
+                    (live.fraud_review.open && "badge-warning") || "badge-ghost"
+                  ]}>
+                    {if live.fraud_review.open, do: "open: look at it first", else: "closed"}
+                  </span>
+                  <code class="text-xs opacity-70">{live.fraud_review.id}</code>
+                  <span :if={live.fraud_review.reason} class="block text-xs opacity-70">
+                    {live.fraud_review.reason}
+                  </span>
+                </dd>
                 <dt class="opacity-70">Metadata</dt>
                 <dd class="text-xs" data-testid="live-metadata">
                   <span :if={live.metadata in [nil, %{}]}>none</span>
                   <span :for={{key, value} <- live.metadata || %{}} class="block">
                     <code>{key}</code> = {value}
                   </span>
+                  <span class="block opacity-60">the checkout's own metadata comes back here</span>
                 </dd>
                 <dt class="opacity-70">Receipt</dt>
                 <dd>
@@ -1086,6 +1143,17 @@ defmodule ShopWeb.PayComponents do
 
   defp no_refund(_other), do: "Nothing to refund on this payment."
 
+  # Radar's words for the charge: a level, and a score from 0 to 99 where it gives one.
+  defp risk(nil, _score), do: "not scored"
+  defp risk(level, nil), do: level
+  defp risk(level, score), do: "#{level}, #{score} of 99"
+
+  # A code the buyer typed in the page's box comes back with the coupon behind it.
+  defp discount_names(%{promotion_code_id: code, coupon_id: coupon}) when is_binary(code),
+    do: "code #{code}" <> ((coupon && " (coupon #{coupon})") || "")
+
+  defp discount_names(%{coupon_id: coupon}), do: "coupon #{coupon}"
+
   attr :checkout, :map, required: true
 
   def checkout_card(assigns) do
@@ -1109,6 +1177,16 @@ defmodule ShopWeb.PayComponents do
       <dt class="opacity-70">Discount</dt>
       <dd data-testid="checkout-discount">
         {(@checkout.amount_discount && Money.to_string!(@checkout.amount_discount)) || "–"}
+      </dd>
+      <dt :if={@checkout.discounts not in [nil, []]} class="opacity-70">Discounts applied</dt>
+      <dd :if={@checkout.discounts not in [nil, []]} data-testid="checkout-discounts">
+        <span
+          :for={discount <- @checkout.discounts}
+          class="block font-mono text-xs"
+          data-testid="checkout-applied"
+        >
+          {discount_names(discount)}
+        </span>
       </dd>
       <dt :if={@checkout.invoice_id} class="opacity-70">Invoice</dt>
       <dd :if={@checkout.invoice_id} class="font-mono text-xs" data-testid="checkout-invoice">
@@ -1164,6 +1242,9 @@ defmodule ShopWeb.PayComponents do
   attr :form, :map, default: %{}
   attr :tenant, :string, required: true
   attr :local_webhook_secret?, :boolean, required: true
+  attr :paypal_webhook?, :boolean, default: false
+  attr :paypal_situations, :list, default: []
+  attr :paypal_simulated, :any, default: nil
 
   def webhook_simulator(assigns) do
     ~H"""
@@ -1171,7 +1252,7 @@ defmodule ShopWeb.PayComponents do
       <.section_title icon="hero-paper-airplane" title="Webhook simulator" />
       <p class="text-sm opacity-70 mb-2">
         Sends a Stripe event about a payment to <code>/pay/webhooks/stripe/{@tenant}</code>,
-        signed as Stripe signs. It goes the whole way: signature check, inbox, job, payment sync. PayPal webhooks cannot be simulated here: PayPal checks each one itself, on its servers.
+        signed as Stripe signs. It goes the whole way: signature check, inbox, job, payment sync. A good PayPal webhook cannot be simulated here: PayPal checks each one itself, on its servers. What Mishka Pay refuses before asking PayPal can be, below.
         <span :if={!@local_webhook_secret?}>
           Signed with your <code>STRIPE_WEBHOOK_SECRET</code>.
         </span>
@@ -1225,6 +1306,49 @@ defmodule ShopWeb.PayComponents do
         <code class="text-xs opacity-70">{@simulated.event_id}</code>
         <span class="opacity-70 basis-full">{simulated_meaning(@simulated.situation)}</span>
       </div>
+      <div class="mt-4" data-testid="simulate-paypal">
+        <h3 class="text-sm font-medium">PayPal, refused before PayPal is asked</h3>
+        <p :if={!@paypal_webhook?} class="text-sm opacity-70" data-testid="simulate-paypal-off">
+          Needs the site's PayPal keys and <code>PAYPAL_WEBHOOK_ID</code>: without them every
+          PayPal webhook is refused for want of keys, which shows nothing of these checks.
+        </p>
+        <form
+          :if={@paypal_webhook?}
+          id="simulate-paypal-form"
+          phx-submit="simulate_paypal"
+          class="flex flex-wrap gap-2 items-end mt-1"
+          data-testid="simulate-paypal-form"
+        >
+          <select name="situation" class="select select-sm" data-testid="simulate-paypal-situation">
+            <option :for={{name, spec} <- @paypal_situations} value={name}>{spec.label}</option>
+          </select>
+          <button class="btn btn-sm" data-testid="simulate-paypal-submit">
+            Send to /pay/webhooks/paypal/{@tenant}
+          </button>
+        </form>
+        <div
+          :if={@paypal_simulated}
+          class="mt-2 text-sm flex flex-wrap items-center gap-2"
+          data-testid="simulate-paypal-result"
+          data-statuses={Enum.join(@paypal_simulated.statuses, ",")}
+          data-pass={to_string(@paypal_simulated.statuses == @paypal_simulated.expect)}
+        >
+          <span class={[
+            "badge badge-sm",
+            (@paypal_simulated.statuses == @paypal_simulated.expect && "badge-success") ||
+              "badge-error"
+          ]}>
+            {if @paypal_simulated.statuses == @paypal_simulated.expect,
+              do: "as expected",
+              else: "NOT as expected"}
+          </span>
+          <span>{@paypal_simulated.label}:</span>
+          <span>HTTP {Enum.join(@paypal_simulated.statuses, ", ")}</span>
+          <span class="opacity-70 basis-full">
+            {simulated_meaning(@paypal_simulated.situation)} Counted below as refused, reason <code>{@paypal_simulated.reason}</code>.
+          </span>
+        </div>
+      </div>
     </section>
     """
   end
@@ -1255,6 +1379,14 @@ defmodule ShopWeb.PayComponents do
   defp simulated_meaning(:listener_fails),
     do:
       "A listener could not take it: 500, so Stripe sends it again later. The inbox already kept the event, so when Stripe sends it again it is stored once (the row can be processed while the answer was 500)."
+
+  defp simulated_meaning(:paypal_too_old),
+    do:
+      "Refused with no request to PayPal: a message signed more than 300 seconds from now is a replay or a clock far off."
+
+  defp simulated_meaning(:paypal_certificate),
+    do:
+      "Refused with no request to PayPal: PayPal signs with a certificate on api.paypal.com or api.sandbox.paypal.com only."
 
   defp simulated_meaning(:twice),
     do: "Both are answered 200, and the inbox keeps it once: a provider may send an event twice."

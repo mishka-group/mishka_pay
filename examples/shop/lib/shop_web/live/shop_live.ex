@@ -92,7 +92,9 @@ defmodule ShopWeb.ShopLive do
        filter: "all",
        max_quantity: @max_quantity,
        simulator_types: WebhookSimulator.types(),
-       simulator_situations: WebhookSimulator.situations()
+       simulator_situations: WebhookSimulator.situations(),
+       paypal_situations: WebhookSimulator.paypal_situations(),
+       paypal_simulated: nil
      )
      |> assign_status()
      |> assign_stats()
@@ -336,6 +338,20 @@ defmodule ShopWeb.ShopLive do
     else
       false -> {:noreply, flash(socket, :error, "Choose an event type from the list.")}
       {:error, error} -> {:noreply, flash(socket, :error, MishkaPay.Ash.message(error))}
+    end
+  end
+
+  def handle_event("simulate_paypal", %{"situation" => name}, socket) do
+    case Enum.find(WebhookSimulator.paypal_situations(), &(Atom.to_string(elem(&1, 0)) == name)) do
+      {situation, spec} ->
+        status = WebhookSimulator.send_paypal("SIMORDER1", @tenant, situation)
+
+        simulated = Map.merge(spec, %{statuses: [status], situation: situation})
+
+        {:noreply, socket |> clear_flash() |> assign(paypal_simulated: simulated)}
+
+      nil ->
+        {:noreply, flash(socket, :error, "Choose a PayPal situation from the list.")}
     end
   end
 
@@ -628,6 +644,9 @@ defmodule ShopWeb.ShopLive do
         form={@simulate_form}
         tenant={@tenant}
         local_webhook_secret?={@local_webhook_secret?}
+        paypal_webhook?={@paypal_webhook?}
+        paypal_situations={@paypal_situations}
+        paypal_simulated={@paypal_simulated}
       />
 
       <div class="grid gap-8 lg:grid-cols-2">
@@ -663,7 +682,7 @@ defmodule ShopWeb.ShopLive do
       tenant: @tenant,
       mode: if(Shop.Catalog.plan?(product), do: :subscription, else: :payment),
       trial_days: product.trial_days,
-      items: [item(provider, product, count)],
+      items: [provider |> item(product, count) |> Map.merge(line_tax(provider, params))],
       success_url: success_url(provider, params["buyer"]),
       cancel_url: url(~p"/?canceled=1"),
       reference: Shop.Catalog.reference(product),
@@ -689,6 +708,21 @@ defmodule ShopWeb.ShopLive do
       interval_count: product.interval && product.interval_count
     }
   end
+
+  # PayPal takes the seller's own tax on the line, as a percentage, added on top or held in the
+  # price; Stripe counts tax with Stripe Tax or the site's tax rates instead, and refuses it.
+  defp line_tax("paypal", params) do
+    case blank_nil(params["tax_percentage"]) do
+      nil ->
+        %{}
+
+      percentage ->
+        behavior = if params["tax_inclusive"] == "true", do: :inclusive, else: :exclusive
+        %{tax_percentage: percentage, tax_behavior: behavior}
+    end
+  end
+
+  defp line_tax(_stripe, _params), do: %{}
 
   # "Open it here" keeps the buyer on the shop with the checkout shown, to pay or end later; the
   # held checkout goes in the URL so a reload still shows it.
@@ -931,13 +965,16 @@ defmodule ShopWeb.ShopLive do
         {:error, _missing} -> nil
       end
 
+    paypal_keys = MishkaPay.Credentials.fetch("paypal", @tenant)
+
     plugins =
       for plugin <- MishkaInstaller.Event.Event.get(),
           String.starts_with?(plugin.event, "mishka_pay:"),
           do: plugin
 
     assign(socket,
-      paypal?: match?({:ok, _keys}, MishkaPay.Credentials.fetch("paypal", @tenant)),
+      paypal?: match?({:ok, _keys}, paypal_keys),
+      paypal_webhook?: match?({:ok, %{webhook_secret: id}} when is_binary(id), paypal_keys),
       providers: MishkaPay.Provider.all(),
       keys: keys,
       setting: setting(),
