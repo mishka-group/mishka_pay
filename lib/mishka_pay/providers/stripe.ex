@@ -888,11 +888,19 @@ defmodule MishkaPay.Providers.Stripe do
   def resume_subscription(subscription_id, keys),
     do: cancel_at_period_end(subscription_id, false, keys)
 
+  # Stripe leaves an invoice's `payments` out unless asked, so every read asks for it: the payment
+  # that paid a bill (`payment_id`) comes back on each read, not only in an `invoice_payment` event.
   @impl MishkaPay.Provider
   def list_invoices(opts, keys) do
     with :ok <- maybe_id(opts[:subscription_id], "sub_", :subscription_id),
          :ok <- maybe_id(opts[:customer_id], @customer, :customer_id) do
-      filters = [Mapper.customer_param(opts[:customer_id]), subscription: opts[:subscription_id]]
+      filters = [
+        Mapper.customer_param(opts[:customer_id]),
+        subscription: opts[:subscription_id],
+        status: opts[:status],
+        "expand[]": "data.payments"
+      ]
+
       page("/v1/invoices", filters, opts, keys, &Mapper.invoice/1)
     end
   end
@@ -1028,7 +1036,8 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def fetch_invoice(invoice_id, keys) do
     with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
-         {:ok, invoice} <- request(:get, "/v1/invoices/#{invoice_id}", [], keys) do
+         {:ok, invoice} <-
+           request(:get, "/v1/invoices/#{invoice_id}", [{"expand[]", "payments"}], keys) do
       Mapper.invoice(invoice)
     end
   end

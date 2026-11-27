@@ -869,6 +869,9 @@ defmodule MishkaPay.Providers.PayPalTest do
 
       assert %Invoice{id: "TX1", status: :paid, subscription_id: ^id} = first
       assert first.amount_paid == Money.new(:USD, "18.00")
+
+      assert {:ok, %Page{items: [%Invoice{id: "TX1"}]}} =
+               MishkaPay.list_invoices("paypal", "site-a", subscription_id: id, status: :paid)
     end
 
     test "it is canceled at once; a cancel at the period's end and a resume are refused" do

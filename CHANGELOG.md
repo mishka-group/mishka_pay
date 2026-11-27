@@ -9,6 +9,7 @@
 - Stripe: a checkout's own `metadata` goes on its PaymentIntent and subscription too, so it comes back on the payment (`MishkaPay.Payment` `:metadata`).
 - Stripe: a coupon takes the products it is for (`product_ids`, Stripe's `applies_to.products`), so Stripe keeps a code to them on its own page too.
 - Stripe: a read-back checkout names the discounts it applied (`discounts`), a code the buyer typed in the page's box included.
+- Stripe: an invoice read or listed names the PaymentIntent that paid it (`payment_id`; Stripe leaves `payments` out unless asked), and `list_invoices/3` takes `status:`, so `status: :paid, limit: 1` is a subscription's latest paid bill.
 
 ## 0.0.3
 

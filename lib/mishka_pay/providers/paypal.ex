@@ -189,11 +189,11 @@ defmodule MishkaPay.Providers.PayPal do
     do: unsupported("taking back a cancel at the period's end")
 
   # A subscription's bills are its transactions, from when it was made until now; one not approved
-  # yet has none.
+  # yet has none. PayPal filters them by no status, so `status:` is kept here.
   @impl MishkaPay.Provider
   def list_invoices(opts, keys) do
     case opts[:subscription_id] do
-      id when is_binary(id) -> transactions(id, opts[:limit], keys)
+      id when is_binary(id) -> transactions(id, opts[:status], opts[:limit], keys)
       _by_customer -> unsupported("listing a customer's bills")
     end
   end
@@ -484,16 +484,16 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp unknown_id(answer), do: answer
 
-  defp transactions(subscription_id, limit, keys) do
+  defp transactions(subscription_id, status, limit, keys) do
     with {:ok, sub} <- read_subscription(subscription_id, keys) do
       case sub["status"] in ["APPROVAL_PENDING", "APPROVED"] do
         true -> {:ok, %Page{items: []}}
-        false -> transactions_since(sub, limit, keys)
+        false -> transactions_since(sub, status, limit, keys)
       end
     end
   end
 
-  defp transactions_since(sub, limit, keys) do
+  defp transactions_since(sub, status, limit, keys) do
     window = %{
       "start_time" => sub["create_time"],
       "end_time" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
@@ -502,7 +502,11 @@ defmodule MishkaPay.Providers.PayPal do
     with {:ok, answer} <-
            request(:get, "/v1/billing/subscriptions/#{sub["id"]}/transactions", window, keys),
          {:ok, bills} <- bills(answer["transactions"] || [], sub["id"]) do
-      newest = Enum.sort_by(bills, & &1.created_at, {:desc, DateTime})
+      newest =
+        bills
+        |> Enum.filter(&(is_nil(status) or &1.status == status))
+        |> Enum.sort_by(& &1.created_at, {:desc, DateTime})
+
       {:ok, %Page{items: Enum.take(newest, limit || length(newest)), has_more: false}}
     end
   end

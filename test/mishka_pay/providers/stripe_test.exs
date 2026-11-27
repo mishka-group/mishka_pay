@@ -2572,6 +2572,30 @@ defmodule MishkaPay.Providers.StripeTest do
       assert listed["expand[]"] == "data.applies_to"
     end
 
+    test "an invoice read or listed asks Stripe for its payments, so the payment that paid it comes back" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %Invoice{}} = MishkaPay.fetch_invoice("stripe", "in_123", "site-a")
+      assert_received {:stripe_sent, "GET", "/v1/invoices/in_123", read, _key}
+      assert read["expand[]"] == "payments"
+
+      assert {:ok, %MishkaPay.Page{}} =
+               MishkaPay.list_invoices("stripe", "site-a",
+                 subscription_id: "sub_123",
+                 status: :paid,
+                 limit: 1
+               )
+
+      assert_received {:stripe_sent, "GET", "/v1/invoices", listed, _key}
+      assert listed["expand[]"] == "data.payments"
+      assert listed["status"] == "paid" and listed["subscription"] == "sub_123"
+
+      assert_raise ArgumentError, fn ->
+        MishkaPay.list_invoices("stripe", "site-a", status: :settled)
+      end
+    end
+
     test "a known price and an existing customer are accepted the same way" do
       assert {:ok, %Checkout{}} =
                MishkaPay.checkout(%{
