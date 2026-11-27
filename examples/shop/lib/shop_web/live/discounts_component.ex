@@ -164,7 +164,17 @@ defmodule ShopWeb.DiscountsComponent do
                 <div class="text-xs opacity-60 font-mono">{coupon.id}</div>
               </td>
               <td data-testid="coupon-off">{off(coupon)}</td>
-              <td class="text-sm">{how_long(coupon)}</td>
+              <td class="text-sm">
+                {how_long(coupon)}
+                <div
+                  :if={coupon.product_ids not in [nil, []]}
+                  class="text-xs opacity-70"
+                  data-testid="coupon-row-products"
+                  data-product-ids={Enum.join(coupon.product_ids, ",")}
+                >
+                  only for {Enum.join(coupon.product_ids, ", ")}
+                </div>
+              </td>
               <td class="text-sm">{used(coupon)}</td>
               <td>
                 <span class={["badge badge-sm", (coupon.valid && "badge-success") || "badge-ghost"]}>
@@ -571,7 +581,8 @@ defmodule ShopWeb.DiscountsComponent do
     socket
   end
 
-  # Stripe answers the products only when asked to expand them, as Mishka Pay does on making one.
+  # Stripe answers the products only when asked to expand them, which Mishka Pay does on every
+  # make, read and list of a coupon.
   defp for_products(%{product_ids: [_ | _] = ids}), do: ", only for #{Enum.join(ids, ", ")}"
   defp for_products(_every_product), do: ", for every product"
 

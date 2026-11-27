@@ -44,6 +44,44 @@ defmodule ShopWeb.DiscountsTest do
     assert view |> element("#flash-info") |> render() =~ "only for prod_ebook, prod_hoodie"
   end
 
+  test "the coupons list names the products a coupon is for, read back from Stripe", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"GET", "/v1/coupons"} => %{
+        "object" => "list",
+        "has_more" => false,
+        "data" => [
+          %{
+            "object" => "coupon",
+            "id" => "SPRING",
+            "percent_off" => 20,
+            "duration" => "once",
+            "valid" => true,
+            "times_redeemed" => 0,
+            "applies_to" => %{"products" => ["prod_ebook", "prod_hoodie"]}
+          },
+          %{
+            "object" => "coupon",
+            "id" => "ALL",
+            "percent_off" => 10,
+            "duration" => "once",
+            "valid" => true,
+            "times_redeemed" => 0
+          }
+        ]
+      }
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert_received {:stripe, "GET", "/v1/coupons", %{"expand" => ["data.applies_to"]}}
+
+    assert view
+           |> element("[data-coupon-id=SPRING] [data-testid=coupon-row-products]")
+           |> render() =~ "only for prod_ebook, prod_hoodie"
+
+    refute has_element?(view, "[data-coupon-id=ALL] [data-testid=coupon-row-products]")
+  end
+
   test "a coupon with no products typed is for every product and sends none", %{conn: conn} do
     StripeRoutes.stub(%{
       {"POST", "/v1/coupons"} => %{
