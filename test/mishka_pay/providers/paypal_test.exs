@@ -546,6 +546,44 @@ defmodule MishkaPay.Providers.PayPalTest do
       end
     end
 
+    test "a reversed capture and a buyer's dispute read as disputed; one PayPal settled for the seller does not" do
+      captured = [captures: [%{"id" => "CAPTUREORDERV1", "status" => "COMPLETED"}]]
+      PayPalStub.order("ORDERV1", "COMPLETED", captured)
+
+      assert {:ok, %Payment{status: :paid, disputed: false}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV1", "site-a")
+
+      assert_received {:paypal, "GET", "/v1/customer/disputes", _headers, _body}
+
+      PayPalStub.order("ORDERV1", "COMPLETED",
+        captures: [%{"id" => "CAPTUREORDERV1", "status" => "REVERSED"}]
+      )
+
+      assert {:ok, %Payment{disputed: true}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV1", "site-a")
+
+      PayPalStub.order("ORDERV2", "COMPLETED",
+        captures: [%{"id" => "CAPTUREORDERV2", "status" => "COMPLETED"}]
+      )
+
+      PayPalStub.dispute("ORDERV2", "PP-D-1001", "WAITING_FOR_SELLER_RESPONSE")
+
+      assert {:ok, %Payment{status: :paid, disputed: true}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV2", "site-a")
+
+      PayPalStub.dispute("ORDERV2", "PP-D-1001", "RESOLVED", outcome: "RESOLVED_BUYER_FAVOUR")
+
+      assert {:ok, %Payment{disputed: true}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV2", "site-a")
+
+      PayPalStub.dispute("ORDERV2", "PP-D-1001", "RESOLVED", outcome: "RESOLVED_SELLER_FAVOUR")
+
+      assert {:ok, %Payment{disputed: false}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV2", "site-a")
+
+      assert_received {:paypal, "GET", "/v1/customer/disputes/PP-D-1001", _headers, _body}
+    end
+
     test "a captured Order says what PayPal took; one not taken yet says nothing" do
       PayPalStub.order("ORDERC", "COMPLETED",
         captures: [
@@ -874,6 +912,30 @@ defmodule MishkaPay.Providers.PayPalTest do
         {"paypal-transmission-sig", signature},
         {"paypal-transmission-time", "2026-11-16T10:00:00Z"}
       ]
+    end
+
+    test "a buyer's dispute names the Order of the capture it holds" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+      PayPalStub.order("ORDERD1", "COMPLETED", captures: [%{"id" => "CAPTUREORDERD1"}])
+
+      for type <- ~w(CUSTOMER.DISPUTE.CREATED CUSTOMER.DISPUTE.UPDATED CUSTOMER.DISPUTE.RESOLVED) do
+        event = %{
+          @event
+          | "event_type" => type,
+            "resource_type" => "dispute",
+            "resource" => %{
+              "dispute_id" => "PP-D-12345",
+              "disputed_transactions" => [%{"seller_transaction_id" => "CAPTUREORDERD1"}]
+            }
+        }
+
+        assert {:ok, %Event{payment_id: "ORDERD1", object_id: "PP-D-12345", dispute_id: nil}} =
+                 PayPal.verify_webhook(JSON.encode!(event), headers("good"), keys)
+
+        assert_received {:paypal, "GET", "/v2/payments/captures/CAPTUREORDERD1", _headers, _body}
+      end
+
+      assert "CUSTOMER.DISPUTE.CREATED" in PayPal.handled_events()
     end
 
     test "PayPal checks the message, and the event names its Order" do

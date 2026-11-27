@@ -26,8 +26,9 @@ defmodule MishkaPay.Test.PayPal do
   It also keeps the site's webhooks (`/v1/notifications/webhooks`: list, make, change the event
   types, delete) and reads a capture with the Order it belongs to.
 
-  `order/3` puts an Order in a state (an `"APPROVED"` one is captured when read; `declined: true`
-  declines the capture), `subscription/3` a subscription (`"ACTIVE"` with `:billing_info` and
+  `order/3` puts an Order in a state (an `"APPROVED"` one is captured when read, for the Order's
+  own amount; `declined: true` declines the capture), `dispute/3` opens a buyer's dispute on a
+  captured Order (`GET /v1/customer/disputes` lists it by the capture's id), `subscription/3` a subscription (`"ACTIVE"` with `:billing_info` and
   `:transactions`). A webhook message is verified when its `paypal-transmission-sig` header is
   `"good"`. Every answer carries a `PayPal-Debug-Id` header, `"f3a1c2b4d5e60"`, and a declined
   capture its `information_link`, as PayPal's do.
@@ -75,6 +76,30 @@ defmodule MishkaPay.Test.PayPal do
   @doc "Keeps the Order `id` for this test, in PayPal's `status` (APPROVED, COMPLETED...) with `opts`."
   def order(id, status, opts \\ []) do
     put_held(:orders, id, build(id, status, Keyword.merge(kept(id), opts)))
+    :ok
+  end
+
+  @doc """
+  Puts a buyer's dispute `id` (`PP-D-...`) on the capture of the Order `order_id`, in PayPal's
+  `status` (`"OPEN"`, `"WAITING_FOR_SELLER_RESPONSE"`, `"RESOLVED"`...); a resolved one ends with
+  `outcome:` (`"RESOLVED_SELLER_FAVOUR"`, `"RESOLVED_BUYER_FAVOUR"`...).
+  """
+  def dispute(order_id, id, status, opts \\ []) do
+    dispute = %{
+      "dispute_id" => id,
+      "status" => status,
+      "reason" => "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+      "create_time" => "2026-11-20T10:00:00Z",
+      "disputed_transactions" => [%{"seller_transaction_id" => "CAPTURE" <> order_id}]
+    }
+
+    dispute =
+      case opts[:outcome] do
+        nil -> dispute
+        code -> Map.put(dispute, "dispute_outcome", %{"outcome_code" => code})
+      end
+
+    put_held(:disputes, id, dispute)
     :ok
   end
 
@@ -196,7 +221,11 @@ defmodule MishkaPay.Test.PayPal do
 
       _paid ->
         captured =
-          build(id, "COMPLETED", Keyword.put(kept(id), :captures, [capture(id)]))
+          build(
+            id,
+            "COMPLETED",
+            Keyword.put(kept(id), :captures, [capture(id, kept(id)[:amount])])
+          )
 
         put_held(:orders, id, captured)
         reply(conn, 201, captured)
@@ -240,10 +269,32 @@ defmodule MishkaPay.Test.PayPal do
       _order ->
         captured =
           id
-          |> capture()
+          |> capture(kept(id)[:amount])
           |> Map.put("supplementary_data", %{"related_ids" => %{"order_id" => id}})
 
         reply(conn, 200, captured)
+    end
+  end
+
+  defp answer(conn, "GET", ["v1", "customer", "disputes"], _body) do
+    capture_id =
+      conn |> fetch_query_params() |> Map.get(:query_params) |> Map.get("disputed_transaction_id")
+
+    items =
+      for {_id, dispute} <- held(:disputes),
+          Enum.any?(
+            dispute["disputed_transactions"],
+            &(&1["seller_transaction_id"] == capture_id)
+          ),
+          do: Map.drop(dispute, ["dispute_outcome"])
+
+    reply(conn, 200, %{"items" => items})
+  end
+
+  defp answer(conn, "GET", ["v1", "customer", "disputes", id], _body) do
+    case held(:disputes)[id] do
+      nil -> not_found(conn)
+      dispute -> reply(conn, 200, dispute)
     end
   end
 
@@ -445,11 +496,12 @@ defmodule MishkaPay.Test.PayPal do
     }
   end
 
-  defp capture(id) do
+  # PayPal captures what the Order asks for; an Order made by `order/3` alone asks 39.98 USD.
+  defp capture(id, amount) do
     %{
       "id" => "CAPTURE" <> id,
       "status" => "COMPLETED",
-      "amount" => %{"currency_code" => "USD", "value" => "39.98"},
+      "amount" => amount || %{"currency_code" => "USD", "value" => "39.98"},
       "seller_receivable_breakdown" => %{
         "gross_amount" => %{"currency_code" => "USD", "value" => "39.98"},
         "paypal_fee" => %{"currency_code" => "USD", "value" => "1.88"},

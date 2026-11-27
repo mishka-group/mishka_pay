@@ -174,13 +174,18 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   @doc """
   An Order as a `MishkaPay.Payment`: its id is the payment's id; its capture says whether it was
   paid (its id is the payment's `:charge_id`, its PayPal fee the `:fee`), and the capture's
-  refunds how much went back.
+  refunds how much went back. It is `:disputed` when `disputed?` says a buyer's dispute holds the
+  capture (the adapter reads the capture's disputes), and when PayPal reversed the capture.
   """
-  @spec payment(map()) :: {:ok, Payment.t()} | {:error, Splode.Error.t()}
-  def payment(order) do
+  @spec payment(map(), boolean()) :: {:ok, Payment.t()} | {:error, Splode.Error.t()}
+  def payment(order, disputed? \\ false) do
     case unit_money(order, ["amount"]) do
       %Elixir.Money{} = amount ->
-        order |> payment_attrs(amount) |> Payment.builder() |> MishkaPay.Errors.from_builder()
+        order
+        |> payment_attrs(amount)
+        |> Map.update!(:disputed, &(&1 or disputed?))
+        |> Payment.builder()
+        |> MishkaPay.Errors.from_builder()
 
       nil ->
         MishkaPay.ProviderKit.invalid(
@@ -218,9 +223,28 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       failure_code: reason,
       failure_message: reason,
       refunds: Enum.flat_map(refunds, &refund_of(&1, order["id"])),
+      disputed: reversed?(capture),
       created_at: time(order["create_time"])
     }
   end
+
+  # A capture PayPal reversed was taken back by the buyer's bank (a chargeback): the money is gone
+  # whatever the Order still says, so the payment reads as disputed.
+  defp reversed?(%{"status" => "REVERSED"}), do: true
+  defp reversed?(_capture), do: false
+
+  # How a dispute may end that leaves the seller the money (`dispute_outcome.outcome_code`).
+  @seller_outcomes ["RESOLVED_SELLER_FAVOUR", "CANCELED_BY_BUYER", "DENIED"]
+
+  @doc """
+  Whether a resolved dispute (`GET /v1/customer/disputes/{id}`) left the seller the money: PayPal
+  decided for the seller, the buyer withdrew it, or the claim was denied.
+  """
+  @spec settled_for_seller?(map()) :: boolean()
+  def settled_for_seller?(%{"dispute_outcome" => %{"outcome_code" => code}}),
+    do: code in @seller_outcomes
+
+  def settled_for_seller?(_dispute), do: false
 
   @doc "The Order's capture, the payment PayPal took, or nil before it is captured."
   @spec capture(map()) :: map() | nil
@@ -568,7 +592,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
       provider: "paypal",
       id: event["id"],
       type: event["event_type"],
-      object_id: resource["id"],
+      object_id: resource["id"] || resource["dispute_id"],
       object_type: event["resource_type"],
       payment_id: order_of(event["resource_type"], resource),
       subscription_id: subscription_of(event["resource_type"], resource),
@@ -580,7 +604,7 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   end
 
   defp order_of("checkout-order", %{"id" => id}), do: id
-  defp order_of(type, _resource) when type in ["subscription", "sale"], do: nil
+  defp order_of(type, _resource) when type in ["subscription", "sale", "dispute"], do: nil
 
   defp order_of(_capture_or_refund, resource),
     do: get_in(resource, ["supplementary_data", "related_ids", "order_id"])

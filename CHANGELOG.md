@@ -3,6 +3,7 @@
 ## 0.0.4
 
 - PayPal: a checkout line takes the seller's own tax as a percentage (`tax_percentage`, held in the amount with `tax_behavior: :inclusive`): a one-time Order sends it on each item with its `tax_total` and reads it back as the checkout's `amount_tax`, and a subscription's plan carries it. Stripe refuses it and keeps taking rates (`tax_rate_ids`).
+- PayPal: a reversed capture and a buyer's dispute make the payment `disputed`, so a shop takes the access back as for a Stripe chargeback; the dispute webhooks (`CUSTOMER.DISPUTE.*`) name the Order of the capture they hold.
 
 ## 0.0.3
 
