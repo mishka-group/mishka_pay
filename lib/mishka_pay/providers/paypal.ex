@@ -48,7 +48,9 @@ defmodule MishkaPay.Providers.PayPal do
     * `verify_webhook/3` asks PayPal to check the message (`verify-webhook-signature`) and answers
       it as a `MishkaPay.Event` naming its Order, or its subscription (a renewal's sale names it as
       its billing agreement); a refund's and a dispute's name the Order their capture belongs to,
-      read once.
+      read once. Before PayPal is asked, a message whose `paypal-transmission-time` is more than
+      `:webhook_tolerance` seconds (300) from now is refused as `:too_old`, and one whose
+      `paypal-cert-url` is not on `api.paypal.com` or `api.sandbox.paypal.com` as `:certificate`.
     * A payment is `:disputed` while a buyer's dispute holds its capture (one not resolved, or
       resolved for the buyer: `fetch_payment/2` reads the capture's disputes, and a resolved one's
       outcome) and once PayPal reversed the capture.
@@ -74,7 +76,8 @@ defmodule MishkaPay.Providers.PayPal do
   log; their messages never show them.
 
   `config :mishka_pay, MishkaPay.Providers.PayPal, base_url: "http://localhost:..."` points it at
-  another address, such as a test server.
+  another address, such as a test server, and `webhook_tolerance: 300` is how many seconds a
+  webhook's transmission time may be from now.
 
   Tested against a stand-in that answers in PayPal's shapes, and against PayPal's own sandbox
   (`mix test --only paypal_live`).
@@ -311,6 +314,8 @@ defmodule MishkaPay.Providers.PayPal do
     with {:ok, webhook_id} <- webhook_id(keys),
          {:ok, event} <- decode(payload),
          {:ok, signature} <- signature(headers),
+         :ok <- fresh(signature["transmission_time"]),
+         :ok <- paypal_cert(signature["cert_url"]),
          {:ok, %{"verification_status" => "SUCCESS"}} <-
            request(
              :post,
@@ -593,6 +598,36 @@ defmodule MishkaPay.Providers.PayPal do
     case Regex.match?(~r/\A[A-Z0-9-]{6,60}\z/, id) do
       true -> :ok
       false -> ProviderKit.invalid(:dispute_id, Messages.text(:paypal_id, field: :dispute_id))
+    end
+  end
+
+  # A message signed more than `:webhook_tolerance` seconds (300) from now is refused before PayPal
+  # is asked: an old message sent again, or a clock far off, costs no request.
+  defp fresh(time) do
+    tolerance =
+      :mishka_pay |> Application.get_env(__MODULE__, []) |> Keyword.get(:webhook_tolerance, 300)
+
+    case DateTime.from_iso8601(time) do
+      {:ok, sent, _offset} ->
+        if abs(DateTime.diff(DateTime.utc_now(), sent)) <= tolerance,
+          do: :ok,
+          else: bad_signature(:too_old)
+
+      {:error, _not_a_time} ->
+        bad_signature(:malformed)
+    end
+  end
+
+  # PayPal signs with a certificate of its own API hosts; a message naming any other address for
+  # it is refused before PayPal is asked.
+  defp paypal_cert(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: "https", host: host, userinfo: nil, port: 443}}
+      when host in ["api.paypal.com", "api.sandbox.paypal.com"] ->
+        :ok
+
+      _elsewhere ->
+        bad_signature(:certificate)
     end
   end
 

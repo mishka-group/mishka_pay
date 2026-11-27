@@ -904,14 +904,48 @@ defmodule MishkaPay.Providers.PayPalTest do
       }
     }
 
-    defp headers(signature) do
+    defp headers(signature, opts \\ []) do
+      sent = DateTime.add(DateTime.utc_now(), Keyword.get(opts, :age, 0), :second)
+
       [
         {"paypal-auth-algo", "SHA256withRSA"},
-        {"paypal-cert-url", "https://api.sandbox.paypal.com/v1/notifications/certs/CERT"},
+        {"paypal-cert-url",
+         Keyword.get(opts, :cert, "https://api.sandbox.paypal.com/v1/notifications/certs/CERT")},
         {"paypal-transmission-id", "T1"},
         {"paypal-transmission-sig", signature},
-        {"paypal-transmission-time", "2026-11-16T10:00:00Z"}
+        {"paypal-transmission-time", DateTime.to_iso8601(sent)}
       ]
+    end
+
+    test "a message sent too long ago, or naming a certificate off PayPal's hosts, is refused before PayPal is asked" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+      payload = JSON.encode!(@event)
+
+      assert {:error, %Errors.BadSignature{reason: :too_old}} =
+               PayPal.verify_webhook(payload, headers("good", age: -301), keys)
+
+      assert {:error, %Errors.BadSignature{reason: :too_old}} =
+               PayPal.verify_webhook(payload, headers("good", age: 301), keys)
+
+      for cert <- [
+            "https://evil.example/v1/notifications/certs/CERT",
+            "http://api.paypal.com/v1/notifications/certs/CERT",
+            "https://api.paypal.com.evil.example/certs/CERT",
+            "https://user@api.paypal.com/certs/CERT",
+            "https://api.paypal.com:8443/certs/CERT"
+          ] do
+        assert {:error, %Errors.BadSignature{reason: :certificate}} =
+                 PayPal.verify_webhook(payload, headers("good", cert: cert), keys)
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+
+      assert {:ok, %Event{id: "WH-EVT-1"}} =
+               PayPal.verify_webhook(
+                 payload,
+                 headers("good", age: -200, cert: "https://api.paypal.com/v1/certs/CERT"),
+                 keys
+               )
     end
 
     test "a buyer's dispute names the Order of the capture it holds" do

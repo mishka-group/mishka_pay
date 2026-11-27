@@ -47,7 +47,7 @@ defmodule MishkaPay.Ash.PayPalSaleTest do
     )
     |> put_req_header("paypal-transmission-id", "T1")
     |> put_req_header("paypal-transmission-sig", "good")
-    |> put_req_header("paypal-transmission-time", "2026-11-20T10:00:00Z")
+    |> put_req_header("paypal-transmission-time", DateTime.to_iso8601(DateTime.utc_now()))
     |> Webhook.call(Webhook.init(at: "/pay/webhooks"))
   end
 

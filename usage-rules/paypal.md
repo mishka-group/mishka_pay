@@ -45,7 +45,11 @@ Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
   its PayPal app with `MishkaPay.Providers.PayPal.handled_events/0` (or adds the ones it lacks),
   and answers its id (`WH-...`): keep it as the site's `webhook_secret`. `check/2` changes
   nothing; `delete/2` takes the id; `MishkaPay.Check.run(provider: "paypal", webhook_url: url)`
-  checks it. The URL must be `https`.
+  checks it. The URL must be `https`. Before PayPal is asked, a message whose
+  `paypal-transmission-time` is more than 300 seconds from now (`config :mishka_pay,
+  MishkaPay.Providers.PayPal, webhook_tolerance: seconds`) is refused as `BadSignature`
+  `:too_old`, and one whose `paypal-cert-url` is not on `api.paypal.com` or
+  `api.sandbox.paypal.com` as `:certificate`: both answer 400 and make no request.
 - Every event names the Order it is about as `:payment_id`: the Order's own events, a capture's
   (`supplementary_data`), and a refund's or a buyer's dispute's (`CUSTOMER.DISPUTE.CREATED`,
   `UPDATED`, `RESOLVED`), whose capture is read once to find its Order (a read PayPal refuses
