@@ -29,6 +29,13 @@ defmodule MishkaPay.Checkout do
       `{CHECKOUT_SESSION_ID}` in it becomes the checkout's id.
     * `:customer`: an optional buyer: `%{id: "cus_..."}` for a customer the provider keeps, or
       `%{email: "..."}` to fill in a new buyer's email; one or the other (`MishkaPay.Customer`).
+      Its `:address` (`MishkaPay.Address`, its `:country` alone is enough) is where a PayPal
+      Order's page starts (`payment_source.paypal.address`); the buyer changes it there. A PayPal
+      subscription takes no billing address from the shop. Stripe's
+      Checkout Session has no field for it, and it does not read the address of the customer it
+      pays as: its page fills the address only from a card saved with that customer
+      (`%{id: ...}`, the card's billing details), else starts on the country of the buyer's
+      network address, so the address is never sent to Stripe.
     * `:reference`: the caller's own id for this sale, such as an order id. The provider keeps it,
       it comes back on the payment, and with the request's details it makes the idempotency key,
       so the same request sent twice never opens two checkouts, and the same reference asked again

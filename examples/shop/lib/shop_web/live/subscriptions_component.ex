@@ -386,6 +386,14 @@ defmodule ShopWeb.SubscriptionsComponent do
                 <dd :if={live.subscription.trial_end} class="text-xs">
                   {time(live.subscription.trial_end)}
                 </dd>
+                <dt class="opacity-70">Metadata</dt>
+                <dd class="text-xs" data-testid="sub-live-metadata">
+                  <span :if={live.subscription.metadata in [nil, %{}]}>none</span>
+                  <span :for={{key, value} <- live.subscription.metadata || %{}} class="block">
+                    <code>{key}</code> = {value}
+                  </span>
+                  <span class="block opacity-60">the checkout's own metadata comes back here</span>
+                </dd>
                 <dt class="opacity-70">Buyer</dt>
                 <dd>
                   {live.subscription.customer_name || "–"}

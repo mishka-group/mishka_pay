@@ -84,7 +84,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @doc """
   Params of `POST /v1/checkout/sessions`: a one-time payment, a subscription with its trial, or
   a setup that saves a payment method. The reference and the owner go on the payment, the
-  subscription or the setup too, so they come back on each.
+  subscription or the setup too, so they come back on each, and so does the checkout's own
+  `metadata` on the payment and the subscription: a shop reads it back from the payment
+  (`MishkaPay.Payment` `:metadata`), such as which of its sites the sale is for.
   """
   @spec checkout_params(Checkout.t(), map()) :: map()
   def checkout_params(%Checkout{} = checkout, settings \\ %{}) do
@@ -93,13 +95,15 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         is_nil(value)
       end)
 
+    carried = Map.merge(checkout.metadata || %{}, reference)
+
     %{
       "mode" => Atom.to_string(checkout.mode),
       "client_reference_id" => checkout.reference,
-      "metadata" => Map.merge(checkout.metadata || %{}, reference)
+      "metadata" => carried
     }
     |> Map.merge(ui_params(checkout))
-    |> Map.merge(mode_data(checkout, reference, settings))
+    |> Map.merge(mode_data(checkout, {carried, reference}, settings))
     |> Map.merge(buyer_params(checkout.customer))
     |> Map.merge(options(checkout))
     |> Map.merge(shipping(checkout))
@@ -275,18 +279,30 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   defp discount(%{coupon_id: id}) when is_binary(id), do: %{"coupon" => id}
   defp discount(%{promotion_code_id: id}), do: %{"promotion_code" => id}
 
+  # The discounts a session applied, its own or a code the buyer typed in the page's box.
+  defp read_discounts([_ | _] = discounts) do
+    for discount <- discounts do
+      struct(Checkout.Discounts,
+        coupon_id: id_of(discount["coupon"]),
+        promotion_code_id: id_of(discount["promotion_code"])
+      )
+    end
+  end
+
+  defp read_discounts(_none), do: nil
+
   defp enabled(nil), do: nil
   defp enabled(on?), do: %{"enabled" => on?}
 
   defp mode_data(
          %Checkout{mode: :subscription, trial_days: days} = checkout,
-         reference,
+         {carried, _reference},
          settings
        ),
        do: %{
          "subscription_data" =>
            %{
-             "metadata" => reference,
+             "metadata" => carried,
              "billing_mode" => billing_mode(checkout, settings),
              "trial_period_days" => days,
              "description" => checkout.description,
@@ -298,17 +314,17 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
            |> reject_nil()
        }
 
-  defp mode_data(%Checkout{mode: :setup} = checkout, reference, _settings),
+  defp mode_data(%Checkout{mode: :setup} = checkout, {_carried, reference}, _settings),
     do: %{
       "setup_intent_data" =>
         reject_nil(%{"metadata" => reference, "description" => checkout.description})
     }
 
-  defp mode_data(checkout, reference, _settings),
+  defp mode_data(checkout, {carried, _reference}, _settings),
     do: %{
       "payment_intent_data" =>
         %{
-          "metadata" => reference,
+          "metadata" => carried,
           "description" => checkout.description,
           "statement_descriptor_suffix" => checkout.statement_suffix,
           "capture_method" => capture_method(checkout.capture),
@@ -568,7 +584,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     checkout(session, read_back)
   end
 
-  @doc "The checkout with Stripe's answer: its session id, page, status and payment."
+  @doc """
+  The checkout with Stripe's answer: its session id, page, status and payment, and the discounts it
+  applied (the checkout's own, or the code a buyer typed in the page's box, as `:promotion_code_id`).
+  """
   @spec checkout(map(), Checkout.t()) :: Checkout.t()
   def checkout(session, %Checkout{} = checkout) do
     %{
@@ -587,6 +606,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         amount_tax: money(get_in(session, ["total_details", "amount_tax"]), session["currency"]),
         amount_discount:
           money(get_in(session, ["total_details", "amount_discount"]), session["currency"]),
+        discounts: read_discounts(session["discounts"]) || checkout.discounts,
         expires_at: time(session["expires_at"]),
         invoice_id: id_of(session["invoice"]),
         payment_link_id: id_of(session["payment_link"]),
@@ -664,6 +684,9 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
         metadata: Map.drop(intent["metadata"] || %{}, [@reference, @owner]),
         refunds: refunds(charge, intent["id"]),
         disputed: charge["disputed"] == true,
+        risk_level: get_in(charge, ["outcome", "risk_level"]),
+        risk_score: get_in(charge, ["outcome", "risk_score"]),
+        fraud_review: charge_review(charge["review"]),
         created_at: time(intent["created"])
       }
       |> Map.merge(buyer_of(intent, charge))
@@ -2143,6 +2166,17 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
   @spec fraud_review(map()) ::
           {:ok, MishkaPay.Payment.FraudReview.t()} | {:error, Splode.Error.t()}
   def fraud_review(review) do
+    review
+    |> review_attrs()
+    |> MishkaPay.Payment.FraudReview.builder()
+    |> MishkaPay.Errors.from_builder()
+  end
+
+  # The review of a payment's charge, read with it (`latest_charge.review`); an id alone is not read.
+  defp charge_review(%{"id" => _id} = review), do: review_attrs(review)
+  defp charge_review(_none_or_id), do: nil
+
+  defp review_attrs(review) do
     %{
       provider: "stripe",
       id: review["id"],
@@ -2155,8 +2189,6 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       ip_address: review["ip_address"],
       created_at: time(review["created"])
     }
-    |> MishkaPay.Payment.FraudReview.builder()
-    |> MishkaPay.Errors.from_builder()
   end
 
   # The dispute evidence fields that take the id of an uploaded file, not text.
@@ -2261,6 +2293,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       "duration_in_months" => coupon.duration_in_months,
       "max_redemptions" => coupon.max_redemptions,
       "redeem_by" => coupon.redeem_by && DateTime.to_unix(coupon.redeem_by),
+      "applies_to" => coupon.product_ids && %{"products" => coupon.product_ids},
       "metadata" => coupon.metadata
     }
   end
@@ -2278,6 +2311,7 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
       duration_in_months: coupon["duration_in_months"],
       max_redemptions: coupon["max_redemptions"],
       redeem_by: time(coupon["redeem_by"]),
+      product_ids: coupon |> get_in(["applies_to", "products"]) |> some_ids(),
       metadata: coupon["metadata"],
       valid: coupon["valid"] == true,
       times_redeemed: coupon["times_redeemed"],
@@ -2287,6 +2321,10 @@ defmodule MishkaPay.Providers.Stripe.Mapper do
     |> Coupon.builder()
     |> MishkaPay.Errors.from_builder()
   end
+
+  # A coupon for every product answers no products, or an empty list of them.
+  defp some_ids([_ | _] = ids), do: ids
+  defp some_ids(_none), do: nil
 
   @doc """
   Params of `POST /v1/promotion_codes`: the coupon it applies (as Stripe's `promotion`), the code

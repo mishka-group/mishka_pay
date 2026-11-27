@@ -1674,8 +1674,8 @@ defmodule MishkaPay.Provider do
   rescue
     exception ->
       Logger.warning(
-        "mishka_pay: #{inspect(provider)}.offered?/0 raised and is not offered: " <>
-          Exception.message(exception)
+        "mishka_pay: #{inspect(provider)}.offered?/0 raised #{inspect(exception.__struct__)} " <>
+          "and is not offered"
       )
 
       false

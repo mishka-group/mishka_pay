@@ -36,6 +36,12 @@ defmodule MishkaPay.Payment do
       `charge.updated`, which syncs the payment again.
     * `:failure_code`, `:failure_message`: why the last try failed, such as `"insufficient_funds"`.
     * `:disputed`: the buyer's bank has asked for it back (`MishkaPay.Dispute`).
+    * `:risk_level`, `:risk_score`: how risky the provider's fraud rules found it, in its words
+      (Stripe Radar's `outcome.risk_level`: `"normal"`, `"elevated"`, `"highest"`,
+      `"not_assessed"`, `"unknown"`; `outcome.risk_score`, 0 to 99), read from its charge; `nil`
+      where the provider scores nothing (PayPal).
+    * `:fraud_review`: the review the provider's fraud rules opened on it, when there is one
+      (Stripe Radar's, read with its charge): while `open` the seller still has to look at it.
     * `:refunds`: every `MishkaPay.Refund` made on it, newest first.
     * `:checkout_id`, `:items`: the checkout that took it and what it sold, each a
       `MishkaPay.Price` with its provider `:id`, `:product_id`, `:name`, unit `:amount` and
@@ -73,6 +79,8 @@ defmodule MishkaPay.Payment do
     field :failure_code, String.t(), derives: "validate(string)"
     field :failure_message, String.t(), derives: "validate(string)"
     field :disputed, boolean(), default: false, derives: "validate(boolean)"
+    field :risk_level, String.t(), derives: "validate(string)"
+    field :risk_score, non_neg_integer(), derives: "validate(integer)"
     field :refunds, list(), structs: MishkaPay.Refund, default: []
     field :checkout_id, String.t(), derives: "validate(string)"
     field :items, list(), structs: MishkaPay.Price, default: []

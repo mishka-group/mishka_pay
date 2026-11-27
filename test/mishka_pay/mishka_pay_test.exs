@@ -7,6 +7,7 @@ defmodule MishkaPayTest do
   use ExUnit.Case, async: false
 
   alias MishkaPay.{Checkout, Errors, Payment, Refund}
+  alias MishkaPay.Helpers.Plugins
   alias MishkaPay.Support.{Acme, CheckoutOnly, StockGate}
 
   @checkout %{
@@ -86,6 +87,33 @@ defmodule MishkaPayTest do
       assert {:error, %Errors.Refused{reason: ^reason}} =
                MishkaPay.checkout(%{@checkout | reference: reference})
     end
+  end
+
+  # The task's own crash report (OTP's, which prints the exit) is dropped, so the email the exit
+  # carried is in no line of the log, only the kind of the exit in mishka_pay's warning.
+  for {kind, reference} <- [exit: "gate-exit-email", throw: "gate-throw-email"] do
+    test "a gate's #{kind} is logged by its kind only, never with what it carried" do
+      MishkaPay.Test.start_plugin!(StockGate)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, %Errors.Refused{reason: :exited}} =
+                   MishkaPay.checkout(%{@checkout | reference: unquote(reference)})
+        end)
+
+      assert log =~ "mishka_pay: a plugin of mishka_pay:checkout:before exited"
+      refute log =~ "buyer@shop.test"
+    end
+  end
+
+  test "the log filter drops only an OTP report from a plugin task" do
+    plugin_report = %{meta: %{mishka_pay_plugin: "mishka_pay:checkout:before", domain: [:otp]}}
+    other_task_report = %{meta: %{domain: [:otp, :elixir]}}
+    plugin_own_log = %{meta: %{mishka_pay_plugin: "mishka_pay:checkout:before"}}
+
+    assert Plugins.log_filter(plugin_report, nil) == :stop
+    assert Plugins.log_filter(other_task_report, nil) == :ignore
+    assert Plugins.log_filter(plugin_own_log, nil) == :ignore
   end
 
   # No time passes: a limit of 0 gives the hanging gate no time, and the refusal says why.

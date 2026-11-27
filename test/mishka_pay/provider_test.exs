@@ -60,8 +60,14 @@ defmodule MishkaPay.ProviderTest do
     MishkaPay.Test.start_plugin!(MishkaPay.Support.Broken)
     MishkaPay.Test.start_plugin!(Acme)
 
-    refute MishkaPay.Support.Broken in Provider.offered()
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        refute MishkaPay.Support.Broken in Provider.offered()
+      end)
+
     assert {:ok, Acme} = Provider.fetch("acme")
+    assert log =~ "offered?/0 raised RuntimeError"
+    refute log =~ "owner@shop.test"
   end
 
   test "stopping a provider's plugin takes it out" do

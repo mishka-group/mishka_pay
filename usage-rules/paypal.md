@@ -45,10 +45,20 @@ Read more: [Take payments with PayPal](https://mishka.tools/pay/docs/paypal) and
   its PayPal app with `MishkaPay.Providers.PayPal.handled_events/0` (or adds the ones it lacks),
   and answers its id (`WH-...`): keep it as the site's `webhook_secret`. `check/2` changes
   nothing; `delete/2` takes the id; `MishkaPay.Check.run(provider: "paypal", webhook_url: url)`
-  checks it. The URL must be `https`.
+  checks it. The URL must be `https`. Before PayPal is asked, a message whose
+  `paypal-transmission-time` is more than 300 seconds from now (`config :mishka_pay,
+  MishkaPay.Providers.PayPal, webhook_tolerance: seconds`) is refused as `BadSignature`
+  `:too_old`, and one whose `paypal-cert-url` is not on `api.paypal.com` or
+  `api.sandbox.paypal.com` as `:certificate`: both answer 400 and make no request.
 - Every event names the Order it is about as `:payment_id`: the Order's own events, a capture's
-  (`supplementary_data`), and a refund's, whose capture is read once to find its Order (a read
-  PayPal refuses answers 400, so PayPal sends it again). An approval's webhook alone captures the
+  (`supplementary_data`), and a refund's or a buyer's dispute's (`CUSTOMER.DISPUTE.CREATED`,
+  `UPDATED`, `RESOLVED`), whose capture is read once to find its Order (a read PayPal refuses
+  answers 400, so PayPal sends it again).
+- A payment is `disputed: true` while a buyer's dispute holds its capture (open, or resolved for
+  the buyer; `fetch_payment/3` reads the capture's disputes, one more request for a captured
+  Order) and once PayPal reversed the capture (`REVERSED`, a chargeback); a dispute resolved for
+  the seller no longer counts. A site's webhook made before this needs `WebhookEndpoint.ensure/2`
+  again to hear the dispute events. An approval's webhook alone captures the
   Order through the Ash payment sync, so a buyer who never comes back still pays once.
 - `MishkaPay.request/1` calls any PayPal REST path (`"/v2/checkout/orders/<id>"`) with the
   site's OAuth token; a write's body is JSON and its `:reference` makes `PayPal-Request-Id`.

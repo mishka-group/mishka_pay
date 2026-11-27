@@ -70,6 +70,85 @@ defmodule MishkaPay.Providers.PayPalTest do
       assert body["payment_source"]["paypal"]["email_address"] == "buyer@shop.test"
     end
 
+    test "the buyer's country the shop knows is where PayPal's page starts, and none is sent without it" do
+      known = %{@checkout | customer: %{email: "buyer@shop.test", address: %{country: "NL"}}}
+
+      assert {:ok, %Checkout{}} = MishkaPay.checkout(known)
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      assert body["payment_source"]["paypal"]["address"] == %{"country_code" => "NL"}
+
+      assert {:ok, %Checkout{}} = MishkaPay.checkout(%{@checkout | reference: "order-2"})
+
+      {_headers, plain} = paypal_request("POST", "/v2/checkout/orders")
+      refute Map.has_key?(plain["payment_source"]["paypal"], "address")
+    end
+
+    test "a line's own tax percentage goes on each item and the Order's tax_total, and reads back as its tax" do
+      added = %{name: "Ebook", amount: %{amount: "29", currency: "EUR"}, tax_percentage: "19"}
+
+      assert {:ok, %Checkout{id: id}} = MishkaPay.checkout(%{@checkout | items: [added]})
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+
+      assert %{
+               "amount" => %{
+                 "value" => "34.51",
+                 "breakdown" => %{
+                   "item_total" => %{"value" => "29.00"},
+                   "tax_total" => %{"value" => "5.51"}
+                 }
+               },
+               "items" => [
+                 %{"unit_amount" => %{"value" => "29.00"}, "tax" => %{"value" => "5.51"}}
+               ]
+             } = hd(body["purchase_units"])
+
+      assert {:ok, %Checkout{amount_tax: tax, amount_total: total}} =
+               MishkaPay.fetch_checkout("paypal", id, "site-a")
+
+      assert tax == Money.new(:EUR, "5.51")
+      assert total == Money.new(:EUR, "34.51")
+    end
+
+    test "an inclusive line is split into its part before tax and the tax, and charges its amount" do
+      held =
+        %{
+          name: "Ebook",
+          amount: %{amount: "29", currency: "EUR"},
+          quantity: 2,
+          tax_percentage: "19",
+          tax_behavior: :inclusive
+        }
+
+      assert {:ok, _checkout} = MishkaPay.checkout(%{@checkout | items: [held]})
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+
+      assert %{
+               "amount" => %{
+                 "value" => "58.00",
+                 "breakdown" => %{
+                   "item_total" => %{"value" => "48.74"},
+                   "tax_total" => %{"value" => "9.26"}
+                 }
+               },
+               "items" => [
+                 %{"unit_amount" => %{"value" => "24.37"}, "tax" => %{"value" => "4.63"}}
+               ]
+             } = hd(body["purchase_units"])
+    end
+
+    test "a line with no tax percentage sends no tax at all" do
+      assert {:ok, _checkout} = MishkaPay.checkout(@checkout)
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      unit = hd(body["purchase_units"])
+
+      refute Map.has_key?(unit["amount"]["breakdown"], "tax_total")
+      refute Map.has_key?(hd(unit["items"]), "tax")
+    end
+
     test "gets the OAuth token once and keeps it for the next calls" do
       {:ok, _first} = MishkaPay.checkout(@checkout)
       {:ok, _second} = MishkaPay.checkout(%{@checkout | reference: "order-2"})
@@ -481,6 +560,44 @@ defmodule MishkaPay.Providers.PayPalTest do
       end
     end
 
+    test "a reversed capture and a buyer's dispute read as disputed; one PayPal settled for the seller does not" do
+      captured = [captures: [%{"id" => "CAPTUREORDERV1", "status" => "COMPLETED"}]]
+      PayPalStub.order("ORDERV1", "COMPLETED", captured)
+
+      assert {:ok, %Payment{status: :paid, disputed: false}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV1", "site-a")
+
+      assert_received {:paypal, "GET", "/v1/customer/disputes", _headers, _body}
+
+      PayPalStub.order("ORDERV1", "COMPLETED",
+        captures: [%{"id" => "CAPTUREORDERV1", "status" => "REVERSED"}]
+      )
+
+      assert {:ok, %Payment{disputed: true}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV1", "site-a")
+
+      PayPalStub.order("ORDERV2", "COMPLETED",
+        captures: [%{"id" => "CAPTUREORDERV2", "status" => "COMPLETED"}]
+      )
+
+      PayPalStub.dispute("ORDERV2", "PP-D-1001", "WAITING_FOR_SELLER_RESPONSE")
+
+      assert {:ok, %Payment{status: :paid, disputed: true}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV2", "site-a")
+
+      PayPalStub.dispute("ORDERV2", "PP-D-1001", "RESOLVED", outcome: "RESOLVED_BUYER_FAVOUR")
+
+      assert {:ok, %Payment{disputed: true}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV2", "site-a")
+
+      PayPalStub.dispute("ORDERV2", "PP-D-1001", "RESOLVED", outcome: "RESOLVED_SELLER_FAVOUR")
+
+      assert {:ok, %Payment{disputed: false}} =
+               MishkaPay.fetch_payment("paypal", "ORDERV2", "site-a")
+
+      assert_received {:paypal, "GET", "/v1/customer/disputes/PP-D-1001", _headers, _body}
+    end
+
     test "a captured Order says what PayPal took; one not taken yet says nothing" do
       PayPalStub.order("ORDERC", "COMPLETED",
         captures: [
@@ -658,6 +775,19 @@ defmodule MishkaPay.Providers.PayPalTest do
                MishkaPay.fetch_checkout("paypal", id, "site-a")
     end
 
+    test "a plan's price with its own tax percentage gives the plan that tax" do
+      [item] = @monthly.items
+
+      taxed =
+        %{item | quantity: 1} |> Map.merge(%{tax_percentage: "19", tax_behavior: :inclusive})
+
+      assert {:ok, _checkout} =
+               MishkaPay.checkout(%{@monthly | items: [taxed]} |> Map.put(:mode, :subscription))
+
+      {_headers, plan} = paypal_request("POST", "/v1/billing/plans")
+      assert plan["taxes"] == %{"percentage" => "19", "inclusive" => true}
+    end
+
     test "back from PayPal, an approved subscription completes its checkout and reads as active" do
       {:ok, %Checkout{id: id}} = MishkaPay.checkout(Map.put(@monthly, :mode, :subscription))
 
@@ -739,6 +869,9 @@ defmodule MishkaPay.Providers.PayPalTest do
 
       assert %Invoice{id: "TX1", status: :paid, subscription_id: ^id} = first
       assert first.amount_paid == Money.new(:USD, "18.00")
+
+      assert {:ok, %Page{items: [%Invoice{id: "TX1"}]}} =
+               MishkaPay.list_invoices("paypal", "site-a", subscription_id: id, status: :paid)
     end
 
     test "it is canceled at once; a cancel at the period's end and a resume are refused" do
@@ -788,14 +921,72 @@ defmodule MishkaPay.Providers.PayPalTest do
       }
     }
 
-    defp headers(signature) do
+    defp headers(signature, opts \\ []) do
+      sent = DateTime.add(DateTime.utc_now(), Keyword.get(opts, :age, 0), :second)
+
       [
         {"paypal-auth-algo", "SHA256withRSA"},
-        {"paypal-cert-url", "https://api.sandbox.paypal.com/v1/notifications/certs/CERT"},
+        {"paypal-cert-url",
+         Keyword.get(opts, :cert, "https://api.sandbox.paypal.com/v1/notifications/certs/CERT")},
         {"paypal-transmission-id", "T1"},
         {"paypal-transmission-sig", signature},
-        {"paypal-transmission-time", "2026-11-16T10:00:00Z"}
+        {"paypal-transmission-time", DateTime.to_iso8601(sent)}
       ]
+    end
+
+    test "a message sent too long ago, or naming a certificate off PayPal's hosts, is refused before PayPal is asked" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+      payload = JSON.encode!(@event)
+
+      assert {:error, %Errors.BadSignature{reason: :too_old}} =
+               PayPal.verify_webhook(payload, headers("good", age: -301), keys)
+
+      assert {:error, %Errors.BadSignature{reason: :too_old}} =
+               PayPal.verify_webhook(payload, headers("good", age: 301), keys)
+
+      for cert <- [
+            "https://evil.example/v1/notifications/certs/CERT",
+            "http://api.paypal.com/v1/notifications/certs/CERT",
+            "https://api.paypal.com.evil.example/certs/CERT",
+            "https://user@api.paypal.com/certs/CERT",
+            "https://api.paypal.com:8443/certs/CERT"
+          ] do
+        assert {:error, %Errors.BadSignature{reason: :certificate}} =
+                 PayPal.verify_webhook(payload, headers("good", cert: cert), keys)
+      end
+
+      refute_received {:paypal, _method, _path, _headers, _body}
+
+      assert {:ok, %Event{id: "WH-EVT-1"}} =
+               PayPal.verify_webhook(
+                 payload,
+                 headers("good", age: -200, cert: "https://api.paypal.com/v1/certs/CERT"),
+                 keys
+               )
+    end
+
+    test "a buyer's dispute names the Order of the capture it holds" do
+      {:ok, keys} = MishkaPay.Credentials.fetch("paypal", "site-a")
+      PayPalStub.order("ORDERD1", "COMPLETED", captures: [%{"id" => "CAPTUREORDERD1"}])
+
+      for type <- ~w(CUSTOMER.DISPUTE.CREATED CUSTOMER.DISPUTE.UPDATED CUSTOMER.DISPUTE.RESOLVED) do
+        event = %{
+          @event
+          | "event_type" => type,
+            "resource_type" => "dispute",
+            "resource" => %{
+              "dispute_id" => "PP-D-12345",
+              "disputed_transactions" => [%{"seller_transaction_id" => "CAPTUREORDERD1"}]
+            }
+        }
+
+        assert {:ok, %Event{payment_id: "ORDERD1", object_id: "PP-D-12345", dispute_id: nil}} =
+                 PayPal.verify_webhook(JSON.encode!(event), headers("good"), keys)
+
+        assert_received {:paypal, "GET", "/v2/payments/captures/CAPTUREORDERD1", _headers, _body}
+      end
+
+      assert "CUSTOMER.DISPUTE.CREATED" in PayPal.handled_events()
     end
 
     test "PayPal checks the message, and the event names its Order" do

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.4
+
+- PayPal: a checkout line takes the seller's own tax as a percentage (`tax_percentage`, held in the amount with `tax_behavior: :inclusive`): a one-time Order sends it on each item with its `tax_total` and reads it back as the checkout's `amount_tax`, and a subscription's plan carries it. Stripe refuses it and keeps taking rates (`tax_rate_ids`).
+- PayPal: a reversed capture and a buyer's dispute make the payment `disputed`, so a shop takes the access back as for a Stripe chargeback; the dispute webhooks (`CUSTOMER.DISPUTE.*`) name the Order of the capture they hold.
+- PayPal: a webhook signed more than 300 seconds from now (`webhook_tolerance`), or naming a certificate off PayPal's own API hosts, is refused with 400 before PayPal is asked.
+- Stripe: a payment says how risky Radar found it (`risk_level`, `risk_score`) and carries its charge's open or closed review (`fraud_review`).
+- Stripe: a checkout's own `metadata` goes on its PaymentIntent and subscription too, so it comes back on the payment (`MishkaPay.Payment` `:metadata`).
+- Stripe: a coupon takes the products it is for (`product_ids`, Stripe's `applies_to.products`), so Stripe keeps a code to them on its own page too.
+- Stripe: a read-back checkout names the discounts it applied (`discounts`), a code the buyer typed in the page's box included.
+- Stripe: an invoice read or listed names the PaymentIntent that paid it (`payment_id`; Stripe leaves `payments` out unless asked), and `list_invoices/3` takes `status:`, so `status: :paid, limit: 1` is a subscription's latest paid bill.
+
 ## 0.0.3
 
 - A subscription says when its card expires (`card_exp_month`, `card_exp_year`), read from the provider and kept on the synced row, so a host can warn a buyer before the card stops working.

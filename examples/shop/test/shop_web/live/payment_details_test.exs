@@ -122,6 +122,80 @@ defmodule ShopWeb.PaymentDetailsTest do
     assert has_element?(view, "[data-testid=stored-status]", "pending")
   end
 
+  test "a payment shows Radar's risk, the review it holds and the checkout's metadata, live",
+       %{conn: conn} do
+    charge = %{
+      "object" => "charge",
+      "id" => "ch_risky",
+      "outcome" => %{"risk_level" => "elevated", "risk_score" => 67},
+      "review" => %{
+        "object" => "review",
+        "id" => "prv_risky",
+        "open" => true,
+        "reason" => "rule",
+        "opened_reason" => "rule",
+        "charge" => "ch_risky",
+        "payment_intent" => "pi_paid"
+      }
+    }
+
+    StripeRoutes.stub(%{
+      {"GET", "/v1/payment_intents/pi_paid"} =>
+        Map.merge(intent(), %{"latest_charge" => charge, "metadata" => %{"site" => "eu-shop"}})
+    })
+
+    seed("pi_paid", :paid)
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=payment-row][data-payment-id=pi_paid]") |> render_click()
+    render_async(view)
+
+    assert has_element?(view, "[data-testid=live-risk]", "elevated, 67 of 99")
+    assert has_element?(view, "[data-testid=live-fraud-review]", "prv_risky")
+    assert has_element?(view, "[data-testid=live-fraud-review]", "open")
+    assert has_element?(view, "[data-testid=live-metadata]", "eu-shop")
+    assert has_element?(view, "[data-testid=live-disputed][data-disputed=false]")
+  end
+
+  test "the buy form's metadata goes on the checkout and on its PaymentIntent", %{conn: conn} do
+    StripeRoutes.stub(%{
+      {"POST", "/v1/checkout/sessions"} => %{
+        "object" => "checkout.session",
+        "id" => "cs_test_meta",
+        "url" => "https://checkout.stripe.com/c/pay/cs_test_meta",
+        "status" => "open"
+      }
+    })
+
+    Ash.create!(
+      Shop.Catalog.Product,
+      %{slug: "hoodie", name: "Elixir hoodie", price: "39.00", interval: nil, position: 1},
+      action: :seed,
+      authorize?: false
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view
+    |> form("#buy")
+    |> render_submit(%{"product" => "hoodie", "meta_key" => "site", "meta_value" => "eu-shop"})
+
+    assert_received {:stripe, "POST", "/v1/checkout/sessions", params}
+    assert params["metadata"]["site"] == "eu-shop"
+    assert params["payment_intent_data"]["metadata"]["site"] == "eu-shop"
+  end
+
+  test "a payment Radar has not scored says so and shows no review", %{conn: conn} do
+    StripeRoutes.stub(%{{"GET", "/v1/payment_intents/pi_paid"} => intent()})
+
+    seed("pi_paid", :paid)
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("[data-testid=payment-row][data-payment-id=pi_paid]") |> render_click()
+    render_async(view)
+
+    assert has_element?(view, "[data-testid=live-risk]", "not scored")
+    refute has_element?(view, "[data-testid=live-fraud-review]")
+  end
+
   defp seed(provider_id, status, fields \\ %{}) do
     Ash.Seed.seed!(
       Shop.Pay.Payment,

@@ -47,7 +47,13 @@ defmodule MishkaPay.Providers.PayPal do
       expand option: either one is refused before any request.
     * `verify_webhook/3` asks PayPal to check the message (`verify-webhook-signature`) and answers
       it as a `MishkaPay.Event` naming its Order, or its subscription (a renewal's sale names it as
-      its billing agreement); a refund's names the Order its capture belongs to, read once.
+      its billing agreement); a refund's and a dispute's name the Order their capture belongs to,
+      read once. Before PayPal is asked, a message whose `paypal-transmission-time` is more than
+      `:webhook_tolerance` seconds (300) from now is refused as `:too_old`, and one whose
+      `paypal-cert-url` is not on `api.paypal.com` or `api.sandbox.paypal.com` as `:certificate`.
+    * A payment is `:disputed` while a buyer's dispute holds its capture (one not resolved, or
+      resolved for the buyer: `fetch_payment/2` reads the capture's disputes, and a resolved one's
+      outcome) and once PayPal reversed the capture.
       `handled_events/0` are the events Mishka Pay acts on, and
       `MishkaPay.Providers.PayPal.WebhookEndpoint` makes a site's webhook with them.
     * `return_checkout_id/1` reads the Order's id (`token`) or the subscription's
@@ -70,7 +76,8 @@ defmodule MishkaPay.Providers.PayPal do
   log; their messages never show them.
 
   `config :mishka_pay, MishkaPay.Providers.PayPal, base_url: "http://localhost:..."` points it at
-  another address, such as a test server.
+  another address, such as a test server, and `webhook_tolerance: 300` is how many seconds a
+  webhook's transmission time may be from now.
 
   Tested against a stand-in that answers in PayPal's shapes, and against PayPal's own sandbox
   (`mix test --only paypal_live`).
@@ -182,11 +189,11 @@ defmodule MishkaPay.Providers.PayPal do
     do: unsupported("taking back a cancel at the period's end")
 
   # A subscription's bills are its transactions, from when it was made until now; one not approved
-  # yet has none.
+  # yet has none. PayPal filters them by no status, so `status:` is kept here.
   @impl MishkaPay.Provider
   def list_invoices(opts, keys) do
     case opts[:subscription_id] do
-      id when is_binary(id) -> transactions(id, opts[:limit], keys)
+      id when is_binary(id) -> transactions(id, opts[:status], opts[:limit], keys)
       _by_customer -> unsupported("listing a customer's bills")
     end
   end
@@ -226,10 +233,48 @@ defmodule MishkaPay.Providers.PayPal do
   @impl MishkaPay.Provider
   def fetch_payment(order_id, keys) do
     with :ok <- order_id(order_id, :payment_id),
-         {:ok, order} <- current_order(order_id, keys) do
-      Mapper.payment(order)
+         {:ok, order} <- current_order(order_id, keys),
+         {:ok, disputed?} <- disputed?(order, keys) do
+      Mapper.payment(order, disputed?)
     end
   end
+
+  # Whether a buyer's dispute holds the Order's capture (`GET /v1/customer/disputes` by the
+  # capture's id): one that is not resolved, or one resolved for the buyer. A dispute PayPal settled
+  # for the seller (`dispute_outcome.outcome_code`) no longer counts; the outcome is on the dispute
+  # itself, so each resolved one is read once. An Order with no capture asks nothing.
+  defp disputed?(order, keys) do
+    case Mapper.capture(order) do
+      %{"id" => capture_id} when is_binary(capture_id) ->
+        with {:ok, %{} = list} <-
+               request(
+                 :get,
+                 "/v1/customer/disputes",
+                 %{"disputed_transaction_id" => capture_id},
+                 keys
+               ) do
+          list |> Map.get("items", []) |> List.wrap() |> open_dispute?(keys)
+        end
+
+      _not_captured ->
+        {:ok, false}
+    end
+  end
+
+  defp open_dispute?([], _keys), do: {:ok, false}
+
+  defp open_dispute?([%{"status" => "RESOLVED", "dispute_id" => id} | rest], keys)
+       when is_binary(id) do
+    with :ok <- dispute_id(id),
+         {:ok, dispute} <- request(:get, "/v1/customer/disputes/#{id}", %{}, keys) do
+      case Mapper.settled_for_seller?(dispute) do
+        true -> open_dispute?(rest, keys)
+        false -> {:ok, true}
+      end
+    end
+  end
+
+  defp open_dispute?([_open | _rest], _keys), do: {:ok, true}
 
   @impl MishkaPay.Provider
   def refund(%Refund{} = refund, keys) do
@@ -269,6 +314,8 @@ defmodule MishkaPay.Providers.PayPal do
     with {:ok, webhook_id} <- webhook_id(keys),
          {:ok, event} <- decode(payload),
          {:ok, signature} <- signature(headers),
+         :ok <- fresh(signature["transmission_time"]),
+         :ok <- paypal_cert(signature["cert_url"]),
          {:ok, %{"verification_status" => "SUCCESS"}} <-
            request(
              :post,
@@ -277,7 +324,7 @@ defmodule MishkaPay.Providers.PayPal do
              keys
            ) do
       with {:ok, checked} <- Mapper.event(event, keys.mode == :live),
-           do: refunded_order(checked, event["resource"], keys)
+           do: capture_order(checked, event["resource"], keys)
     else
       {:ok, _not_verified} -> bad_signature(:mismatch)
       {:error, %Errors.BadSignature{}} = error -> error
@@ -285,14 +332,11 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
-  # A refund's event names only its capture (its `up` link): the capture names the Order, the
-  # payment Mishka Pay keeps, in one read. A read PayPal refuses answers 400, so it sends again.
-  defp refunded_order(
-         %MishkaPay.Event{payment_id: nil, object_type: "refund"} = event,
-         resource,
-         keys
-       ) do
-    with {:ok, capture_id} <- refunded_capture(resource),
+  # A refund's event names only its capture (its `up` link), and a buyer's dispute the capture it
+  # holds (`disputed_transactions[].seller_transaction_id`): the capture names the Order, the payment
+  # Mishka Pay keeps, in one read. A read PayPal refuses answers 400, so it sends again.
+  defp capture_order(%MishkaPay.Event{payment_id: nil} = event, resource, keys) do
+    with {:ok, capture_id} <- held_capture(event.object_type, resource),
          {:ok, capture} <- request(:get, "/v2/payments/captures/#{capture_id}", %{}, keys) do
       {:ok,
        %{event | payment_id: get_in(capture, ["supplementary_data", "related_ids", "order_id"])}}
@@ -302,7 +346,11 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
-  defp refunded_order(event, _resource, _keys), do: {:ok, event}
+  defp capture_order(event, _resource, _keys), do: {:ok, event}
+
+  defp held_capture("refund", resource), do: refunded_capture(resource)
+  defp held_capture("dispute", resource), do: disputed_capture(resource)
+  defp held_capture(_other, _resource), do: :none
 
   defp refunded_capture(%{"links" => links}) when is_list(links) do
     Enum.find_value(links, :none, fn
@@ -319,6 +367,18 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp refunded_capture(_resource), do: :none
 
+  defp disputed_capture(%{"disputed_transactions" => [_ | _] = transactions}) do
+    Enum.find_value(transactions, :none, fn
+      %{"seller_transaction_id" => id} when is_binary(id) ->
+        if Regex.match?(~r/\A[A-Z0-9]{6,40}\z/, id), do: {:ok, id}
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp disputed_capture(_resource), do: :none
+
   @handled ~w(
     CHECKOUT.ORDER.APPROVED CHECKOUT.ORDER.COMPLETED
     PAYMENT.CAPTURE.COMPLETED PAYMENT.CAPTURE.PENDING PAYMENT.CAPTURE.DECLINED
@@ -328,13 +388,15 @@ defmodule MishkaPay.Providers.PayPal do
     BILLING.SUBSCRIPTION.CANCELLED BILLING.SUBSCRIPTION.SUSPENDED
     BILLING.SUBSCRIPTION.PAYMENT.FAILED
     PAYMENT.SALE.COMPLETED PAYMENT.SALE.REFUNDED PAYMENT.SALE.REVERSED
+    CUSTOMER.DISPUTE.CREATED CUSTOMER.DISPUTE.UPDATED CUSTOMER.DISPUTE.RESOLVED
   )
 
   @doc """
   The PayPal webhook events Mishka Pay acts on, which
   `MishkaPay.Providers.PayPal.WebhookEndpoint.ensure/2` subscribes a site's webhook to: an Order
   approved or completed and its capture's changes and refunds (each named by its Order, the
-  payment's id), and a subscription's changes and its renewals' sales.
+  payment's id), a buyer's dispute opened, changed or resolved (named by the Order of the capture
+  it holds), and a subscription's changes and its renewals' sales.
   """
   @spec handled_events() :: [String.t()]
   def handled_events, do: @handled
@@ -422,16 +484,16 @@ defmodule MishkaPay.Providers.PayPal do
 
   defp unknown_id(answer), do: answer
 
-  defp transactions(subscription_id, limit, keys) do
+  defp transactions(subscription_id, status, limit, keys) do
     with {:ok, sub} <- read_subscription(subscription_id, keys) do
       case sub["status"] in ["APPROVAL_PENDING", "APPROVED"] do
         true -> {:ok, %Page{items: []}}
-        false -> transactions_since(sub, limit, keys)
+        false -> transactions_since(sub, status, limit, keys)
       end
     end
   end
 
-  defp transactions_since(sub, limit, keys) do
+  defp transactions_since(sub, status, limit, keys) do
     window = %{
       "start_time" => sub["create_time"],
       "end_time" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
@@ -440,7 +502,11 @@ defmodule MishkaPay.Providers.PayPal do
     with {:ok, answer} <-
            request(:get, "/v1/billing/subscriptions/#{sub["id"]}/transactions", window, keys),
          {:ok, bills} <- bills(answer["transactions"] || [], sub["id"]) do
-      newest = Enum.sort_by(bills, & &1.created_at, {:desc, DateTime})
+      newest =
+        bills
+        |> Enum.filter(&(is_nil(status) or &1.status == status))
+        |> Enum.sort_by(& &1.created_at, {:desc, DateTime})
+
       {:ok, %Page{items: Enum.take(newest, limit || length(newest)), has_more: false}}
     end
   end
@@ -475,9 +541,10 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
+  # A tax behavior says only how a line's own `:tax_percentage` applies; PayPal counts no tax.
   defp no_tax_behavior(items) do
     cond do
-      Enum.any?(items, &(not is_nil(&1.tax_behavior))) ->
+      Enum.any?(items, &(not is_nil(&1.tax_behavior) and is_nil(&1.tax_percentage))) ->
         unsupported("checkout with a tax behavior")
 
       Enum.any?(items, &set?(&1.tax_rate_ids)) ->
@@ -527,6 +594,44 @@ defmodule MishkaPay.Providers.PayPal do
     case is_binary(id) and Regex.match?(~r/\AI-[A-Z0-9]{6,40}\z/, id) do
       true -> :ok
       false -> ProviderKit.invalid(field, Messages.text(:paypal_id, field: field))
+    end
+  end
+
+  # A PayPal dispute id is `PP-` and letters, digits and dashes; anything else never reaches a path.
+  defp dispute_id(id) do
+    case Regex.match?(~r/\A[A-Z0-9-]{6,60}\z/, id) do
+      true -> :ok
+      false -> ProviderKit.invalid(:dispute_id, Messages.text(:paypal_id, field: :dispute_id))
+    end
+  end
+
+  # A message signed more than `:webhook_tolerance` seconds (300) from now is refused before PayPal
+  # is asked: an old message sent again, or a clock far off, costs no request.
+  defp fresh(time) do
+    tolerance =
+      :mishka_pay |> Application.get_env(__MODULE__, []) |> Keyword.get(:webhook_tolerance, 300)
+
+    case DateTime.from_iso8601(time) do
+      {:ok, sent, _offset} ->
+        if abs(DateTime.diff(DateTime.utc_now(), sent)) <= tolerance,
+          do: :ok,
+          else: bad_signature(:too_old)
+
+      {:error, _not_a_time} ->
+        bad_signature(:malformed)
+    end
+  end
+
+  # PayPal signs with a certificate of its own API hosts; a message naming any other address for
+  # it is refused before PayPal is asked.
+  defp paypal_cert(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: "https", host: host, userinfo: nil, port: 443}}
+      when host in ["api.paypal.com", "api.sandbox.paypal.com"] ->
+        :ok
+
+      _elsewhere ->
+        bad_signature(:certificate)
     end
   end
 

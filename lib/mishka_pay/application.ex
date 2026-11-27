@@ -5,10 +5,11 @@
 defmodule MishkaPay.Application do
   @moduledoc """
   Mishka Pay's own processes: the task supervisor `MishkaPay.Credentials.fetch/3` runs a host's
-  keys plugins under, so a plugin that exits, throws or hangs never takes the caller with it; the
-  owner of the providers' token cache (`MishkaPay.Helpers.TokenCache`); and the providers
-  (`plugins/0`), each a mishka_installer plugin it starts itself, as every Mishka CMS package starts
-  its own.
+  keys plugins under, so a plugin that exits, throws or hangs never takes the caller with it, and
+  the logger filter that keeps such a plugin's crash report out of the log
+  (`MishkaPay.Helpers.Plugins.log_filter/2`); the owner of the providers' token cache
+  (`MishkaPay.Helpers.TokenCache`); and the providers (`plugins/0`), each a mishka_installer plugin
+  it starts itself, as every Mishka CMS package starts its own.
 
   Which providers start is an option, all of them by default (a provider without a site's keys
   answers nothing for that site):
@@ -32,6 +33,8 @@ defmodule MishkaPay.Application do
 
   @impl true
   def start(_type, _args) do
+    :ok = MishkaPay.Helpers.Plugins.add_log_filter()
+
     children =
       [
         {Task.Supervisor, name: MishkaPay.TaskSupervisor},
@@ -41,4 +44,7 @@ defmodule MishkaPay.Application do
     opts = [strategy: :one_for_one, name: MishkaPay.Supervisor]
     Supervisor.start_link(children, opts)
   end
+
+  @impl true
+  def stop(_state), do: MishkaPay.Helpers.Plugins.remove_log_filter()
 end

@@ -8,5 +8,5 @@ defmodule MishkaPay.Support.Broken do
   use MishkaPay.Provider, id: "broken", label: "Broken Pay"
 
   @impl MishkaPay.Provider
-  def offered?, do: raise("the settings store is down")
+  def offered?, do: raise("the settings store is down for owner@shop.test")
 end

@@ -2351,12 +2351,22 @@ defmodule MishkaPay do
 
   @doc """
   One page of invoices at `provider`, newest first (`MishkaPay.Page`): `subscription_id:` one
-  subscription's, or `customer_id:` one customer's, plus `limit:` and `after:`.
+  subscription's, or `customer_id:` one customer's, `status:` only those in one status (`:draft`,
+  `:open`, `:paid`, `:uncollectible` or `:void`, as `MishkaPay.Invoice`), plus `limit:` and
+  `after:`. `list_invoices(provider, tenant, subscription_id: id, status: :paid, limit: 1)` is a
+  subscription's latest paid bill, with the payment that paid it (`payment_id`).
   """
   @spec list_invoices(String.t(), term(), keyword()) ::
           {:ok, Page.t()} | {:error, Splode.Error.t()}
   def list_invoices(provider, tenant \\ nil, opts \\ []) when is_binary(provider) do
-    subscription(:invoices, provider, tenant, & &1.list_invoices(limited(opts), &2))
+    case Keyword.get(opts, :status) do
+      status when status in [nil, :draft, :open, :paid, :uncollectible, :void] ->
+        subscription(:invoices, provider, tenant, & &1.list_invoices(limited(opts), &2))
+
+      other ->
+        raise ArgumentError,
+              "list_invoices status: must be :draft, :open, :paid, :uncollectible or :void, got #{inspect(other)}"
+    end
   end
 
   @doc "Reads invoice `invoice_id` from `provider`, with its lines, bill page and PDF."

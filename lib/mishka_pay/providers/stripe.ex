@@ -772,6 +772,7 @@ defmodule MishkaPay.Providers.Stripe do
       {"expand[]", "latest_charge"},
       {"expand[]", "latest_charge.refunds"},
       {"expand[]", "latest_charge.balance_transaction"},
+      {"expand[]", "latest_charge.review"},
       {"expand[]", "customer"}
     ]
 
@@ -887,11 +888,19 @@ defmodule MishkaPay.Providers.Stripe do
   def resume_subscription(subscription_id, keys),
     do: cancel_at_period_end(subscription_id, false, keys)
 
+  # Stripe leaves an invoice's `payments` out unless asked, so every read asks for it: the payment
+  # that paid a bill (`payment_id`) comes back on each read, not only in an `invoice_payment` event.
   @impl MishkaPay.Provider
   def list_invoices(opts, keys) do
     with :ok <- maybe_id(opts[:subscription_id], "sub_", :subscription_id),
          :ok <- maybe_id(opts[:customer_id], @customer, :customer_id) do
-      filters = [Mapper.customer_param(opts[:customer_id]), subscription: opts[:subscription_id]]
+      filters = [
+        Mapper.customer_param(opts[:customer_id]),
+        subscription: opts[:subscription_id],
+        status: opts[:status],
+        "expand[]": "data.payments"
+      ]
+
       page("/v1/invoices", filters, opts, keys, &Mapper.invoice/1)
     end
   end
@@ -1027,7 +1036,8 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def fetch_invoice(invoice_id, keys) do
     with :ok <- stripe_id(invoice_id, "in_", :invoice_id),
-         {:ok, invoice} <- request(:get, "/v1/invoices/#{invoice_id}", [], keys) do
+         {:ok, invoice} <-
+           request(:get, "/v1/invoices/#{invoice_id}", [{"expand[]", "payments"}], keys) do
       Mapper.invoice(invoice)
     end
   end
@@ -1732,6 +1742,20 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Every tax rate a line or a bill names is a Stripe tax rate id.
   defp tax_rates(lines) do
+    with :ok <- no_tax_percentage(lines) do
+      line_rate_ids(lines)
+    end
+  end
+
+  # A line's own tax percentage is PayPal's way; Stripe adds a seller's tax by its rates.
+  defp no_tax_percentage(lines) do
+    case Enum.any?(lines, &(not is_nil(Map.get(&1, :tax_percentage)))) do
+      true -> invalid(:tax_percentage, Messages.text(:tax_percentage_stripe))
+      false -> :ok
+    end
+  end
+
+  defp line_rate_ids(lines) do
     lines
     |> Enum.flat_map(&List.wrap(&1.tax_rate_ids))
     |> Enum.find_value(:ok, fn id ->
@@ -1746,7 +1770,7 @@ defmodule MishkaPay.Providers.Stripe do
   defp line_rates_only(prices) do
     case Enum.any?(prices, &(&1.tax_rate_ids not in [nil, []])) do
       true -> invalid(:tax_rate_ids, Messages.text(:tax_rates_line_only))
-      false -> :ok
+      false -> no_tax_percentage(prices)
     end
   end
 
@@ -2020,7 +2044,13 @@ defmodule MishkaPay.Providers.Stripe do
     with :ok <- plain_id(coupon.id, :id),
          :ok <- metadata(coupon.metadata),
          :ok <- money_off(coupon.amount_off),
-         {:ok, answer} <- request(:post, "/v1/coupons", Mapper.coupon_params(coupon), keys) do
+         {:ok, answer} <-
+           request(
+             :post,
+             "/v1/coupons",
+             Mapper.coupon_params(coupon) |> Map.put("expand", ["applies_to"]),
+             keys
+           ) do
       Mapper.coupon(answer)
     end
   end
@@ -2028,13 +2058,17 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def fetch_coupon(coupon_id, keys) do
     with :ok <- plain_id(coupon_id, :coupon_id),
-         {:ok, answer} <- request(:get, "/v1/coupons/#{coupon_id}", [], keys) do
+         {:ok, answer} <-
+           request(:get, "/v1/coupons/#{coupon_id}", [{"expand[]", "applies_to"}], keys) do
       Mapper.coupon(answer)
     end
   end
 
   @impl MishkaPay.Provider
-  def list_coupons(opts, keys), do: page("/v1/coupons", [], opts, keys, &Mapper.coupon/1)
+  # Stripe leaves a coupon's `applies_to` out unless asked, so every read asks for it: the products
+  # a coupon is for come back on each read, not only on the answer to its create.
+  def list_coupons(opts, keys),
+    do: page("/v1/coupons", [{"expand[]", "data.applies_to"}], opts, keys, &Mapper.coupon/1)
 
   @impl MishkaPay.Provider
   def delete_coupon(coupon_id, keys) do

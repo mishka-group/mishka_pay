@@ -168,7 +168,12 @@ only run there (Accounts v2 onboarding for a seller that takes transfers answers
   `:payment_id` (one-time) or `:subscription_id` (subscription) is set once Stripe took the money.
   Then read the payment or subscription itself before giving access.
 - `:amount_total` and `:amount_tax` on the read-back checkout are what Stripe charged, tax
-  included.
+  included, and `:discounts` what it took off with: the checkout's own, or the code a buyer typed
+  in `allow_promotion_codes`'s box (`:promotion_code_id`), so a shop can hold that code to its own
+  rules after the payment.
+- The checkout's `:metadata` goes on the session and on its PaymentIntent (or subscription), so
+  `fetch_payment/3` answers it as the payment's `:metadata`: a shop of many sites on one Stripe
+  account names the site there and skips a payment of another site.
 
 ## Embedded checkout and paying later
 
@@ -274,6 +279,8 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - A promotion code points to its coupon through Stripe's `promotion` (type `coupon`); Mishka Pay
   reads it as `:coupon_id`.
 - A coupon's own id goes into a URL path: letters, digits, `_` and `-` only.
+- A coupon's `:product_ids` (`prod_...`) go to Stripe as `applies_to.products`: Stripe then takes
+  money off those products only, also for a code a buyer types in `allow_promotion_codes`'s box.
 
 ## Disputes
 
@@ -302,6 +309,10 @@ refunds and the customer in one request, and answers `:status`, `:amount`, `:amo
 - Stripe sends `radar.early_fraud_warning.created`, `.updated`, `review.opened` and
   `review.closed`; each names its payment (the event's `:payment_id`), which the Ash payment
   listener reads again, and the warning or review as `:object_id`.
+- `fetch_payment/3` reads Radar's score of the payment's charge: `:risk_level` (`"normal"`,
+  `"elevated"`, `"highest"`...) and `:risk_score` (0 to 99) from `outcome`, and the charge's
+  review as `:fraud_review` (`open: true` while it waits for the seller), so a shop can hold what
+  it gives until the review is closed.
 
 ## Files
 
