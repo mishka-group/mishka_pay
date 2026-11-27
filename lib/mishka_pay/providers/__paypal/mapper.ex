@@ -49,13 +49,18 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
 
   @doc """
   The body of `POST /v2/checkout/orders`: one purchase unit with the items and their total, the
-  reference as `custom_id`, and the return and cancel URLs for the buyer.
+  reference as `custom_id`, and the return and cancel URLs for the buyer. A line with its own
+  `:tax_percentage` carries its tax on each item (an inclusive amount is split into the part
+  before tax and the tax), and the unit's amount is the items' total with the `tax_total` added.
   """
   @spec order_params(Checkout.t()) :: map()
   def order_params(
         %Checkout{items: [%Price{amount: %{currency: currency}} | _] = items} = checkout
       ) do
-    total = Enum.reduce(items, Decimal.new(0), &Decimal.add(&2, line_total(&1)))
+    lines = Enum.map(items, &{&1, split_tax(&1)})
+    item_total = sum(lines, fn {price, {unit, _tax}} -> Decimal.mult(unit, price.quantity) end)
+    tax_total = sum(lines, fn {price, {_unit, tax}} -> Decimal.mult(tax || 0, price.quantity) end)
+    taxed? = Enum.any?(lines, fn {_price, {_unit, tax}} -> not is_nil(tax) end)
 
     %{
       "intent" => "CAPTURE",
@@ -64,15 +69,10 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
           "custom_id" => custom_id(checkout),
           "amount" => %{
             "currency_code" => to_string(currency),
-            "value" => value(total, currency),
-            "breakdown" => %{
-              "item_total" => %{
-                "currency_code" => to_string(currency),
-                "value" => value(total, currency)
-              }
-            }
+            "value" => value(Decimal.add(item_total, tax_total), currency),
+            "breakdown" => breakdown(item_total, tax_total, taxed?, currency)
           },
-          "items" => Enum.map(items, &item/1)
+          "items" => Enum.map(lines, &item/1)
         }
       ],
       "payment_source" => %{
@@ -90,29 +90,53 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
     }
   end
 
-  defp item(%Price{name: name, amount: amount, quantity: quantity}) do
+  defp breakdown(item_total, tax_total, taxed?, currency) do
+    %{"item_total" => money_param(item_total, currency)}
+    |> Map.merge(if taxed?, do: %{"tax_total" => money_param(tax_total, currency)}, else: %{})
+  end
+
+  defp item({%Price{name: name, amount: amount, quantity: quantity}, {unit, tax}}) do
     %{
       "name" => String.slice(name, 0, 127),
       "quantity" => Integer.to_string(quantity),
-      "unit_amount" => %{
-        "currency_code" => to_string(amount.currency),
-        "value" => value(amount.amount, amount.currency)
-      }
+      "unit_amount" => money_param(unit, amount.currency)
     }
+    |> Map.merge(if tax, do: %{"tax" => money_param(tax, amount.currency)}, else: %{})
   end
 
-  defp line_total(%Price{amount: amount, quantity: quantity}),
-    do: Decimal.mult(amount.amount, quantity)
+  # One unit of a line as PayPal takes it: the amount before tax and the tax on it, each rounded to
+  # the currency; no tax for a line with no percentage of its own.
+  defp split_tax(%Price{tax_percentage: nil, amount: amount}), do: {amount.amount, nil}
+
+  defp split_tax(%Price{tax_percentage: percentage, amount: amount} = price) do
+    rate = Decimal.div(percentage, 100)
+
+    case price.tax_behavior do
+      :inclusive ->
+        unit = amount.amount |> Decimal.div(Decimal.add(1, rate)) |> rounded(amount.currency)
+        {unit, Decimal.sub(amount.amount, unit)}
+
+      _exclusive ->
+        {amount.amount, amount.amount |> Decimal.mult(rate) |> rounded(amount.currency)}
+    end
+  end
+
+  defp sum(lines, fun), do: Enum.reduce(lines, Decimal.new(0), &Decimal.add(&2, fun.(&1)))
+
+  defp money_param(amount, currency),
+    do: %{"currency_code" => to_string(currency), "value" => value(amount, currency)}
 
   defp email(%{email: email}) when is_binary(email), do: %{"email_address" => email}
   defp email(_none), do: %{}
 
   # PayPal's amounts are strings with the currency's own decimal places.
-  defp value(amount, currency) do
+  defp value(amount, currency), do: amount |> rounded(currency) |> Decimal.to_string(:normal)
+
+  defp rounded(amount, currency) do
     {_currency, _minor, exponent, _remainder} =
       currency |> Elixir.Money.new(amount) |> Elixir.Money.to_integer_exp()
 
-    amount |> Decimal.round(-exponent) |> Decimal.to_string(:normal)
+    Decimal.round(amount, -exponent)
   end
 
   @doc "The checkout with PayPal's answer: the Order's id, its approval page and status."
@@ -124,7 +148,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
         url: link(order, ["payer-action", "approve"]),
         status: Map.get(@checkout_statuses, order["status"]),
         payment_id: if(order["status"] == "COMPLETED", do: order["id"]),
-        amount_total: unit_money(order, ["amount"])
+        amount_total: unit_money(order, ["amount"]),
+        amount_tax: unit_money(order, ["amount", "breakdown", "tax_total"])
     }
   end
 
@@ -290,7 +315,8 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
   @doc """
   The body of `POST /v1/billing/plans`: the price's amount charged every interval, with no end,
   after a free trial of the checkout's `:trial_days` when it has one. A quantity is allowed, so
-  the plan charges the amount for each one.
+  the plan charges the amount for each one. A price with its own `:tax_percentage` gives the plan
+  that tax, held in the amount when its `:tax_behavior` is `:inclusive`.
   """
   @spec plan_params(String.t(), Price.t(), Checkout.t()) :: map()
   def plan_params(product_id, %Price{} = price, %Checkout{trial_days: trial_days}) do
@@ -319,7 +345,18 @@ defmodule MishkaPay.Providers.PayPal.Mapper do
         "payment_failure_threshold" => 3
       }
     }
+    |> Map.merge(plan_taxes(price))
   end
+
+  defp plan_taxes(%Price{tax_percentage: nil}), do: %{}
+
+  defp plan_taxes(%Price{tax_percentage: percentage, tax_behavior: behavior}),
+    do: %{
+      "taxes" => %{
+        "percentage" => Decimal.to_string(percentage, :normal),
+        "inclusive" => behavior == :inclusive
+      }
+    }
 
   defp cycles(nil, regular), do: [Map.put(regular, "sequence", 1)]
 

@@ -27,6 +27,12 @@ defmodule MishkaPay.Price do
     * `:tax_rate_ids`: on a checkout's or a bill's line, the seller's own tax rates added to it
       (`MishkaPay.TaxRate`), instead of a provider counting the tax. A catalog price and a payment
       link take none.
+    * `:tax_percentage`: on a checkout's line, the seller's own tax as a percentage from 0 to 100
+      (`"19"`, a `Decimal` or an integer), for a provider that takes the tax on the line itself
+      and keeps no tax rates (PayPal): with `:tax_behavior` `:inclusive` the amount already holds
+      it, otherwise it is added on top. PayPal sends a one-time line's tax on each item with the
+      Order's `tax_total`, and a subscription's as its plan's tax. Stripe keeps rates
+      (`:tax_rate_ids`) and refuses it.
     * `:interval`, `:interval_count`: a price charged again on a schedule, for a subscription:
       every `:interval_count` (1 by default) `:day`, `:week`, `:month` or `:year`. Left out, the
       price is paid once.
@@ -83,6 +89,8 @@ defmodule MishkaPay.Price do
 
     field :tax_rate_ids, list(),
       derives: "sanitize(each=[trim]) validate(list, each=[string, not_empty])"
+
+    field :tax_percentage, Decimal.t(), validator: {MishkaPay.TaxRate, :percentage}
 
     field :quantity, pos_integer(),
       default: 1,

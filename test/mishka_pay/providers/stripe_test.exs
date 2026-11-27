@@ -4102,6 +4102,10 @@ defmodule MishkaPay.Providers.StripeTest do
                @checkout
                | items: [%{id: "price_1", tax_rate_ids: ["shr_1"]}]
              }), :tax_rate_ids},
+            {MishkaPay.checkout(%{
+               @checkout
+               | items: [%{id: "price_1", tax_percentage: "19"}]
+             }), :tax_percentage},
             {MishkaPay.checkout(Map.merge(@checkout, %{items: rated, automatic_tax: true})),
              :tax_rate_ids},
             {MishkaPay.create_invoice_item(%{

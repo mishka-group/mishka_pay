@@ -70,6 +70,71 @@ defmodule MishkaPay.Providers.PayPalTest do
       assert body["payment_source"]["paypal"]["email_address"] == "buyer@shop.test"
     end
 
+    test "a line's own tax percentage goes on each item and the Order's tax_total, and reads back as its tax" do
+      added = %{name: "Ebook", amount: %{amount: "29", currency: "EUR"}, tax_percentage: "19"}
+
+      assert {:ok, %Checkout{id: id}} = MishkaPay.checkout(%{@checkout | items: [added]})
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+
+      assert %{
+               "amount" => %{
+                 "value" => "34.51",
+                 "breakdown" => %{
+                   "item_total" => %{"value" => "29.00"},
+                   "tax_total" => %{"value" => "5.51"}
+                 }
+               },
+               "items" => [
+                 %{"unit_amount" => %{"value" => "29.00"}, "tax" => %{"value" => "5.51"}}
+               ]
+             } = hd(body["purchase_units"])
+
+      assert {:ok, %Checkout{amount_tax: tax, amount_total: total}} =
+               MishkaPay.fetch_checkout("paypal", id, "site-a")
+
+      assert tax == Money.new(:EUR, "5.51")
+      assert total == Money.new(:EUR, "34.51")
+    end
+
+    test "an inclusive line is split into its part before tax and the tax, and charges its amount" do
+      held =
+        %{
+          name: "Ebook",
+          amount: %{amount: "29", currency: "EUR"},
+          quantity: 2,
+          tax_percentage: "19",
+          tax_behavior: :inclusive
+        }
+
+      assert {:ok, _checkout} = MishkaPay.checkout(%{@checkout | items: [held]})
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+
+      assert %{
+               "amount" => %{
+                 "value" => "58.00",
+                 "breakdown" => %{
+                   "item_total" => %{"value" => "48.74"},
+                   "tax_total" => %{"value" => "9.26"}
+                 }
+               },
+               "items" => [
+                 %{"unit_amount" => %{"value" => "24.37"}, "tax" => %{"value" => "4.63"}}
+               ]
+             } = hd(body["purchase_units"])
+    end
+
+    test "a line with no tax percentage sends no tax at all" do
+      assert {:ok, _checkout} = MishkaPay.checkout(@checkout)
+
+      {_headers, body} = paypal_request("POST", "/v2/checkout/orders")
+      unit = hd(body["purchase_units"])
+
+      refute Map.has_key?(unit["amount"]["breakdown"], "tax_total")
+      refute Map.has_key?(hd(unit["items"]), "tax")
+    end
+
     test "gets the OAuth token once and keeps it for the next calls" do
       {:ok, _first} = MishkaPay.checkout(@checkout)
       {:ok, _second} = MishkaPay.checkout(%{@checkout | reference: "order-2"})
@@ -656,6 +721,19 @@ defmodule MishkaPay.Providers.PayPalTest do
 
       assert {:ok, %Checkout{status: :open, subscription_id: nil}} =
                MishkaPay.fetch_checkout("paypal", id, "site-a")
+    end
+
+    test "a plan's price with its own tax percentage gives the plan that tax" do
+      [item] = @monthly.items
+
+      taxed =
+        %{item | quantity: 1} |> Map.merge(%{tax_percentage: "19", tax_behavior: :inclusive})
+
+      assert {:ok, _checkout} =
+               MishkaPay.checkout(%{@monthly | items: [taxed]} |> Map.put(:mode, :subscription))
+
+      {_headers, plan} = paypal_request("POST", "/v1/billing/plans")
+      assert plan["taxes"] == %{"percentage" => "19", "inclusive" => true}
     end
 
     test "back from PayPal, an approved subscription completes its checkout and reads as active" do

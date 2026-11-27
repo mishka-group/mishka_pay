@@ -1732,6 +1732,20 @@ defmodule MishkaPay.Providers.Stripe do
 
   # Every tax rate a line or a bill names is a Stripe tax rate id.
   defp tax_rates(lines) do
+    with :ok <- no_tax_percentage(lines) do
+      line_rate_ids(lines)
+    end
+  end
+
+  # A line's own tax percentage is PayPal's way; Stripe adds a seller's tax by its rates.
+  defp no_tax_percentage(lines) do
+    case Enum.any?(lines, &(not is_nil(Map.get(&1, :tax_percentage)))) do
+      true -> invalid(:tax_percentage, Messages.text(:tax_percentage_stripe))
+      false -> :ok
+    end
+  end
+
+  defp line_rate_ids(lines) do
     lines
     |> Enum.flat_map(&List.wrap(&1.tax_rate_ids))
     |> Enum.find_value(:ok, fn id ->
@@ -1746,7 +1760,7 @@ defmodule MishkaPay.Providers.Stripe do
   defp line_rates_only(prices) do
     case Enum.any?(prices, &(&1.tax_rate_ids not in [nil, []])) do
       true -> invalid(:tax_rate_ids, Messages.text(:tax_rates_line_only))
-      false -> :ok
+      false -> no_tax_percentage(prices)
     end
   end
 

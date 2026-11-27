@@ -134,6 +134,7 @@ defmodule MishkaPay.Messages do
           | :tax_percentage
           | :tax_rate_fixed
           | :tax_rates_line_only
+          | :tax_percentage_stripe
           | :tax_rates_automatic
           | :registration_state
           | :registration_scheme
@@ -819,6 +820,13 @@ defmodule MishkaPay.Messages do
       dgettext_noop(
         "mishka_pay",
         "A tax rate's percentage and inclusive never change: make a new rate and archive this one"
+      )
+
+  defp msgid(:tax_percentage_stripe),
+    do:
+      dgettext_noop(
+        "mishka_pay",
+        "Stripe takes a seller's own tax as tax rates (tax_rate_ids), not as a line's tax_percentage"
       )
 
   defp msgid(:tax_rates_line_only),

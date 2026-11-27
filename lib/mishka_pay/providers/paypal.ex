@@ -475,9 +475,10 @@ defmodule MishkaPay.Providers.PayPal do
     end
   end
 
+  # A tax behavior says only how a line's own `:tax_percentage` applies; PayPal counts no tax.
   defp no_tax_behavior(items) do
     cond do
-      Enum.any?(items, &(not is_nil(&1.tax_behavior))) ->
+      Enum.any?(items, &(not is_nil(&1.tax_behavior) and is_nil(&1.tax_percentage))) ->
         unsupported("checkout with a tax behavior")
 
       Enum.any?(items, &set?(&1.tax_rate_ids)) ->

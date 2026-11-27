@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.4
+
+- PayPal: a checkout line takes the seller's own tax as a percentage (`tax_percentage`, held in the amount with `tax_behavior: :inclusive`): a one-time Order sends it on each item with its `tax_total` and reads it back as the checkout's `amount_tax`, and a subscription's plan carries it. Stripe refuses it and keeps taking rates (`tax_rate_ids`).
+
 ## 0.0.3
 
 - A subscription says when its card expires (`card_exp_month`, `card_exp_year`), read from the provider and kept on the synced row, so a host can warn a buyer before the card stops working.
