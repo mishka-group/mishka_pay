@@ -2559,6 +2559,19 @@ defmodule MishkaPay.Providers.StripeTest do
              ] == nil
     end
 
+    test "a coupon read or listed asks Stripe for its applies_to, which Stripe leaves out unless asked" do
+      test = self()
+      MishkaPay.Test.stub_http(&StripeMock.forward_telling(&1, test))
+
+      assert {:ok, %MishkaPay.Coupon{}} = MishkaPay.fetch_coupon("stripe", "Z4OV52SU", "site-a")
+      assert_received {:stripe_sent, "GET", "/v1/coupons/Z4OV52SU", read, _key}
+      assert read["expand[]"] == "applies_to"
+
+      assert {:ok, %MishkaPay.Page{}} = MishkaPay.list_coupons("stripe", "site-a")
+      assert_received {:stripe_sent, "GET", "/v1/coupons", listed, _key}
+      assert listed["expand[]"] == "data.applies_to"
+    end
+
     test "a known price and an existing customer are accepted the same way" do
       assert {:ok, %Checkout{}} =
                MishkaPay.checkout(%{

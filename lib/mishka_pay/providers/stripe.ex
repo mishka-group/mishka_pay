@@ -2049,13 +2049,17 @@ defmodule MishkaPay.Providers.Stripe do
   @impl MishkaPay.Provider
   def fetch_coupon(coupon_id, keys) do
     with :ok <- plain_id(coupon_id, :coupon_id),
-         {:ok, answer} <- request(:get, "/v1/coupons/#{coupon_id}", [], keys) do
+         {:ok, answer} <-
+           request(:get, "/v1/coupons/#{coupon_id}", [{"expand[]", "applies_to"}], keys) do
       Mapper.coupon(answer)
     end
   end
 
   @impl MishkaPay.Provider
-  def list_coupons(opts, keys), do: page("/v1/coupons", [], opts, keys, &Mapper.coupon/1)
+  # Stripe leaves a coupon's `applies_to` out unless asked, so every read asks for it: the products
+  # a coupon is for come back on each read, not only on the answer to its create.
+  def list_coupons(opts, keys),
+    do: page("/v1/coupons", [{"expand[]", "data.applies_to"}], opts, keys, &Mapper.coupon/1)
 
   @impl MishkaPay.Provider
   def delete_coupon(coupon_id, keys) do
